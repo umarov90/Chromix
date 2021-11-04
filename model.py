@@ -19,12 +19,12 @@ transformer_layers = 4
 
 
 def simple_model(input_size, num_regions, cell_num):
-    input_shape = (input_size, 4)
+    input_shape = (input_size, 5)
     inputs = Input(shape=input_shape)
     x = inputs
     # x = Dropout(0.2)(x)
-    x = resnet_v2(x, 9, 5)
-    num_patches = 313
+    x = resnet_v2(x, 8, 5)
+    num_patches = 391
     # x = Dropout(0.5)(x)
     # for i in range(10):
     #     prev = x
@@ -56,7 +56,7 @@ def simple_model(input_size, num_regions, cell_num):
 
     x = LayerNormalization(epsilon=1e-6, name="ln_rep")(encoded_patches)
 
-    target_length = 200
+    target_length = num_regions
     trim = (x.shape[-2] - target_length) // 2
     x = x[..., trim:-trim, :]
     x = Conv1D(2048, kernel_size=1, strides=1, name="pointwise", activation=tf.nn.gelu)(x)
@@ -115,7 +115,7 @@ def resnet_layer(inputs,
 
 def resnet_v2(input_x, num_stages, num_res_blocks):
     # Start model definition.
-    num_filters_in = 64
+    num_filters_in = 128
 
     # v2 performs Conv2D with BN-ReLU on input before splitting into 2 paths
     x = resnet_layer(inputs=input_x,

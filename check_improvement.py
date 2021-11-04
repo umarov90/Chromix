@@ -10,8 +10,9 @@ pcc_all = []
 pcc_good = []
 
 for index, row in df2.iterrows():
-    print(row)
     pcc_good.append(row["pcc"])
     pcc_all.append(df1[df1["name"] == row["name"]]["pcc"].values[0])
 
 print(f"All: {np.mean(pcc_all)}, good only: {np.mean(pcc_good)}. Based on {len(pcc_good)} values.")
+
+# rerun model_all first!

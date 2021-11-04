@@ -32,9 +32,11 @@ from datetime import datetime
 import traceback
 import multiprocessing as mp
 import pickle
+
 matplotlib.use("agg")
 from scipy.ndimage.filters import gaussian_filter
 # from sam import SAM
+from itertools import repeat
 
 # tf.compat.v1.disable_eager_execution()
 # physical_devices = tf.config.experimental.list_physical_devices('GPU')
@@ -46,28 +48,24 @@ from scipy.ndimage.filters import gaussian_filter
 # random.seed(seed)
 # np.random.seed(seed)
 # tf.random.set_seed(seed)
-model_folder = "model_hic"
-model_name = "expression_model_1.h5"
-figures_folder = "figures_1"
-parsed_tracks_folder = "/home/user/data/parsed_tracks/"
-parsed_hic_folder = "/home/user/data/parsed_hic/"
-input_size = 1000001
+input_size = 50001
 half_size = int(input_size / 2)
-bin_size = 400
+bin_size = 200
 max_shift = 0
 hic_bin_size = 10000
 num_hic_bins = int(input_size / hic_bin_size)
-num_regions = int(input_size / bin_size)
+num_regions = 201  # int(input_size / bin_size)
 half_num_regions = int(num_regions / 2)
 mid_bin = math.floor(num_regions / 2)
-BATCH_SIZE = 8
-STEPS_PER_EPOCH = 50
+BATCH_SIZE = 3
+STEPS_PER_EPOCH = 300
 chromosomes = ["chrX"]  # "chrY"
 for i in range(1, 23):
     chromosomes.append("chr" + str(i))
-num_epochs = 31
+num_epochs = 1000
 hic_track_size = 2
-out_stack_num = 4307 + 1 * hic_track_size
+out_stack_num = 5833  # + 1 * hic_track_size
+num_features = 5
 
 
 def recompile(q):
@@ -111,9 +109,15 @@ def create_model(q):
     q.put(None)
 
 
-def run_epoch(q, k, train_info, test_info, one_hot, track_names, hic_keys):
+def run_epoch(q, k, train_info, test_info, one_hot, track_names, loaded_tracks, hic_keys):
     import tensorflow as tf
     import model as mo
+
+    # physical_devices = tf.config.experimental.list_physical_devices('GPU')
+    # assert len(physical_devices) > 0, "Not enough GPU hardware devices available"
+    # for device in physical_devices:
+    #     config1 = tf.config.experimental.set_memory_growth(device, True)
+
     from tensorflow.keras import mixed_precision
     mixed_precision.set_global_policy('mixed_float16')
     strategy = tf.distribute.experimental.MultiWorkerMirroredStrategy()
@@ -137,23 +141,20 @@ def run_epoch(q, k, train_info, test_info, one_hot, track_names, hic_keys):
     for i, info in enumerate(train_info):
         if len(input_sequences) >= GLOBAL_BATCH_SIZE * STEPS_PER_EPOCH:
             break
-        if info[0] not in chromosomes:
-            continue
         if i % 500 == 0:
             print(i, end=" ")
             gc.collect()
         try:
-            rand_var = random.randint(0, max_shift)
-            start = int(info[1] + (rand_var - max_shift / 2) - half_size)
+            start = int(info[1] - (info[1] % bin_size) - half_size)
             extra = start + input_size - len(one_hot[info[0]])
             if start < 0 or extra > 0:
                 continue
             if start < 0:
                 ns = one_hot[info[0]][0:start + input_size]
-                ns = np.concatenate((np.zeros((-1*start, 4)), ns))
+                ns = np.concatenate((np.zeros((-1 * start, num_features)), ns))
             elif extra > 0:
                 ns = one_hot[info[0]][start: len(one_hot[info[0]])]
-                ns = np.concatenate((ns, np.zeros((extra, 4))))
+                ns = np.concatenate((ns, np.zeros((extra, num_features))))
             else:
                 ns = one_hot[info[0]][start:start + input_size]
             start_bin = int(info[1] / bin_size) - half_num_regions
@@ -172,17 +173,23 @@ def run_epoch(q, k, train_info, test_info, one_hot, track_names, hic_keys):
     for i, key in enumerate(track_names):
         if i % 100 == 0:
             print(i, end=" ")
-            gc.collect()
-        parsed_track = joblib.load(parsed_tracks_folder + key)
+            # gc.collect()
+        if key in loaded_tracks:
+            parsed_track = loaded_tracks[key]
+        else:
+            parsed_track = joblib.load(parsed_tracks_folder + key)
         for s in output_scores:
             s[i] = parsed_track[s[i][0]][s[i][1]:s[i][2]].copy()
+        # with Pool(4) as p:
+        #     map_arr = p.starmap(load_values, zip(output_scores, repeat( [i, parsed_track] )))
     print("")
-    print("\nHi-C")
+    print(datetime.now().strftime('[%H:%M:%S] ') + "Hi-C")
     for key in hic_keys:
         print(key, end=" ")
         hdf = joblib.load(parsed_hic_folder + key)
-        ni = 0
         for i, info in enumerate(train_info):
+            if i >= GLOBAL_BATCH_SIZE * STEPS_PER_EPOCH:
+                break
             hd = hdf[info[0]]
             hic_mat = np.zeros((num_hic_bins, num_hic_bins))
             start_hic = int((info[1] - half_size))
@@ -204,15 +211,16 @@ def run_epoch(q, k, train_info, test_info, one_hot, track_names, hic_keys):
             hic_mat[l1, l2] += hic_score
             # hic_mat = hic_mat + hic_mat.T - np.diag(np.diag(hic_mat))
             hic_mat = gaussian_filter(hic_mat, sigma=1)
-            # print(f"original {len(hic_mat.flatten())}")
+            if i == 0:
+                print(f"original {len(hic_mat.flatten())}")
             hic_mat = hic_mat[np.triu_indices_from(hic_mat, k=1)]
-            # print(f"triu {len(hic_mat.flatten())}")
+            if i == 0:
+                print(f"triu {len(hic_mat.flatten())}")
             for hs in range(hic_track_size):
                 hic_slice = hic_mat[hs * num_regions: (hs + 1) * num_regions].copy()
                 if len(hic_slice) != num_regions:
                     hic_slice.resize(num_regions, refcheck=False)
-                output_scores[ni].append(hic_slice)
-            ni += 1
+                output_scores[i].append(hic_slice)
         del hd
         del hdf
         gc.collect()
@@ -227,7 +235,6 @@ def run_epoch(q, k, train_info, test_info, one_hot, track_names, hic_keys):
     for name, size in sorted(((name, sys.getsizeof(value)) for name, value in locals().items()),
                              key=lambda x: -x[1])[:10]:
         print("{:>30}: {:>8}".format(name, cm.get_human_readable(size)))
-
 
     print(datetime.now().strftime('[%H:%M:%S] ') + "Training")
     gc.collect()
@@ -256,10 +263,10 @@ def run_epoch(q, k, train_info, test_info, one_hot, track_names, hic_keys):
                 if info[0] == "chr2":
                     chr2_info.append(info)
             print(f"Training set {len(chr2_info)}")
-            training_spearman = eval_perf(our_model, GLOBAL_BATCH_SIZE, chr2_info, False)
+            training_spearman = eval_perf(our_model, GLOBAL_BATCH_SIZE, chr2_info, loaded_tracks, False)
             print(f"Test set {len(test_info)}")
-            test_spearman = eval_perf(our_model, GLOBAL_BATCH_SIZE, test_info, True)
-            with open("history.csv", "a+") as myfile:
+            test_spearman = eval_perf(our_model, GLOBAL_BATCH_SIZE, test_info, loaded_tracks, True)
+            with open(model_name + "_history.csv", "a+") as myfile:
                 myfile.write(f"{training_spearman},{test_spearman}")
                 myfile.write("\n")
         except Exception as e:
@@ -270,25 +277,36 @@ def run_epoch(q, k, train_info, test_info, one_hot, track_names, hic_keys):
     q.put(None)
 
 
-def eval_perf(our_model, GLOBAL_BATCH_SIZE, eval_infos, should_draw):
+def eval_perf(our_model, GLOBAL_BATCH_SIZE, eval_infos, loaded_tracks, should_draw):
     import model as mo
 
     eval_gt = {}
+    # eval_gt_max = {}
     eval_gt_full = []
     for i in range(len(eval_infos)):
         eval_gt[eval_infos[i][2]] = {}
+        # eval_gt_max[eval_infos[i][2]] = {}
         if i < 500:
             eval_gt_full.append([])
     for i, key in enumerate(track_names):
         if i % 100 == 0:
             print(i, end=" ")
             gc.collect()
-        loaded_track = joblib.load(parsed_tracks_folder + key)
+        if key in loaded_tracks:
+            parsed_track = loaded_tracks[key]
+        else:
+            parsed_track = joblib.load(parsed_tracks_folder + key)
+
         for j, info in enumerate(eval_infos):
-            eval_gt[info[2]].setdefault(key, []).append(loaded_track[info[0]][int(info[1] / bin_size)])
+            mid = int(info[1] / bin_size)
+            # val = parsed_track[info[0]][mid]
+            val = parsed_track[info[0]][mid - 1] + parsed_track[info[0]][mid] + parsed_track[info[0]][mid + 1]
+            eval_gt[info[2]].setdefault(key, []).append(val)
+            start_bin = int(info[1] / bin_size) - half_num_regions
+            # eval_gt_max[info[2]].setdefault(key, []).append(np.max(parsed_track[info[0]][start_bin:start_bin + num_regions]))
             if j < 500:
                 start_bin = int(info[1] / bin_size) - half_num_regions
-                eval_gt_full[j].append(loaded_track[info[0]][start_bin:start_bin+num_regions])
+                eval_gt_full[j].append(parsed_track[info[0]][start_bin:start_bin + num_regions])
 
     for i, gene in enumerate(eval_gt.keys()):
         if i % 10 == 0:
@@ -304,20 +322,22 @@ def eval_perf(our_model, GLOBAL_BATCH_SIZE, eval_infos, should_draw):
     else:
         # preparing test output tracks
         final_pred = {}
+        # final_pred_max = {}
         for i in range(len(eval_infos)):
             final_pred[eval_infos[i][2]] = {}
+            # final_pred_max[eval_infos[i][2]] = {}
 
         for shift_val in [0]:  # -2 * bin_size, -1 * bin_size, 0, bin_size, 2 * bin_size
             test_seq = []
             for info in eval_infos:
-                start = int(info[1] + shift_val - half_size)
+                start = int(info[1] - (info[1] % bin_size) + shift_val - half_size)
                 extra = start + input_size - len(one_hot[info[0]])
                 if start < 0:
                     ns = one_hot[info[0]][0:start + input_size]
-                    ns = np.concatenate((np.zeros((-1 * start, 4)), ns))
+                    ns = np.concatenate((np.zeros((-1 * start, num_features)), ns))
                 elif extra > 0:
                     ns = one_hot[info[0]][start: len(one_hot[info[0]])]
-                    ns = np.concatenate((ns, np.zeros((extra, 4))))
+                    ns = np.concatenate((ns, np.zeros((extra, num_features))))
                 else:
                     ns = one_hot[info[0]][start:start + input_size]
                 if len(ns) != input_size:
@@ -335,21 +355,26 @@ def eval_perf(our_model, GLOBAL_BATCH_SIZE, eval_infos, should_draw):
                     correction = -1 * int(shift_val / bin_size)
                 print(f"\n{shift_val} {comp} {test_seq.shape} predicting")
                 predictions = None
+                # predictions_max = None
                 for w in range(0, len(test_seq), 1000):
                     print(w, end=" ")
                     gc.collect()
+                    p1 = our_model.predict(mo.wrap2(test_seq[w:w + 1000], GLOBAL_BATCH_SIZE))
+                    # p2 = p1[:, :, mid_bin + correction]
+                    p2 = p1[:, :, mid_bin - 1 + correction] + p1[:, :, mid_bin + correction] + p1[:, :, mid_bin + 1 + correction]
+                    # p_max = np.max(p1, axis=2)
                     if w == 0:
-                        predictions = our_model.predict(mo.wrap2(test_seq[w:w + 1000], GLOBAL_BATCH_SIZE))[:, :,
-                                      mid_bin + correction]
+                        predictions = p2
+                        # predictions_max = p_max
                     else:
-                        new_predictions = our_model.predict(mo.wrap2(test_seq[w:w + 1000], GLOBAL_BATCH_SIZE))[:, :,
-                                          mid_bin + correction]
-                        predictions = np.concatenate((predictions, new_predictions), dtype=np.float16)
+                        predictions = np.concatenate((predictions, p2), dtype=np.float16)
+                        # predictions_max = np.concatenate((predictions_max, p_max), dtype=np.float16)
                 for i in range(len(eval_infos)):
                     for it, ct in enumerate(track_names):
                         final_pred[eval_infos[i][2]].setdefault(ct, []).append(predictions[i][it])
+                        # final_pred_max[eval_infos[i][2]].setdefault(ct, []).append(predictions_max[i][it])
                 print(f"{shift_val} {comp} finished")
-                predictions = None
+                del predictions
                 gc.collect()
 
         for i, gene in enumerate(final_pred.keys()):
@@ -357,6 +382,7 @@ def eval_perf(our_model, GLOBAL_BATCH_SIZE, eval_infos, should_draw):
                 print(i, end=" ")
             for track in track_names:
                 final_pred[gene][track] = np.mean(final_pred[gene][track])
+                # final_pred_max[gene][track] = np.mean(final_pred_max[gene][track])
 
         # with open('pickle/final_pred.gz', 'wb') as handle:
         #     pickle.dump(final_pred, handle, protocol=pickle.HIGHEST_PROTOCOL)
@@ -388,7 +414,7 @@ def eval_perf(our_model, GLOBAL_BATCH_SIZE, eval_infos, should_draw):
     #     gt_mean = np.mean(b[key])
     #     a1.append(pred_mean)
     #     b1.append(gt_mean)
-
+    print("")
     print(f"Maybe this {len(corr_p)} {np.mean(corr_p)} {np.mean(corr_s)}")
 
     print("Across tracks")
@@ -405,6 +431,22 @@ def eval_perf(our_model, GLOBAL_BATCH_SIZE, eval_infos, should_draw):
         corrs_p.setdefault(type, []).append((stats.pearsonr(a, b)[0], track))
         corrs_s.setdefault(type, []).append((stats.spearmanr(a, b)[0], track))
         all_track_spearman[track] = stats.spearmanr(a, b)[0]
+
+    # corrs_s_max = {}
+    # for track in track_names:
+    #     type = track[:track.find(".")]
+    #     a = []
+    #     b = []
+    #     for gene in final_pred_max.keys():
+    #         a.append(final_pred_max[gene][track])
+    #         b.append(eval_gt_max[gene][track])
+    #     corrs_s_max.setdefault(type, []).append((stats.spearmanr(a, b)[0], track))
+    #
+    # for track_type in corrs_s_max.keys():
+    #     with open(f"max_all_track_spearman_{track_type}.csv", "w+") as myfile:
+    #         for ccc in corrs_s_max[track_type]:
+    #             myfile.write(f"{ccc[0]},{ccc[1]}")
+    #             myfile.write("\n")
 
     with open("all_track_spearman.csv", "w+") as myfile:
         for key in all_track_spearman.keys():
@@ -447,8 +489,8 @@ def eval_perf(our_model, GLOBAL_BATCH_SIZE, eval_infos, should_draw):
         pic_count = 0
         for it, ct in enumerate(track_names):
             type = ct[:ct.find(".")]
-            if type != "CAGE":
-                continue
+            # if type != "CAGE":
+            #     continue
             for i in range(len(predictions_full)):
                 if np.sum(eval_gt_full[i][it]) == 0:
                     continue
@@ -470,9 +512,10 @@ def eval_perf(our_model, GLOBAL_BATCH_SIZE, eval_infos, should_draw):
                 pic_count += 1
                 if i > 20:
                     break
-            if pic_count > 100:
+            if pic_count > 500:
                 break
 
+        pic_count = 0
         print("Drawing gene regplot")
         for it, track in enumerate(track_names):
             type = track[:track.find(".")]
@@ -495,91 +538,94 @@ def eval_perf(our_model, GLOBAL_BATCH_SIZE, eval_infos, should_draw):
             fig.tight_layout()
             plt.savefig(figures_folder + "/plots/corr_" + track + ".svg")
             plt.close(fig)
+            pic_count += 1
+            if pic_count > 100:
+                break
 
-            # attribution
-            # for c, cell in enumerate(cells):
-            #     for i in range(1200, 1210, 1):
-            #         baseline = tf.zeros(shape=(input_size, 4))
-            #         image = test_input_sequences[i].astype('float32')
-            #         ig_attributions = attribution.integrated_gradients(our_model, baseline=baseline,
-            #                                                            image=image,
-            #                                                            target_class_idx=[mid_bin, c],
-            #                                                            m_steps=40)
-            #
-            #         attribution_mask = tf.squeeze(ig_attributions).numpy()
-            #         attribution_mask = (attribution_mask - np.min(attribution_mask)) / (
-            #                     np.max(attribution_mask) - np.min(attribution_mask))
-            #         attribution_mask = np.mean(attribution_mask, axis=-1, keepdims=True)
-            #         attribution_mask[int(input_size / 2) - 2000 : int(input_size / 2) + 2000, :] = np.nan
-            #         attribution_mask = skimage.measure.block_reduce(attribution_mask, (100, 1), np.mean)
-            #         attribution_mask = np.transpose(attribution_mask)
-            #
-            #         fig, ax = plt.subplots(figsize=(60, 6))
-            #         sns.heatmap(attribution_mask, linewidth=0.0, ax=ax)
-            #         plt.tight_layout()
-            #         plt.savefig(figures_folder + "/attribution/track_" + str(i + 1) + "_" + str(cell) + "_" + test_info[i] + ".jpg")
-            #         plt.close(fig)
-        else:
-            hic_output = []
-            print("\nHi-C")
-            for key in hic_keys:
-                print(key, end=" ")
-                hdf = joblib.load(parsed_hic_folder + key)
-                ni = 0
+        # attribution
+        # for c, cell in enumerate(cells):
+        #     for i in range(1200, 1210, 1):
+        #         baseline = tf.zeros(shape=(input_size, num_features))
+        #         image = test_input_sequences[i].astype('float32')
+        #         ig_attributions = attribution.integrated_gradients(our_model, baseline=baseline,
+        #                                                            image=image,
+        #                                                            target_class_idx=[mid_bin, c],
+        #                                                            m_steps=40)
+        #
+        #         attribution_mask = tf.squeeze(ig_attributions).numpy()
+        #         attribution_mask = (attribution_mask - np.min(attribution_mask)) / (
+        #                     np.max(attribution_mask) - np.min(attribution_mask))
+        #         attribution_mask = np.mean(attribution_mask, axis=-1, keepdims=True)
+        #         attribution_mask[int(input_size / 2) - 2000 : int(input_size / 2) + 2000, :] = np.nan
+        #         attribution_mask = skimage.measure.block_reduce(attribution_mask, (100, 1), np.mean)
+        #         attribution_mask = np.transpose(attribution_mask)
+        #
+        #         fig, ax = plt.subplots(figsize=(60, 6))
+        #         sns.heatmap(attribution_mask, linewidth=0.0, ax=ax)
+        #         plt.tight_layout()
+        #         plt.savefig(figures_folder + "/attribution/track_" + str(i + 1) + "_" + str(cell) + "_" + test_info[i] + ".jpg")
+        #         plt.close(fig)
+    else:
+        hic_output = []
+        print("\nHi-C")
+        for key in hic_keys:
+            print(key, end=" ")
+            hdf = joblib.load(parsed_hic_folder + key)
+            ni = 0
+            hic_output.append([])
+            for i, info in enumerate(train_info):
+                hd = hdf[info[0]]
+                hic_mat = np.zeros((num_hic_bins, num_hic_bins))
+                start_hic = int((info[1] - half_size))
+                end_hic = start_hic + input_size
+                start_row = hd['locus1'].searchsorted(start_hic - hic_bin_size, side='left')
+                end_row = hd['locus1'].searchsorted(end_hic, side='right')
+                hd = hd.iloc[start_row:end_row]
+                # convert start of the input region to the bin number
+                start_hic = int(start_hic / hic_bin_size)
+                # subtract start bin from the binned entries in the range [start_row : end_row]
+                l1 = (np.floor(hd["locus1"].values / hic_bin_size) - start_hic).astype(int)
+                l2 = (np.floor(hd["locus2"].values / hic_bin_size) - start_hic).astype(int)
+                hic_score = hd["score"].values
+                # drop contacts with regions outside the [start_row : end_row] range
+                lix = (l2 < len(hic_mat)) & (l2 >= 0) & (l1 >= 0)
+                l1 = l1[lix]
+                l2 = l2[lix]
+                hic_score = hic_score[lix]
+                hic_mat[l1, l2] += hic_score
+                # hic_mat = hic_mat + hic_mat.T - np.diag(np.diag(hic_mat))
+                hic_mat = gaussian_filter(hic_mat, sigma=1)
+                # print(f"original {len(hic_mat.flatten())}")
+                hic_mat = hic_mat[np.triu_indices_from(hic_mat, k=1)]
+                # print(f"triu {len(hic_mat.flatten())}")
+                for hs in range(hic_track_size):
+                    hic_slice = hic_mat[hs * num_regions: (hs + 1) * num_regions].copy()
+                    if len(hic_slice) != num_regions:
+                        hic_slice.resize(num_regions, refcheck=False)
+                    hic_output[ni].append(hic_slice)
+                ni += 1
                 hic_output.append([])
-                for i, info in enumerate(train_info):
-                    hd = hdf[info[0]]
-                    hic_mat = np.zeros((num_hic_bins, num_hic_bins))
-                    start_hic = int((info[1] - half_size))
-                    end_hic = start_hic + input_size
-                    start_row = hd['locus1'].searchsorted(start_hic - hic_bin_size, side='left')
-                    end_row = hd['locus1'].searchsorted(end_hic, side='right')
-                    hd = hd.iloc[start_row:end_row]
-                    # convert start of the input region to the bin number
-                    start_hic = int(start_hic / hic_bin_size)
-                    # subtract start bin from the binned entries in the range [start_row : end_row]
-                    l1 = (np.floor(hd["locus1"].values / hic_bin_size) - start_hic).astype(int)
-                    l2 = (np.floor(hd["locus2"].values / hic_bin_size) - start_hic).astype(int)
-                    hic_score = hd["score"].values
-                    # drop contacts with regions outside the [start_row : end_row] range
-                    lix = (l2 < len(hic_mat)) & (l2 >= 0) & (l1 >= 0)
-                    l1 = l1[lix]
-                    l2 = l2[lix]
-                    hic_score = hic_score[lix]
-                    hic_mat[l1, l2] += hic_score
-                    # hic_mat = hic_mat + hic_mat.T - np.diag(np.diag(hic_mat))
-                    hic_mat = gaussian_filter(hic_mat, sigma=1)
-                    # print(f"original {len(hic_mat.flatten())}")
-                    hic_mat = hic_mat[np.triu_indices_from(hic_mat, k=1)]
-                    # print(f"triu {len(hic_mat.flatten())}")
-                    for hs in range(hic_track_size):
-                        hic_slice = hic_mat[hs * num_regions: (hs + 1) * num_regions].copy()
-                        if len(hic_slice) != num_regions:
-                            hic_slice.resize(num_regions, refcheck=False)
-                        hic_output[ni].append(hic_slice)
-                    ni += 1
-                    hic_output.append([])
-                del hd
-                del hdf
-                gc.collect()
-            print("Drawing contact maps")
-            for h in range(len(hic_keys)):
-                pic_count = 0
-                it = h * hic_track_size
-                for i in range(len(predictions_full)):
-                    mat_gt = recover_shape(hic_output[i][it:it + hic_track_size], num_hic_bins)
-                    mat_pred = recover_shape(predictions_full[i][it:it + hic_track_size], num_hic_bins)
-                    fig, axs = plt.subplots(2, 1, figsize=(6, 8))
-                    sns.heatmap(mat_pred, linewidth=0.0, ax=axs[0])
-                    axs[0].set_title("Prediction")
-                    sns.heatmap(mat_gt, linewidth=0.0, ax=axs[1])
-                    axs[1].set_title("Ground truth")
-                    plt.tight_layout()
-                    plt.savefig(figures_folder + "/hic/train_track_" + str(i + 1) + "_" + str(hic_keys[h]) + ".png")
-                    plt.close(fig)
-                    pic_count += 1
-                    if pic_count > 5:
-                        break
+            del hd
+            del hdf
+            gc.collect()
+        print("Drawing contact maps")
+        for h in range(len(hic_keys)):
+            pic_count = 0
+            it = h * hic_track_size
+            for i in range(len(predictions_full)):
+                mat_gt = recover_shape(hic_output[i][it:it + hic_track_size], num_hic_bins)
+                mat_pred = recover_shape(predictions_full[i][it:it + hic_track_size], num_hic_bins)
+                fig, axs = plt.subplots(2, 1, figsize=(6, 8))
+                sns.heatmap(mat_pred, linewidth=0.0, ax=axs[0])
+                axs[0].set_title("Prediction")
+                sns.heatmap(mat_gt, linewidth=0.0, ax=axs[1])
+                axs[1].set_title("Ground truth")
+                plt.tight_layout()
+                plt.savefig(figures_folder + "/hic/train_track_" + str(i + 1) + "_" + str(hic_keys[h]) + ".png")
+                plt.close(fig)
+                pic_count += 1
+                if pic_count > 5:
+                    break
     return return_result
 
 
@@ -602,26 +648,53 @@ def change_seq(x):
     return cm.rev_comp(x)
 
 
+def load_values(s, chosen_track):
+    i = chosen_track[0]
+    parsed_track = chosen_track[1]
+    s[i] = parsed_track[s[i][0]][s[i][1]:s[i][2]].copy()
+    return 1
+
+
+model_folder = "models"
+model_name = "gauss_5layer.h5"
+figures_folder = "figures_1"
+parsed_tracks_folder = "/home/user/data/parsed_tracks/"
+tracks_folder = "/home/user/data/tracks/"
+parsed_hic_folder = "/home/user/data/parsed_hic/"
+temp_folder = "/home/user/data/temp/"
+# parsed_tracks_folder = "parsed_tracks/"
+# parsed_hic_folder = "parsed_hic/"
+# temp_folder = "temp/"
+
 if __name__ == '__main__':
     os.chdir(open("data_dir").read().strip())
     # os.chdir("/home/acd13586qv/variants")
-    # our_model = mo.simple_model(input_size, num_regions, out_stack_num)
     Path(model_folder).mkdir(parents=True, exist_ok=True)
     Path(figures_folder + "/" + "attribution").mkdir(parents=True, exist_ok=True)
     Path(figures_folder + "/" + "tracks").mkdir(parents=True, exist_ok=True)
     Path(figures_folder + "/" + "plots").mkdir(parents=True, exist_ok=True)
     Path(figures_folder + "/" + "hic").mkdir(parents=True, exist_ok=True)
-
     ga, one_hot, train_info, test_info, tss_loc = parser.get_sequences(bin_size, chromosomes)
-    if Path("pickle/gas_keys.gz").is_file():
-        track_names = joblib.load("pickle/gas_keys.gz")
+    if Path("pickle/track_names.gz").is_file():
+        track_names = joblib.load("pickle/track_names.gz")
     else:
-        track_names = parser.parse_tracks(ga, bin_size, tss_loc, chromosomes)
+        track_names = parser.parse_tracks(ga, bin_size, tss_loc, chromosomes, tracks_folder)
 
     print("Number of tracks: " + str(len(track_names)))
 
     # hic_keys = parser.parse_hic()
-    hic_keys = ["hic_ADAC418_10kb_interactions.txt.bz2"]
+    # hic_keys = ["hic_ADAC418_10kb_interactions.txt.bz2"]
+    hic_keys = []
+
+    loaded_tracks = {}
+    for i, key in enumerate(track_names):
+        if i % 100 == 0:
+            print(i, end=" ")
+            # gc.collect()
+        parsed_track = joblib.load(parsed_tracks_folder + key)
+        loaded_tracks[key] = parsed_track
+        if i > 1000:
+            break
 
     # mp.set_start_method('spawn', force=True)
     # try:
@@ -652,7 +725,7 @@ if __name__ == '__main__':
         #     print(q.get())
         #     p.join()
         #     time.sleep(1)
-        p = mp.Process(target=run_epoch, args=(q, k, train_info, test_info, one_hot, track_names,hic_keys,))
+        p = mp.Process(target=run_epoch, args=(q, k + 1, train_info, test_info, one_hot, track_names, loaded_tracks, hic_keys,))
         p.start()
         print(q.get())
         p.join()

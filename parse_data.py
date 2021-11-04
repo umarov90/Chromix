@@ -9,10 +9,13 @@ import re
 import math
 import time
 import copy
+import main
+import pickle
 import itertools as it
 import traceback
 from multiprocessing import Pool, Manager
 import multiprocessing as mp
+from scipy.ndimage.filters import gaussian_filter
 
 
 def valid(chunks):
@@ -89,35 +92,32 @@ def parse_hic():
         return hic_keys
 
 
-def parse_tracks(ga, bin_size, tss_loc, chromosomes):
-    gas_keys = []
+def parse_tracks(ga, bin_size, tss_loc, chromosomes, tracks_folder):
+    track_names = []
     wl = pd.read_csv('data/white_list.txt', delimiter='\t').values.flatten().tolist()
     nbl = pd.read_csv('data/nbl.tsv', delimiter='\t').values.flatten().tolist()
     for track in wl:
         if track in nbl:
             nbl.remove(track)
             continue
-        fn = f"tracks/{track}.100nt.bed.gz"
+        fn = tracks_folder + f"{track}.100nt.bed.gz"
         size = os.path.getsize(fn)
         if size > 512000:
-            gas_keys.append(track)
-    print(len(wl))
-    print(len(nbl))
-    for tr in nbl:
-        print(tr)
-    print(f"gas {len(gas_keys)}")
+            track_names.append(track)
+
+    print(f"gas {len(track_names)}")
 
     step_size = 50
     q = mp.Queue()
     ps = []
     start = 0
     nproc = 28
-    end = len(gas_keys)
+    end = len(track_names)
     for t in range(start, end, step_size):
         t_end = min(t+step_size, end)
-        sub_tracks = gas_keys[t:t_end]
+        sub_tracks = track_names[t:t_end]
         p = mp.Process(target=parse_some_tracks,
-                       args=(sub_tracks, ga, bin_size, chromosomes,))
+                       args=(q, sub_tracks, ga, bin_size, chromosomes,tracks_folder,))
         p.start()
         ps.append(p)
         if len(ps) >= nproc:
@@ -131,14 +131,14 @@ def parse_tracks(ga, bin_size, tss_loc, chromosomes):
             p.join()
         print(q.get())
 
-    joblib.dump(gas_keys, "pickle/gas_keys.gz", compress=3)
-    return gas_keys
+    joblib.dump(track_names, "pickle/track_names.gz", compress=3)
+    return track_names
 
 
-def parse_some_tracks(q, some_tracks, ga, bin_size, chromosomes):
+def parse_some_tracks(q, some_tracks, ga, bin_size, chromosomes, tracks_folder):
     for track in some_tracks:
         try:
-            fn = f"tracks/{track}.100nt.bed.gz"
+            fn = tracks_folder + f"{track}.100nt.bed.gz"
             gast = copy.deepcopy(ga)
             dtypes = {"chr": str, "start": int, "end": int, "score": float}
             df = pd.read_csv(fn, delim_whitespace=True, names=["chr", "start", "end", "score"],
@@ -178,9 +178,10 @@ def parse_some_tracks(q, some_tracks, ga, bin_size, chromosomes):
             #     print(scale_val)
             for key in gast.keys():
                 gast[key] = gast[key] / max_val # np.clip(gast[key], 0, scale_val) / scale_val
+                gast[key] = gaussian_filter(gast[key], sigma=1)
             for key in gast.keys():
                 gast[key] = gast[key].astype(np.float16)
-            joblib.dump(gast, "parsed_tracks/" + track, compress="lz4")
+            joblib.dump(gast, main.parsed_tracks_folder + track, compress="lz4")
             print(f"Parsed {track}. Max value: {max_val}.")
         except Exception as exc:
             print(exc)
@@ -197,14 +198,6 @@ def get_sequences(bin_size, chromosomes):
         genome, ga = cm.parse_genome("data/hg38.fa", bin_size)
         joblib.dump(genome, "pickle/genome.gz", compress=3)
         joblib.dump(ga, "pickle/ga.gz", compress=3)
-
-    if Path("pickle/one_hot.gz").is_file():
-        one_hot = joblib.load("pickle/one_hot.gz")
-    else:
-        one_hot = {}
-        for chromosome in chromosomes:
-            one_hot[chromosome] = cm.encode_seq(genome[chromosome])
-        joblib.dump(one_hot, "pickle/one_hot.gz", compress=3)
 
     if Path("pickle/train_info.gz").is_file():
         test_info = joblib.load("pickle/test_info.gz")
@@ -226,27 +219,45 @@ def get_sequences(bin_size, chromosomes):
         test_genes = gene_tss.loc[gene_tss['chrom'] == "chr1"]
         for index, row in test_genes.iterrows():
             pos = int(row["start"])
+            tss_loc.setdefault(row["chrom"], []).append(pos)
             gene_type = gene_info[gene_info['geneID'] == row["geneID"]]['geneType'].values[0]
             if gene_type != "protein_coding":
                 continue
             test_info.append([row["chrom"], pos, row["geneID"], gene_type, row["strand"]])
-            tss_loc.setdefault(row["chrom"], []).append(int(pos/bin_size))
 
         print(f"Test set complete {len(test_info)}")
         train_info = []
         train_genes = gene_tss.loc[gene_tss['chrom'] != "chr1"]
         for index, row in train_genes.iterrows():
             pos = int(row["start"])
+            tss_loc.setdefault(row["chrom"], []).append(pos)
             gene_type = gene_info[gene_info['geneID'] == row["geneID"]]['geneType'].values[0]
-            # if gene_type != "protein_coding":
-            #     continue
+            if gene_type != "protein_coding":
+                continue
+            if row["chrom"] not in chromosomes:
+                continue
             train_info.append([row["chrom"], pos, row["geneID"], gene_type, row["strand"]])
-            tss_loc.setdefault(row["chrom"], []).append(int(pos / bin_size))
+
         print(f"Training set complete {len(train_info)}")
+
+        one_hot = {}
+        for chromosome in chromosomes:
+            print(chromosome)
+            one_hot[chromosome] = cm.encode_seq(genome[chromosome])
+            tss_layer = np.zeros((len(one_hot[chromosome]), 1)).astype(np.bool)
+            print(len(one_hot[chromosome]))
+            for tss in tss_loc[chromosome]:
+                tss_layer[tss, 0] = True
+            print(f"{chromosome}: {np.sum(tss_layer)}")
+            one_hot[chromosome] = np.hstack([one_hot[chromosome], tss_layer])
+
+        joblib.dump(one_hot, "pickle/one_hot.gz", compress=3)
+
         joblib.dump(test_info, "pickle/test_info.gz", compress=3)
         joblib.dump(train_info, "pickle/train_info.gz", compress=3)
         joblib.dump(tss_loc, "pickle/tss_loc.gz", compress=3)
         gc.collect()
+    one_hot = joblib.load("pickle/one_hot.gz")
     return ga, one_hot, train_info, test_info, tss_loc
 
 
