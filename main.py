@@ -713,14 +713,14 @@ if __name__ == '__main__':
     # hic_keys = []
 
     loaded_tracks = {}
-    # for i, key in enumerate(track_names):
-    #     if i % 100 == 0:
-    #         print(i, end=" ")
-    #         # gc.collect()
-    #     parsed_track = joblib.load(parsed_tracks_folder + key)
-    #     loaded_tracks[key] = parsed_track
-    #     if i > 1000:
-    #         break
+    for i, key in enumerate(track_names):
+        if i % 100 == 0:
+            print(i, end=" ")
+            # gc.collect()
+        parsed_track = joblib.load(parsed_tracks_folder + key)
+        loaded_tracks[key] = parsed_track
+        # if i > 1000:
+        #     break
 
     # mp.set_start_method('spawn', force=True)
     # try:
