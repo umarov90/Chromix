@@ -24,7 +24,7 @@ def simple_model(input_size, num_regions, cell_num):
     x = inputs
     # x = Dropout(0.2)(x)
     x = resnet_v2(x, 8, 5)
-    num_patches = 391
+    num_patches = 7813
     # x = Dropout(0.5)(x)
     # for i in range(10):
     #     prev = x
@@ -115,7 +115,7 @@ def resnet_layer(inputs,
 
 def resnet_v2(input_x, num_stages, num_res_blocks):
     # Start model definition.
-    num_filters_in = 128
+    num_filters_in = 64
 
     # v2 performs Conv2D with BN-ReLU on input before splitting into 2 paths
     x = resnet_layer(inputs=input_x,

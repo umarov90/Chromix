@@ -94,16 +94,20 @@ def parse_hic():
 
 def parse_tracks(ga, bin_size, tss_loc, chromosomes, tracks_folder):
     track_names = []
-    wl = pd.read_csv('data/white_list.txt', delimiter='\t').values.flatten().tolist()
-    nbl = pd.read_csv('data/nbl.tsv', delimiter='\t').values.flatten().tolist()
-    for track in wl:
-        if track in nbl:
-            nbl.remove(track)
-            continue
-        fn = tracks_folder + f"{track}.100nt.bed.gz"
-        size = os.path.getsize(fn)
-        if size > 512000:
-            track_names.append(track)
+    # wl = pd.read_csv('data/white_list.txt', delimiter='\t').values.flatten().tolist()
+    # nbl = pd.read_csv('data/nbl.tsv', delimiter='\t').values.flatten().tolist()
+    # for track in os.listdir(tracks_folder):
+    for filename in os.listdir(tracks_folder):
+        if filename.endswith(".gz"):
+            fn = os.path.join(tracks_folder, filename)
+            track = filename[:-len(".100nt.bed.gz")]
+            # if track in nbl:
+            #     nbl.remove(track)
+            #     continue
+            fn = tracks_folder + f"{track}.100nt.bed.gz"
+            size = os.path.getsize(fn)
+            if size > 2 * 512000:
+                track_names.append(track)
 
     print(f"gas {len(track_names)}")
 
