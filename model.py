@@ -23,8 +23,10 @@ def simple_model(input_size, num_regions, cell_num):
     inputs = Input(shape=input_shape)
     x = inputs
     # x = Dropout(0.2)(x)
-    x = resnet_v2(x, 8, 5)
-    num_patches = 7813
+    resnet_output = resnet_v2(x, 8, 5)
+    our_resnet = Model(inputs, resnet_output, name="our_resnet")
+    num_patches = 7813 # 391 #
+    num_filters = 269
     # x = Dropout(0.5)(x)
     # for i in range(10):
     #     prev = x
@@ -34,8 +36,8 @@ def simple_model(input_size, num_regions, cell_num):
     #     if i != 0:
     #         x = Add()([x, prev])
     #     x = LeakyReLU(alpha=0.1, name="act_dilation_" + str(i+1))(x)
-
-    encoded_patches = PatchEncoder(num_patches, projection_dim)(x)
+    interactions_layer_input = Input(shape=(num_patches, num_filters))
+    encoded_patches = PatchEncoder(num_patches, projection_dim)(interactions_layer_input)
 
     # Create multiple layers of the Transformer block.
     for i in range(transformer_layers):
@@ -55,22 +57,28 @@ def simple_model(input_size, num_regions, cell_num):
         encoded_patches = Add()([x3, x2])
 
     x = LayerNormalization(epsilon=1e-6, name="ln_rep")(encoded_patches)
-
     target_length = num_regions
     trim = (x.shape[-2] - target_length) // 2
-    x = x[..., trim:-trim, :]
-    x = Conv1D(2048, kernel_size=1, strides=1, name="pointwise", activation=tf.nn.gelu)(x)
+    interactions_layer_output = x[..., trim:-trim, :]
+
+    our_interactions_layer = Model(interactions_layer_input, interactions_layer_output, name="our_transformer")
+
+    head_input = Input(shape=(num_regions, projection_dim))
+    x = Conv1D(2048, kernel_size=1, strides=1, name="pointwise", activation=tf.nn.gelu)(head_input)
     outputs = Conv1D(cell_num, kernel_size=1, strides=1, name="last_conv1d")(x)
     # trailing_axes = [-1, -2]
     # leading = tf.range(tf.rank(x) - len(trailing_axes))
     # trailing = trailing_axes + tf.rank(x)
     # new_order = tf.concat([leading, trailing], axis=0)
     outputs = tf.transpose(outputs, [0, 2, 1])
-    outputs = LeakyReLU(alpha=0.1, name="model_final_output", dtype='float32')(outputs)
     print(outputs)
-    model = Model(inputs, outputs, name="model")
+    head_output = LeakyReLU(alpha=0.1, name="model_final_output", dtype='float32')(outputs)
+    our_head = Model(head_input, head_output, name="our_head")
+    print(our_head)
+
+    our_model = Model(inputs, our_head(our_interactions_layer(our_resnet(inputs))), name="our_model")
     print("\nModel constructed")
-    return model
+    return our_model
 
 
 class SAMModel(tf.keras.Model):
@@ -115,7 +123,7 @@ def resnet_layer(inputs,
 
 def resnet_v2(input_x, num_stages, num_res_blocks):
     # Start model definition.
-    num_filters_in = 64
+    num_filters_in = 128
 
     # v2 performs Conv2D with BN-ReLU on input before splitting into 2 paths
     x = resnet_layer(inputs=input_x,

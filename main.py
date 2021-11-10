@@ -32,7 +32,7 @@ from datetime import datetime
 import traceback
 import multiprocessing as mp
 import pickle
-
+# import model as mo
 matplotlib.use("agg")
 from scipy.ndimage.filters import gaussian_filter
 # from sam import SAM
@@ -58,7 +58,7 @@ num_regions = 4951  # int(input_size / bin_size)
 half_num_regions = int(num_regions / 2)
 mid_bin = math.floor(num_regions / 2)
 BATCH_SIZE = 1
-STEPS_PER_EPOCH = 100
+STEPS_PER_EPOCH = 200
 chromosomes = ["chrX"]  # "chrY"
 for i in range(1, 23):
     chromosomes.append("chr" + str(i))
@@ -144,126 +144,126 @@ def run_epoch(q, k, train_info, test_info, one_hot, track_names, loaded_tracks, 
                                                                'PatchEncoder': mo.PatchEncoder})
 
     # if k != 0:
-    # print(datetime.now().strftime('[%H:%M:%S] ') + "Preparing sequences")
-    # err = 0
-    # for i, info in enumerate(train_info):
-    #     if len(input_sequences) >= GLOBAL_BATCH_SIZE * STEPS_PER_EPOCH:
-    #         break
-    #     if i % 500 == 0:
-    #         print(i, end=" ")
-    #         gc.collect()
-    #     try:
-    #         start = int(info[1] - (info[1] % bin_size) - half_size)
-    #         extra = start + input_size - len(one_hot[info[0]])
-    #         if start < 0 or extra > 0:
-    #             continue
-    #         if start < 0:
-    #             ns = one_hot[info[0]][0:start + input_size]
-    #             ns = np.concatenate((np.zeros((-1 * start, num_features)), ns))
-    #         elif extra > 0:
-    #             ns = one_hot[info[0]][start: len(one_hot[info[0]])]
-    #             ns = np.concatenate((ns, np.zeros((extra, num_features))))
-    #         else:
-    #             ns = one_hot[info[0]][start:start + input_size]
-    #         start_bin = int(info[1] / bin_size) - half_num_regions
-    #         scores = []
-    #         for key in track_names:
-    #             scores.append([info[0], start_bin, start_bin + num_regions])
-    #             # scores.append(gas[key][info[0]][start_bin: start_bin + num_regions])
-    #         input_sequences.append(ns)
-    #         output_scores.append(scores)
-    #     except Exception as e:
-    #         print(e)
-    #         err += 1
-    # print("")
-    # print(datetime.now().strftime('[%H:%M:%S] ') + "Loading parsed tracks")
-    #
-    # for i, key in enumerate(track_names):
-    #     if i % 100 == 0:
-    #         print(i, end=" ")
-    #         # gc.collect()
-    #     if key in loaded_tracks:
-    #         parsed_track = loaded_tracks[key]
-    #     else:
-    #         parsed_track = joblib.load(parsed_tracks_folder + key)
-    #     for s in output_scores:
-    #         s[i] = parsed_track[s[i][0]][s[i][1]:s[i][2]].copy()
-    #     # with Pool(4) as p:
-    #     #     map_arr = p.starmap(load_values, zip(output_scores, repeat( [i, parsed_track] )))
-    # print("")
-    # print(datetime.now().strftime('[%H:%M:%S] ') + "Hi-C")
-    # for key in hic_keys:
-    #     print(key, end=" ")
-    #     hdf = joblib.load(parsed_hic_folder + key)
-    #     for i, info in enumerate(train_info):
-    #         if i >= GLOBAL_BATCH_SIZE * STEPS_PER_EPOCH:
-    #             break
-    #         hd = hdf[info[0]]
-    #         hic_mat = np.zeros((num_hic_bins, num_hic_bins))
-    #         start_hic = int((info[1] - half_size))
-    #         end_hic = start_hic + input_size
-    #         start_row = hd['locus1'].searchsorted(start_hic - hic_bin_size, side='left')
-    #         end_row = hd['locus1'].searchsorted(end_hic, side='right')
-    #         hd = hd.iloc[start_row:end_row]
-    #         # convert start of the input region to the bin number
-    #         start_hic = int(start_hic / hic_bin_size)
-    #         # subtract start bin from the binned entries in the range [start_row : end_row]
-    #         l1 = (np.floor(hd["locus1"].values / hic_bin_size) - start_hic).astype(int)
-    #         l2 = (np.floor(hd["locus2"].values / hic_bin_size) - start_hic).astype(int)
-    #         hic_score = hd["score"].values
-    #         # drop contacts with regions outside the [start_row : end_row] range
-    #         lix = (l2 < len(hic_mat)) & (l2 >= 0) & (l1 >= 0)
-    #         l1 = l1[lix]
-    #         l2 = l2[lix]
-    #         hic_score = hic_score[lix]
-    #         hic_mat[l1, l2] += hic_score
-    #         # hic_mat = hic_mat + hic_mat.T - np.diag(np.diag(hic_mat))
-    #         hic_mat = gaussian_filter(hic_mat, sigma=1)
-    #         if i == 0:
-    #             print(f"original {len(hic_mat.flatten())}")
-    #         hic_mat = hic_mat[np.triu_indices_from(hic_mat, k=1)]
-    #         if i == 0:
-    #             print(f"triu {len(hic_mat.flatten())}")
-    #         for hs in range(hic_track_size):
-    #             hic_slice = hic_mat[hs * num_regions: (hs + 1) * num_regions].copy()
-    #             if len(hic_slice) != num_regions:
-    #                 hic_slice.resize(num_regions, refcheck=False)
-    #             output_scores[i].append(hic_slice)
-    #     del hd
-    #     del hdf
-    #     gc.collect()
-    #
-    # print(datetime.now().strftime('[%H:%M:%S] ') + "Problems: " + str(err))
-    # gc.collect()
-    # print_memory()
-    # output_scores = np.asarray(output_scores, dtype=np.float16)
-    # input_sequences = np.asarray(input_sequences, dtype=np.float16)
-    # gc.collect()
-    # print_memory()
-    # for name, size in sorted(((name, sys.getsizeof(value)) for name, value in locals().items()),
-    #                          key=lambda x: -x[1])[:10]:
-    #     print("{:>30}: {:>8}".format(name, cm.get_human_readable(size)))
-    #
-    # print(datetime.now().strftime('[%H:%M:%S] ') + "Training")
-    # gc.collect()
-    # print_memory()
-    #
-    # try:
-    #     fit_epochs = 1
-    #     train_data = mo.wrap(input_sequences, output_scores, GLOBAL_BATCH_SIZE)
-    #     gc.collect()
-    #     our_model.fit(train_data, epochs=fit_epochs)
-    #     our_model.save(model_folder + "/" + model_name + "_temp.h5")
-    #     os.remove(model_folder + "/" + model_name)
-    #     os.rename(model_folder + "/" + model_name + "_temp.h5", model_folder + "/" + model_name)
-    #     our_model.save(model_folder + "/" + model_name + "_no.h5", include_optimizer=False)
-    #     del train_data
-    #     gc.collect()
-    # except Exception as e:
-    #     print(e)
-    #     print(datetime.now().strftime('[%H:%M:%S] ') + "Error while training.")
-    #     q.put(None)
-    #     return None
+    print(datetime.now().strftime('[%H:%M:%S] ') + "Preparing sequences")
+    err = 0
+    for i, info in enumerate(train_info):
+        if len(input_sequences) >= GLOBAL_BATCH_SIZE * STEPS_PER_EPOCH:
+            break
+        if i % 500 == 0:
+            print(i, end=" ")
+            gc.collect()
+        try:
+            start = int(info[1] - (info[1] % bin_size) - half_size)
+            extra = start + input_size - len(one_hot[info[0]])
+            if start < 0 or extra > 0:
+                continue
+            if start < 0:
+                ns = one_hot[info[0]][0:start + input_size]
+                ns = np.concatenate((np.zeros((-1 * start, num_features)), ns))
+            elif extra > 0:
+                ns = one_hot[info[0]][start: len(one_hot[info[0]])]
+                ns = np.concatenate((ns, np.zeros((extra, num_features))))
+            else:
+                ns = one_hot[info[0]][start:start + input_size]
+            start_bin = int(info[1] / bin_size) - half_num_regions
+            scores = []
+            for key in track_names:
+                scores.append([info[0], start_bin, start_bin + num_regions])
+                # scores.append(gas[key][info[0]][start_bin: start_bin + num_regions])
+            input_sequences.append(ns)
+            output_scores.append(scores)
+        except Exception as e:
+            print(e)
+            err += 1
+    print("")
+    print(datetime.now().strftime('[%H:%M:%S] ') + "Loading parsed tracks")
+
+    for i, key in enumerate(track_names):
+        if i % 100 == 0:
+            print(i, end=" ")
+            # gc.collect()
+        if key in loaded_tracks:
+            parsed_track = loaded_tracks[key]
+        else:
+            parsed_track = joblib.load(parsed_tracks_folder + key)
+        for s in output_scores:
+            s[i] = parsed_track[s[i][0]][s[i][1]:s[i][2]].copy()
+        # with Pool(4) as p:
+        #     map_arr = p.starmap(load_values, zip(output_scores, repeat( [i, parsed_track] )))
+    print("")
+    print(datetime.now().strftime('[%H:%M:%S] ') + "Hi-C")
+    for key in hic_keys:
+        print(key, end=" ")
+        hdf = joblib.load(parsed_hic_folder + key)
+        for i, info in enumerate(train_info):
+            if i >= GLOBAL_BATCH_SIZE * STEPS_PER_EPOCH:
+                break
+            hd = hdf[info[0]]
+            hic_mat = np.zeros((num_hic_bins, num_hic_bins))
+            start_hic = int((info[1] - half_size))
+            end_hic = start_hic + input_size
+            start_row = hd['locus1'].searchsorted(start_hic - hic_bin_size, side='left')
+            end_row = hd['locus1'].searchsorted(end_hic, side='right')
+            hd = hd.iloc[start_row:end_row]
+            # convert start of the input region to the bin number
+            start_hic = int(start_hic / hic_bin_size)
+            # subtract start bin from the binned entries in the range [start_row : end_row]
+            l1 = (np.floor(hd["locus1"].values / hic_bin_size) - start_hic).astype(int)
+            l2 = (np.floor(hd["locus2"].values / hic_bin_size) - start_hic).astype(int)
+            hic_score = hd["score"].values
+            # drop contacts with regions outside the [start_row : end_row] range
+            lix = (l2 < len(hic_mat)) & (l2 >= 0) & (l1 >= 0)
+            l1 = l1[lix]
+            l2 = l2[lix]
+            hic_score = hic_score[lix]
+            hic_mat[l1, l2] += hic_score
+            # hic_mat = hic_mat + hic_mat.T - np.diag(np.diag(hic_mat))
+            hic_mat = gaussian_filter(hic_mat, sigma=1)
+            if i == 0:
+                print(f"original {len(hic_mat.flatten())}")
+            hic_mat = hic_mat[np.triu_indices_from(hic_mat, k=1)]
+            if i == 0:
+                print(f"triu {len(hic_mat.flatten())}")
+            for hs in range(hic_track_size):
+                hic_slice = hic_mat[hs * num_regions: (hs + 1) * num_regions].copy()
+                if len(hic_slice) != num_regions:
+                    hic_slice.resize(num_regions, refcheck=False)
+                output_scores[i].append(hic_slice)
+        del hd
+        del hdf
+        gc.collect()
+
+    print(datetime.now().strftime('[%H:%M:%S] ') + "Problems: " + str(err))
+    gc.collect()
+    print_memory()
+    output_scores = np.asarray(output_scores, dtype=np.float16)
+    input_sequences = np.asarray(input_sequences, dtype=np.float16)
+    gc.collect()
+    print_memory()
+    for name, size in sorted(((name, sys.getsizeof(value)) for name, value in locals().items()),
+                             key=lambda x: -x[1])[:10]:
+        print("{:>30}: {:>8}".format(name, cm.get_human_readable(size)))
+
+    print(datetime.now().strftime('[%H:%M:%S] ') + "Training")
+    gc.collect()
+    print_memory()
+
+    try:
+        fit_epochs = 1
+        train_data = mo.wrap(input_sequences, output_scores, GLOBAL_BATCH_SIZE)
+        gc.collect()
+        our_model.fit(train_data, epochs=fit_epochs)
+        our_model.save(model_folder + "/" + model_name + "_temp.h5")
+        os.remove(model_folder + "/" + model_name)
+        os.rename(model_folder + "/" + model_name + "_temp.h5", model_folder + "/" + model_name)
+        our_model.save(model_folder + "/" + model_name + "_no.h5", include_optimizer=False)
+        del train_data
+        gc.collect()
+    except Exception as e:
+        print(e)
+        print(datetime.now().strftime('[%H:%M:%S] ') + "Error while training.")
+        q.put(None)
+        return None
     if k % 5 == 0:  # and k != 0
         print(datetime.now().strftime('[%H:%M:%S] ') + "Evaluating")
         try:
@@ -271,7 +271,7 @@ def run_epoch(q, k, train_info, test_info, one_hot, track_names, loaded_tracks, 
                 our_model = tf.keras.models.load_model(model_folder + "/" + model_name + "_no.h5",
                                                        custom_objects={'SAMModel': mo.SAMModel,
                                                                        'PatchEncoder': mo.PatchEncoder})
-            train_eval_chr = "chr21"
+            train_eval_chr = "chr2"
             train_eval_chr_info = []
             for info in train_info:
                 if info[0] == train_eval_chr:
@@ -295,7 +295,7 @@ def eval_perf(our_model, GLOBAL_BATCH_SIZE, eval_infos, loaded_tracks, should_dr
     import model as mo
     predict_batch_size = GLOBAL_BATCH_SIZE
     w_step = 24
-    full_preds_num = 20
+    full_preds_num = 2 * w_step
     eval_gt = {}
     # eval_gt_max = {}
     eval_gt_full = []
@@ -679,12 +679,13 @@ def load_values(s, chosen_track):
 
 
 model_folder = "models"
-model_name = "1mb_gauss_5layer_all.h5"
+model_name = "more_tss_more_tracks.h5"
 figures_folder = "figures_1"
-# parsed_tracks_folder = "/home/user/data/parsed_tracks/"
-# parsed_hic_folder = "/home/user/data/parsed_hic/"
 tracks_folder = "/home/user/data/tracks/"
 temp_folder = "/home/user/data/temp/"
+
+# parsed_tracks_folder = "/home/user/data/parsed_tracks/"
+# parsed_hic_folder = "/home/user/data/parsed_hic/"
 
 parsed_tracks_folder = "parsed_tracks/"
 parsed_hic_folder = "parsed_hic/"
@@ -692,8 +693,8 @@ parsed_hic_folder = "parsed_hic/"
 # temp_folder = "temp/"
 
 if __name__ == '__main__':
-    os.chdir(open("data_dir").read().strip())
     # our_model = mo.simple_model(input_size, num_regions, out_stack_num)
+    # os.chdir(open("data_dir").read().strip())
     os.chdir("/home/acd13586qv/variants")
     Path(model_folder).mkdir(parents=True, exist_ok=True)
     Path(figures_folder + "/" + "attribution").mkdir(parents=True, exist_ok=True)
@@ -719,8 +720,8 @@ if __name__ == '__main__':
             # gc.collect()
         parsed_track = joblib.load(parsed_tracks_folder + key)
         loaded_tracks[key] = parsed_track
-        # if i > 1000:
-        #     break
+        if i > 1000:
+            break
 
     # mp.set_start_method('spawn', force=True)
     # try:

@@ -94,13 +94,15 @@ def parse_hic():
 
 def parse_tracks(ga, bin_size, tss_loc, chromosomes, tracks_folder):
     track_names = []
-    # wl = pd.read_csv('data/white_list.txt', delimiter='\t').values.flatten().tolist()
+    wl = pd.read_csv('data/white_list.txt', delimiter='\t').values.flatten().tolist()
     # nbl = pd.read_csv('data/nbl.tsv', delimiter='\t').values.flatten().tolist()
     # for track in os.listdir(tracks_folder):
     for filename in os.listdir(tracks_folder):
         if filename.endswith(".gz"):
             fn = os.path.join(tracks_folder, filename)
             track = filename[:-len(".100nt.bed.gz")]
+            # if track not in wl:
+            #     continue
             # if track in nbl:
             #     nbl.remove(track)
             #     continue
@@ -111,29 +113,29 @@ def parse_tracks(ga, bin_size, tss_loc, chromosomes, tracks_folder):
 
     print(f"gas {len(track_names)}")
 
-    step_size = 50
-    q = mp.Queue()
-    ps = []
-    start = 0
-    nproc = 28
-    end = len(track_names)
-    for t in range(start, end, step_size):
-        t_end = min(t+step_size, end)
-        sub_tracks = track_names[t:t_end]
-        p = mp.Process(target=parse_some_tracks,
-                       args=(q, sub_tracks, ga, bin_size, chromosomes,tracks_folder,))
-        p.start()
-        ps.append(p)
-        if len(ps) >= nproc:
-            for p in ps:
-                p.join()
-            print(q.get())
-            ps = []
-
-    if len(ps) > 0:
-        for p in ps:
-            p.join()
-        print(q.get())
+    # step_size = 50
+    # q = mp.Queue()
+    # ps = []
+    # start = 0
+    # nproc = 28
+    # end = len(track_names)
+    # for t in range(start, end, step_size):
+    #     t_end = min(t+step_size, end)
+    #     sub_tracks = track_names[t:t_end]
+    #     p = mp.Process(target=parse_some_tracks,
+    #                    args=(q, sub_tracks, ga, bin_size, chromosomes,tracks_folder,))
+    #     p.start()
+    #     ps.append(p)
+    #     if len(ps) >= nproc:
+    #         for p in ps:
+    #             p.join()
+    #         print(q.get())
+    #         ps = []
+    #
+    # if len(ps) > 0:
+    #     for p in ps:
+    #         p.join()
+    #     print(q.get())
 
     joblib.dump(track_names, "pickle/track_names.gz", compress=3)
     return track_names
@@ -211,6 +213,11 @@ def get_sequences(bin_size, chromosomes):
         gene_tss = pd.read_csv("data/old_TSS_flank_0.bed",
                             sep="\t", index_col=False, names=["chrom", "start", "end", "geneID", "score", "strand"])
         gene_info = pd.read_csv("data/old_gene.info.tsv", sep="\t", index_col=False)
+
+        # gene_tss = pd.read_csv("data/hg38.GENCODEv38.pc_lnc.TSS.bed", sep="\t", index_col=False,
+        #                        names=["chrom", "start", "end", "geneID", "score", "strand"])
+        # gene_info = pd.read_csv("data/hg38.GENCODEv38.pc_lnc.gene.info.tsv", sep="\t", index_col=False)
+
         # prom_info = pd.read_csv("data/hg38.gencode_v32.promoter.window.info.tsv", sep="\t", index_col=False)
         test_info = []
         tss_loc = {}
@@ -222,7 +229,7 @@ def get_sequences(bin_size, chromosomes):
         #     test_info.append([row["chrom"], pos, row["geneID_str"], row["geneType_str"], strand])
         test_genes = gene_tss.loc[gene_tss['chrom'] == "chr1"]
         for index, row in test_genes.iterrows():
-            pos = int(row["start"])
+            pos = int(row["end"])
             tss_loc.setdefault(row["chrom"], []).append(pos)
             gene_type = gene_info[gene_info['geneID'] == row["geneID"]]['geneType'].values[0]
             if gene_type != "protein_coding":
@@ -233,7 +240,7 @@ def get_sequences(bin_size, chromosomes):
         train_info = []
         train_genes = gene_tss.loc[gene_tss['chrom'] != "chr1"]
         for index, row in train_genes.iterrows():
-            pos = int(row["start"])
+            pos = int(row["end"])
             tss_loc.setdefault(row["chrom"], []).append(pos)
             gene_type = gene_info[gene_info['geneID'] == row["geneID"]]['geneType'].values[0]
             if gene_type != "protein_coding":
