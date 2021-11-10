@@ -58,7 +58,7 @@ num_regions = 4951  # int(input_size / bin_size)
 half_num_regions = int(num_regions / 2)
 mid_bin = math.floor(num_regions / 2)
 BATCH_SIZE = 1
-STEPS_PER_EPOCH = 200
+STEPS_PER_EPOCH = 100
 chromosomes = ["chrX"]  # "chrY"
 for i in range(1, 23):
     chromosomes.append("chr" + str(i))
@@ -720,7 +720,7 @@ if __name__ == '__main__':
             # gc.collect()
         parsed_track = joblib.load(parsed_tracks_folder + key)
         loaded_tracks[key] = parsed_track
-        if i > 1000:
+        if i > 2000:
             break
 
     # mp.set_start_method('spawn', force=True)
