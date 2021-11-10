@@ -267,19 +267,15 @@ def run_epoch(q, k, train_info, test_info, one_hot, track_names, loaded_tracks, 
     if k % 5 == 0:  # and k != 0
         print(datetime.now().strftime('[%H:%M:%S] ') + "Evaluating")
         try:
-            with strategy.scope():
-                our_model = tf.keras.models.load_model(model_folder + "/" + model_name + "_no.h5",
-                                                       custom_objects={'SAMModel': mo.SAMModel,
-                                                                       'PatchEncoder': mo.PatchEncoder})
             train_eval_chr = "chr2"
             train_eval_chr_info = []
             for info in train_info:
                 if info[0] == train_eval_chr:
                     train_eval_chr_info.append(info)
             print(f"Training set {len(train_eval_chr_info)}")
-            training_spearman = eval_perf(our_model, GLOBAL_BATCH_SIZE, train_eval_chr_info, loaded_tracks, False, k)
+            training_spearman = eval_perf(strategy, GLOBAL_BATCH_SIZE, train_eval_chr_info, loaded_tracks, False, k)
             print(f"Test set {len(test_info)}")
-            test_spearman = eval_perf(our_model, GLOBAL_BATCH_SIZE, test_info, loaded_tracks, True, k)
+            test_spearman = eval_perf(strategy, GLOBAL_BATCH_SIZE, test_info, loaded_tracks, True, k)
             with open(model_name + "_history.csv", "a+") as myfile:
                 myfile.write(f"{training_spearman},{test_spearman}")
                 myfile.write("\n")
@@ -291,8 +287,15 @@ def run_epoch(q, k, train_info, test_info, one_hot, track_names, loaded_tracks, 
     q.put(None)
 
 
-def eval_perf(our_model, GLOBAL_BATCH_SIZE, eval_infos, loaded_tracks, should_draw, current_epoch):
+def eval_perf(strategy, GLOBAL_BATCH_SIZE, eval_infos, loaded_tracks, should_draw, current_epoch):
     import model as mo
+    import tensorflow as tf
+    from tensorflow.python.keras import backend as K
+
+    with strategy.scope():
+        our_model = tf.keras.models.load_model(model_folder + "/" + model_name + "_no.h5",
+                                               custom_objects={'SAMModel': mo.SAMModel,
+                                                               'PatchEncoder': mo.PatchEncoder})
     predict_batch_size = GLOBAL_BATCH_SIZE
     w_step = 24
     full_preds_num = 2 * w_step
@@ -374,6 +377,17 @@ def eval_perf(our_model, GLOBAL_BATCH_SIZE, eval_infos, loaded_tracks, should_dr
                 # predictions_max = None
                 for w in range(0, len(test_seq), w_step):
                     print(w, end=" ")
+                    if (w / w_step) % 50 == 0:
+                        print(" Reloading ")
+                        gc.collect()
+                        K.clear_session()
+                        tf.compat.v1.reset_default_graph()
+
+                        with strategy.scope():
+                            our_model = tf.keras.models.load_model(model_folder + "/" + model_name + "_no.h5",
+                                                                   custom_objects={'SAMModel': mo.SAMModel,
+                                                                                   'PatchEncoder': mo.PatchEncoder})
+
                     gc.collect()
                     p1 = our_model.predict(mo.wrap2(test_seq[w:w + w_step], predict_batch_size))
                     # p2 = p1[:, :, mid_bin + correction]
