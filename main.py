@@ -183,8 +183,10 @@ def run_epoch(q, k, train_info, test_info, one_hot, track_names, loaded_tracks, 
         if i % 100 == 0:
             print(i, end=" ")
             # gc.collect()
-        if key in loaded_tracks:
-            parsed_track = joblib.load(loaded_tracks[key])
+        if key in loaded_tracks.keys():
+            buf = loaded_tracks[key]
+            parsed_track = joblib.load(buf)
+            buf.seek(0)
         else:
             parsed_track = joblib.load(parsed_tracks_folder + key)
         for s in output_scores:
@@ -312,8 +314,10 @@ def eval_perf(strategy, GLOBAL_BATCH_SIZE, eval_infos, loaded_tracks, should_dra
         if i % 100 == 0:
             print(i, end=" ")
             gc.collect()
-        if key in loaded_tracks:
-            parsed_track = joblib.load(loaded_tracks[key])
+        if key in loaded_tracks.keys():
+            buf = loaded_tracks[key]
+            parsed_track = joblib.load(buf)
+            buf.seek(0)
         else:
             parsed_track = joblib.load(parsed_tracks_folder + key)
 
@@ -378,7 +382,7 @@ def eval_perf(strategy, GLOBAL_BATCH_SIZE, eval_infos, loaded_tracks, should_dra
                 # predictions_max = None
                 for w in range(0, len(test_seq), w_step):
                     print(w, end=" ")
-                    if (w / w_step) % 20 == 0:
+                    if w != 0 and (w / w_step) % 25 == 0:
                         print(" Reloading ")
                         gc.collect()
                         K.clear_session()
