@@ -1,3 +1,4 @@
+import io
 import os
 
 import joblib
@@ -183,7 +184,7 @@ def run_epoch(q, k, train_info, test_info, one_hot, track_names, loaded_tracks, 
             print(i, end=" ")
             # gc.collect()
         if key in loaded_tracks:
-            parsed_track = loaded_tracks[key]
+            parsed_track = joblib.load(loaded_tracks[key])
         else:
             parsed_track = joblib.load(parsed_tracks_folder + key)
         for s in output_scores:
@@ -312,7 +313,7 @@ def eval_perf(strategy, GLOBAL_BATCH_SIZE, eval_infos, loaded_tracks, should_dra
             print(i, end=" ")
             gc.collect()
         if key in loaded_tracks:
-            parsed_track = loaded_tracks[key]
+            parsed_track = joblib.load(loaded_tracks[key])
         else:
             parsed_track = joblib.load(parsed_tracks_folder + key)
 
@@ -377,7 +378,7 @@ def eval_perf(strategy, GLOBAL_BATCH_SIZE, eval_infos, loaded_tracks, should_dra
                 # predictions_max = None
                 for w in range(0, len(test_seq), w_step):
                     print(w, end=" ")
-                    if (w / w_step) % 50 == 0:
+                    if (w / w_step) % 20 == 0:
                         print(" Reloading ")
                         gc.collect()
                         K.clear_session()
@@ -732,10 +733,8 @@ if __name__ == '__main__':
         if i % 100 == 0:
             print(i, end=" ")
             # gc.collect()
-        parsed_track = joblib.load(parsed_tracks_folder + key)
-        loaded_tracks[key] = parsed_track
-        if i > 2000:
-            break
+        with open(parsed_tracks_folder + key, 'rb') as fh:
+            loaded_tracks[key] = io.BytesIO(fh.read())
 
     # mp.set_start_method('spawn', force=True)
     # try:
