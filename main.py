@@ -267,7 +267,7 @@ def run_epoch(q, k, train_info, test_info, one_hot, track_names, loaded_tracks, 
         print(datetime.now().strftime('[%H:%M:%S] ') + "Error while training.")
         q.put(None)
         return None
-    if k % 5 == 0:  # and k != 0
+    if k % 10 == 0:  # and k != 0
         print(datetime.now().strftime('[%H:%M:%S] ') + "Evaluating")
         try:
             train_eval_chr = "chr2"
@@ -276,9 +276,9 @@ def run_epoch(q, k, train_info, test_info, one_hot, track_names, loaded_tracks, 
                 if info[0] == train_eval_chr:
                     train_eval_chr_info.append(info)
             print(f"Training set {len(train_eval_chr_info)}")
-            training_spearman = eval_perf(strategy, GLOBAL_BATCH_SIZE, train_eval_chr_info, loaded_tracks, False, k)
+            training_spearman = eval_perf(strategy, GLOBAL_BATCH_SIZE, train_eval_chr_info, loaded_tracks, False, k, train_eval_chr)
             print(f"Test set {len(test_info)}")
-            test_spearman = eval_perf(strategy, GLOBAL_BATCH_SIZE, test_info, loaded_tracks, True, k)
+            test_spearman = eval_perf(strategy, GLOBAL_BATCH_SIZE, test_info, loaded_tracks, True, k, "chr1")
             with open(model_name + "_history.csv", "a+") as myfile:
                 myfile.write(f"{training_spearman},{test_spearman}")
                 myfile.write("\n")
@@ -290,7 +290,7 @@ def run_epoch(q, k, train_info, test_info, one_hot, track_names, loaded_tracks, 
     q.put(None)
 
 
-def eval_perf(strategy, GLOBAL_BATCH_SIZE, eval_infos, loaded_tracks, should_draw, current_epoch):
+def eval_perf(strategy, GLOBAL_BATCH_SIZE, eval_infos, loaded_tracks, should_draw, current_epoch, chr_name):
     import model as mo
     import tensorflow as tf
     from tensorflow.python.keras import backend as K
@@ -300,129 +300,108 @@ def eval_perf(strategy, GLOBAL_BATCH_SIZE, eval_infos, loaded_tracks, should_dra
                                                custom_objects={'SAMModel': mo.SAMModel,
                                                                'PatchEncoder': mo.PatchEncoder})
     predict_batch_size = GLOBAL_BATCH_SIZE
-    w_step = 24
-    full_preds_num = 2 * w_step
-    eval_gt = {}
-    # eval_gt_max = {}
-    eval_gt_full = []
-    for i in range(len(eval_infos)):
-        eval_gt[eval_infos[i][2]] = {}
-        # eval_gt_max[eval_infos[i][2]] = {}
-        if i < 500:
-            eval_gt_full.append([])
-    for i, key in enumerate(track_names):
-        if i % 100 == 0:
-            print(i, end=" ")
-            gc.collect()
-        if key in loaded_tracks.keys():
-            buf = loaded_tracks[key]
-            parsed_track = joblib.load(buf)
-            buf.seek(0)
-        else:
-            parsed_track = joblib.load(parsed_tracks_folder + key)
+    w_step = 64
+    full_preds_steps_num = 2
 
-        for j, info in enumerate(eval_infos):
-            mid = int(info[1] / bin_size)
-            # val = parsed_track[info[0]][mid]
-            val = parsed_track[info[0]][mid - 1] + parsed_track[info[0]][mid] + parsed_track[info[0]][mid + 1]
-            eval_gt[info[2]].setdefault(key, []).append(val)
-            start_bin = int(info[1] / bin_size) - half_num_regions
-            # eval_gt_max[info[2]].setdefault(key, []).append(np.max(parsed_track[info[0]][start_bin:start_bin + num_regions]))
-            if j < full_preds_num:
-                start_bin = int(info[1] / bin_size) - half_num_regions
-                eval_gt_full[j].append(parsed_track[info[0]][start_bin:start_bin + num_regions])
-
-    for i, gene in enumerate(eval_gt.keys()):
-        if i % 10 == 0:
-            print(i, end=" ")
-        for track in track_names:
-            eval_gt[gene][track] = np.mean(eval_gt[gene][track])
-    print("")
-    eval_gt_full = np.asarray(eval_gt_full)
-
-    if Path("pickle/final_test_predq.gz").is_file():
-        with open('pickle/final_pred.gz', 'rb') as handle:
-            final_pred = pickle.load(handle)
+    if Path(f"pickle/{chr_name}_seq.gz").is_file():
+        test_seq = joblib.load(f"pickle/{chr_name}_seq.gz")
+        eval_gt = joblib.load(f"pickle/{chr_name}_eval_gt.gz")
+        eval_gt_full = joblib.load(f"pickle/{chr_name}_eval_gt_full.gz")
     else:
-        # preparing test output tracks
-        final_pred = {}
-        # final_pred_max = {}
+        eval_gt = {}
+        eval_gt_full = []
         for i in range(len(eval_infos)):
-            final_pred[eval_infos[i][2]] = {}
-            # final_pred_max[eval_infos[i][2]] = {}
-
-        for shift_val in [0]:  # -2 * bin_size, -1 * bin_size, 0, bin_size, 2 * bin_size
-            test_seq = []
-            for info in eval_infos:
-                start = int(info[1] - (info[1] % bin_size) + shift_val - half_size)
-                extra = start + input_size - len(one_hot[info[0]])
-                if start < 0:
-                    ns = one_hot[info[0]][0:start + input_size]
-                    ns = np.concatenate((np.zeros((-1 * start, num_features)), ns))
-                elif extra > 0:
-                    ns = one_hot[info[0]][start: len(one_hot[info[0]])]
-                    ns = np.concatenate((ns, np.zeros((extra, num_features))))
-                else:
-                    ns = one_hot[info[0]][start:start + input_size]
-                if len(ns) != input_size:
-                    print(f"Wrong! {ns.shape} {start} {extra} {info[1]}")
-                test_seq.append(ns)
-            for comp in [False]:
-                if comp:
-                    with Pool(4) as p:
-                        rc_arr = p.map(change_seq, test_seq)
-                    test_seq = rc_arr
-                test_seq = np.asarray(test_seq, dtype=np.float16)
-                if comp:
-                    correction = 1 * int(shift_val / bin_size)
-                else:
-                    correction = -1 * int(shift_val / bin_size)
-                print(f"\n{shift_val} {comp} {test_seq.shape} predicting")
-                predictions = None
-                # predictions_max = None
-                for w in range(0, len(test_seq), w_step):
-                    print(w, end=" ")
-                    if w != 0 and (w / w_step) % 25 == 0:
-                        print(" Reloading ")
-                        gc.collect()
-                        K.clear_session()
-                        tf.compat.v1.reset_default_graph()
-
-                        with strategy.scope():
-                            our_model = tf.keras.models.load_model(model_folder + "/" + model_name + "_no.h5",
-                                                                   custom_objects={'SAMModel': mo.SAMModel,
-                                                                                   'PatchEncoder': mo.PatchEncoder})
-
-                    gc.collect()
-                    p1 = our_model.predict(mo.wrap2(test_seq[w:w + w_step], predict_batch_size))
-                    # p2 = p1[:, :, mid_bin + correction]
-                    p2 = p1[:, :, mid_bin - 1 + correction] + p1[:, :, mid_bin + correction] + p1[:, :, mid_bin + 1 + correction]
-                    # p_max = np.max(p1, axis=2)
-                    if w == 0:
-                        predictions = p2
-                        # predictions_max = p_max
-                    else:
-                        predictions = np.concatenate((predictions, p2), dtype=np.float16)
-                        # predictions_max = np.concatenate((predictions_max, p_max), dtype=np.float16)
-                for i in range(len(eval_infos)):
-                    for it, ct in enumerate(track_names):
-                        final_pred[eval_infos[i][2]].setdefault(ct, []).append(predictions[i][it])
-                        # final_pred_max[eval_infos[i][2]].setdefault(ct, []).append(predictions_max[i][it])
-                print(f"{shift_val} {comp} finished")
-                del predictions
+            eval_gt[eval_infos[i][2]] = {}
+            if i < full_preds_steps_num * w_step:
+                eval_gt_full.append([])
+        for i, key in enumerate(track_names):
+            if i % 100 == 0:
+                print(i, end=" ")
                 gc.collect()
+            if key in loaded_tracks.keys():
+                buf = loaded_tracks[key]
+                parsed_track = joblib.load(buf)
+                buf.seek(0)
+            else:
+                parsed_track = joblib.load(parsed_tracks_folder + key)
 
-        for i, gene in enumerate(final_pred.keys()):
+            for j, info in enumerate(eval_infos):
+                mid = int(info[1] / bin_size)
+                # val = parsed_track[info[0]][mid]
+                val = parsed_track[info[0]][mid - 1] + parsed_track[info[0]][mid] + parsed_track[info[0]][mid + 1]
+                eval_gt[info[2]].setdefault(key, []).append(val)
+                if j >= w_step and len(eval_gt_full) < full_preds_steps_num * w_step:
+                    start_bin = int(info[1] / bin_size) - half_num_regions
+                    eval_gt_full[j - w_step].append(parsed_track[info[0]][start_bin:start_bin + num_regions])
+
+        for i, gene in enumerate(eval_gt.keys()):
             if i % 10 == 0:
                 print(i, end=" ")
             for track in track_names:
-                final_pred[gene][track] = np.mean(final_pred[gene][track])
-                # final_pred_max[gene][track] = np.mean(final_pred_max[gene][track])
+                eval_gt[gene][track] = np.mean(eval_gt[gene][track])
+        print("")
+        eval_gt_full = np.asarray(eval_gt_full)
 
-        # with open('pickle/final_pred.gz', 'wb') as handle:
-        #     pickle.dump(final_pred, handle, protocol=pickle.HIGHEST_PROTOCOL)
+        test_seq = []
+        for info in eval_infos:
+            start = int(info[1] - (info[1] % bin_size) - half_size)
+            extra = start + input_size - len(one_hot[info[0]])
+            if start < 0:
+                ns = one_hot[info[0]][0:start + input_size]
+                ns = np.concatenate((np.zeros((-1 * start, num_features)), ns))
+            elif extra > 0:
+                ns = one_hot[info[0]][start: len(one_hot[info[0]])]
+                ns = np.concatenate((ns, np.zeros((extra, num_features))))
+            else:
+                ns = one_hot[info[0]][start:start + input_size]
+            if len(ns) != input_size:
+                print(f"Wrong! {ns.shape} {start} {extra} {info[1]}")
+            test_seq.append(ns)
 
-    # test_output = np.asarray(test_output).astype(np.float16)
+        test_seq = np.asarray(test_seq, dtype=np.float16)
+        print(f"Lengths: {len(test_seq)} {len(eval_gt)} {len(eval_gt_full)}")
+        joblib.dump(test_seq, f"pickle/{chr_name}_seq.gz", compress="lz4")
+        joblib.dump(eval_gt, f"pickle/{chr_name}_eval_gt.gz", compress="lz4")
+        joblib.dump(eval_gt_full, f"pickle/{chr_name}_eval_gt_full.gz", compress="lz4")
+
+    final_pred = {}
+    for i in range(len(eval_infos)):
+        final_pred[eval_infos[i][2]] = {}
+
+    for w in range(0, len(test_seq), w_step):
+        print(w, end=" ")
+        if w != 0 and (w / w_step) % 40 == 0:
+            print(" Reloading ")
+            gc.collect()
+            K.clear_session()
+            tf.compat.v1.reset_default_graph()
+            with strategy.scope():
+                our_model = tf.keras.models.load_model(model_folder + "/" + model_name + "_no.h5",
+                                                       custom_objects={'SAMModel': mo.SAMModel,
+                                                                       'PatchEncoder': mo.PatchEncoder})
+
+        p1 = our_model.predict(mo.wrap2(test_seq[w:w + w_step], predict_batch_size))
+        # p2 = p1[:, :, mid_bin + correction]
+        p2 = p1[:, :, mid_bin - 1] + p1[:, :, mid_bin] + p1[:, :, mid_bin + 1]
+
+        if w == 0:
+            predictions = p2
+        else:
+            predictions = np.concatenate((predictions, p2), dtype=np.float16)
+            if w / w_step == 1:
+                predictions_full = p1
+            elif w / w_step < full_preds_steps_num:
+                predictions_full = np.concatenate((predictions_full, p1), dtype=np.float16)
+
+    for i in range(len(eval_infos)):
+        for it, ct in enumerate(track_names):
+            final_pred[eval_infos[i][2]].setdefault(ct, []).append(predictions[i][it])
+
+    for i, gene in enumerate(final_pred.keys()):
+        if i % 10 == 0:
+            print(i, end=" ")
+        for track in track_names:
+            final_pred[gene][track] = np.mean(final_pred[gene][track])
 
     corr_p = []
     corr_s = []
@@ -442,13 +421,7 @@ def eval_perf(strategy, GLOBAL_BATCH_SIZE, eval_infos, loaded_tracks, should_dra
         if not math.isnan(sc) and not math.isnan(pc):
             corr_p.append(pc)
             corr_s.append(sc)
-    # a1 = []
-    # b1 = []
-    # for key in a.keys():
-    #     pred_mean = np.mean(a[key])
-    #     gt_mean = np.mean(b[key])
-    #     a1.append(pred_mean)
-    #     b1.append(gt_mean)
+
     print("")
     print(f"Maybe this {len(corr_p)} {np.mean(corr_p)} {np.mean(corr_s)}")
 
@@ -469,22 +442,6 @@ def eval_perf(strategy, GLOBAL_BATCH_SIZE, eval_infos, loaded_tracks, should_dra
             corrs_p.setdefault(type, []).append((pc, track))
             corrs_s.setdefault(type, []).append((sc, track))
             all_track_spearman[track] = stats.spearmanr(a, b)[0]
-
-    # corrs_s_max = {}
-    # for track in track_names:
-    #     type = track[:track.find(".")]
-    #     a = []
-    #     b = []
-    #     for gene in final_pred_max.keys():
-    #         a.append(final_pred_max[gene][track])
-    #         b.append(eval_gt_max[gene][track])
-    #     corrs_s_max.setdefault(type, []).append((stats.spearmanr(a, b)[0], track))
-    #
-    # for track_type in corrs_s_max.keys():
-    #     with open(f"max_all_track_spearman_{track_type}.csv", "w+") as myfile:
-    #         for ccc in corrs_s_max[track_type]:
-    #             myfile.write(f"{ccc[0]},{ccc[1]}")
-    #             myfile.write("\n")
 
     with open("all_track_spearman.csv", "w+") as myfile:
         for key in all_track_spearman.keys():
@@ -513,14 +470,6 @@ def eval_perf(strategy, GLOBAL_BATCH_SIZE, eval_infos, loaded_tracks, should_dra
             myfile.write(str(np.mean([i[0] for i in corrs_p[track_type]])) + "\t")
         myfile.write("\n")
 
-    for w in range(0, full_preds_num, w_step):
-        print(w, end=" ")
-        gc.collect()
-        if w == 0:
-            predictions_full = our_model.predict(mo.wrap2(test_seq[w:w + w_step], predict_batch_size))
-        else:
-            new_predictions = our_model.predict(mo.wrap2(test_seq[w:w + w_step], predict_batch_size))
-            predictions_full = np.concatenate((predictions_full, new_predictions), dtype=np.float16)
     if should_draw:
         print("Drawing tracks")
         pic_count = 0
@@ -698,7 +647,7 @@ def load_values(s, chosen_track):
 
 
 model_folder = "models"
-model_name = "more_tss_more_tracks.h5"
+model_name = "1mb.h5"
 figures_folder = "figures_1"
 tracks_folder = "/home/user/data/tracks/"
 temp_folder = "/home/user/data/temp/"
