@@ -33,7 +33,7 @@ from datetime import datetime
 import traceback
 import multiprocessing as mp
 import pickle
-# import model as mo
+import model as mo
 matplotlib.use("agg")
 from scipy.ndimage.filters import gaussian_filter
 # from sam import SAM
@@ -49,13 +49,12 @@ from itertools import repeat
 # random.seed(seed)
 # np.random.seed(seed)
 # tf.random.set_seed(seed)
-input_size = 1000001
+input_size = 204001
 half_size = int(input_size / 2)
 bin_size = 200
-max_shift = 0
 hic_bin_size = 10000
 num_hic_bins = int(input_size / hic_bin_size)
-num_regions = 4951  # int(input_size / bin_size)
+num_regions = 1001  # int(input_size / bin_size)
 half_num_regions = int(num_regions / 2)
 mid_bin = math.floor(num_regions / 2)
 BATCH_SIZE = 1
@@ -145,6 +144,7 @@ def run_epoch(q, k, train_info, test_info, one_hot, track_names, loaded_tracks, 
                                                                'PatchEncoder': mo.PatchEncoder})
 
     # if k != 0:
+    shifts = []
     print(datetime.now().strftime('[%H:%M:%S] ') + "Preparing sequences")
     err = 0
     for i, info in enumerate(train_info):
@@ -154,10 +154,13 @@ def run_epoch(q, k, train_info, test_info, one_hot, track_names, loaded_tracks, 
             print(i, end=" ")
             gc.collect()
         try:
-            start = int(info[1] - (info[1] % bin_size) - half_size)
+            shift_bins = random.randint(-int(k / 5), int(k / 5))
+            start = info[1] - (info[1] % bin_size) - half_size + shift_bins * bin_size
             extra = start + input_size - len(one_hot[info[0]])
             if start < 0 or extra > 0:
+                shifts.append(None)
                 continue
+            shifts.append(shift_bins)
             if start < 0:
                 ns = one_hot[info[0]][0:start + input_size]
                 ns = np.concatenate((np.zeros((-1 * start, num_features)), ns))
@@ -201,9 +204,11 @@ def run_epoch(q, k, train_info, test_info, one_hot, track_names, loaded_tracks, 
         for i, info in enumerate(train_info):
             if i >= GLOBAL_BATCH_SIZE * STEPS_PER_EPOCH:
                 break
+            if shifts[i] is None:
+                continue
             hd = hdf[info[0]]
             hic_mat = np.zeros((num_hic_bins, num_hic_bins))
-            start_hic = int((info[1] - half_size))
+            start_hic = int((info[1] - half_size + shifts[i] * bin_size))
             end_hic = start_hic + input_size
             start_row = hd['locus1'].searchsorted(start_hic - hic_bin_size, side='left')
             end_row = hd['locus1'].searchsorted(end_hic, side='right')

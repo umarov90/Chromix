@@ -9,7 +9,7 @@ import common as cm
 from sam import sam_train_step
 import numpy as np
 
-projection_dim = 32
+projection_dim = 64
 num_heads = 4
 transformer_units = [
     projection_dim * 2,
@@ -25,8 +25,8 @@ def simple_model(input_size, num_regions, cell_num):
     # x = Dropout(0.2)(x)
     resnet_output = resnet_v2(x, 8, 5)
     our_resnet = Model(inputs, resnet_output, name="our_resnet")
-    num_patches = 7813 # 391 #
-    num_filters = 63
+    num_patches = 1594 # 391 #
+    num_filters = 134
     # x = Dropout(0.5)(x)
     # for i in range(10):
     #     prev = x
@@ -123,7 +123,7 @@ def resnet_layer(inputs,
 
 def resnet_v2(input_x, num_stages, num_res_blocks):
     # Start model definition.
-    num_filters_in = 32
+    num_filters_in = 64
 
     # v2 performs Conv2D with BN-ReLU on input before splitting into 2 paths
     x = resnet_layer(inputs=input_x,
