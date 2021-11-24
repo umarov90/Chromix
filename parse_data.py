@@ -187,7 +187,7 @@ def parse_some_tracks(q, some_tracks, ga, bin_size, chromosomes, tracks_folder):
                 gast[key] = gaussian_filter(gast[key], sigma=1)
             for key in gast.keys():
                 gast[key] = gast[key].astype(np.float16)
-            joblib.dump(gast, main.parsed_tracks_folder + track, compress="lz4")
+            joblib.dump(gast, main.parsed_tracks_folder + track, compress=1) # "lz4"
             print(f"Parsed {track}. Max value: {max_val}.")
         except Exception as exc:
             print(exc)
@@ -210,13 +210,13 @@ def get_sequences(bin_size, chromosomes):
         train_info = joblib.load("pickle/train_info.gz")
         tss_loc = joblib.load("pickle/tss_loc.gz")
     else:
-        gene_tss = pd.read_csv("data/old_TSS_flank_0.bed",
-                            sep="\t", index_col=False, names=["chrom", "start", "end", "geneID", "score", "strand"])
-        gene_info = pd.read_csv("data/old_gene.info.tsv", sep="\t", index_col=False)
+        # gene_tss = pd.read_csv("data/old_TSS_flank_0.bed",
+        #                     sep="\t", index_col=False, names=["chrom", "start", "end", "geneID", "score", "strand"])
+        # gene_info = pd.read_csv("data/old_gene.info.tsv", sep="\t", index_col=False)
 
-        # gene_tss = pd.read_csv("data/hg38.GENCODEv38.pc_lnc.TSS.bed", sep="\t", index_col=False,
-        #                        names=["chrom", "start", "end", "geneID", "score", "strand"])
-        # gene_info = pd.read_csv("data/hg38.GENCODEv38.pc_lnc.gene.info.tsv", sep="\t", index_col=False)
+        gene_tss = pd.read_csv("data/hg38.GENCODEv38.pc_lnc.TSS.bed", sep="\t", index_col=False,
+                               names=["chrom", "start", "end", "geneID", "score", "strand"])
+        gene_info = pd.read_csv("data/hg38.GENCODEv38.pc_lnc.gene.info.tsv", sep="\t", index_col=False)
 
         # prom_info = pd.read_csv("data/hg38.gencode_v32.promoter.window.info.tsv", sep="\t", index_col=False)
         test_info = []
@@ -229,7 +229,7 @@ def get_sequences(bin_size, chromosomes):
         #     test_info.append([row["chrom"], pos, row["geneID_str"], row["geneType_str"], strand])
         test_genes = gene_tss.loc[gene_tss['chrom'] == "chr1"]
         for index, row in test_genes.iterrows():
-            pos = int(row["end"])
+            pos = int(row["start"])
             tss_loc.setdefault(row["chrom"], []).append(pos)
             gene_type = gene_info[gene_info['geneID'] == row["geneID"]]['geneType'].values[0]
             if gene_type != "protein_coding":
@@ -240,7 +240,7 @@ def get_sequences(bin_size, chromosomes):
         train_info = []
         train_genes = gene_tss.loc[gene_tss['chrom'] != "chr1"]
         for index, row in train_genes.iterrows():
-            pos = int(row["end"])
+            pos = int(row["start"])
             tss_loc.setdefault(row["chrom"], []).append(pos)
             gene_type = gene_info[gene_info['geneID'] == row["geneID"]]['geneType'].values[0]
             if gene_type != "protein_coding":

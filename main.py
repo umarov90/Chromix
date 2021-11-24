@@ -3,12 +3,12 @@ import os
 
 import joblib
 
-# os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 # os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 # os.environ["CUDA_VISIBLE_DEVICES"] = '2'
 import logging
 
-# logging.getLogger("tensorflow").setLevel(logging.ERROR)
+logging.getLogger("tensorflow").setLevel(logging.ERROR)
 import gc
 import random
 import pandas as pd
@@ -32,13 +32,13 @@ import parse_data as parser
 from datetime import datetime
 import traceback
 import multiprocessing as mp
+import pathlib
 import pickle
-import model as mo
+# import tensorflow as tf
 matplotlib.use("agg")
 from scipy.ndimage.filters import gaussian_filter
-# from sam import SAM
 from itertools import repeat
-
+# import tensorflow_addons as tfa
 # tf.compat.v1.disable_eager_execution()
 # physical_devices = tf.config.experimental.list_physical_devices('GPU')
 # assert len(physical_devices) > 0, "Not enough GPU hardware devices available"
@@ -49,37 +49,45 @@ from itertools import repeat
 # random.seed(seed)
 # np.random.seed(seed)
 # tf.random.set_seed(seed)
-input_size = 204001
+input_size = 210001
 half_size = int(input_size / 2)
 bin_size = 200
 hic_bin_size = 10000
-num_hic_bins = int(input_size / hic_bin_size)
+num_hic_bins = 20
+half_size_hic = 100000
 num_regions = 1001  # int(input_size / bin_size)
 half_num_regions = int(num_regions / 2)
 mid_bin = math.floor(num_regions / 2)
-BATCH_SIZE = 1
-STEPS_PER_EPOCH = 100
+BATCH_SIZE = 2
+GLOBAL_BATCH_SIZE = 8
+STEPS_PER_EPOCH = 200
+num_epochs = 1000
+hic_track_size = 1
+out_stack_num = 9137
+num_features = 5
+shift_speed = 205555
+last_proc = None
+hic_size = 190
+model_folder = "/home/user/data/models"
+model_name = "shifting_wide_1.h5"
+figures_folder = "figures_1"
+tracks_folder = "/home/user/data/tracks/"
+temp_folder = "/home/user/data/temp/"
 chromosomes = ["chrX"]  # "chrY"
 for i in range(1, 23):
     chromosomes.append("chr" + str(i))
-num_epochs = 1000
-hic_track_size = 1
-out_stack_num = 9137 + 1 * hic_track_size
-num_features = 5
 
 
 def recompile(q):
     import tensorflow as tf
     import model as mo
-
     from tensorflow.keras import mixed_precision
     mixed_precision.set_global_policy('mixed_float16')
 
-    strategy = tf.distribute.experimental.MultiWorkerMirroredStrategy()
+    strategy = tf.distribute.MultiWorkerMirroredStrategy()
     with strategy.scope():
         our_model = tf.keras.models.load_model(model_folder + "/" + model_name,
-                                               custom_objects={'SAMModel': mo.SAMModel,
-                                                               'PatchEncoder': mo.PatchEncoder})
+                                               custom_objects={'PatchEncoder': mo.PatchEncoder})
         print(datetime.now().strftime('[%H:%M:%S] ') + "Compiling model")
         lr = 0.0005
         with strategy.scope():
@@ -93,68 +101,55 @@ def recompile(q):
 
 def create_model(q):
     import tensorflow as tf
-
+    import model as mo
     from tensorflow.keras import mixed_precision
     mixed_precision.set_global_policy('mixed_float16')
-
-    import model as mo
-    strategy = tf.distribute.experimental.MultiWorkerMirroredStrategy()
+    strategy = tf.distribute.MultiWorkerMirroredStrategy()
     with strategy.scope():
-        our_model = mo.simple_model(input_size, num_regions, out_stack_num)
+        our_model = mo.simple_model(input_size, num_regions, out_stack_num, hic_num, hic_size)
         print(datetime.now().strftime('[%H:%M:%S] ') + "Compiling model")
         lr = 0.0001
         with strategy.scope():
             # base_optimizer = tf.keras.optimizers.SGD(learning_rate=lr, momentum=0.9)
             # base_optimizer = LossScaleOptimizer(base_optimizer, initial_scale=2 ** 2)
-            # optimizer = SAM(base_optimizer)
+            loss_weights = {"our_head": 1.0, "our_hic": 0.1}
             optimizer = tf.keras.optimizers.Adam(learning_rate=lr)
-            our_model.compile(loss="mse", optimizer=optimizer)
+            # optimizer = tfa.optimizers.AdamW(
+            #     learning_rate=lr, weight_decay=0.00004
+            # )
+            our_model.compile(loss="mse", optimizer=optimizer, loss_weights=loss_weights)
 
+        # our_model_old = tf.keras.models.load_model(model_folder + "/" + "shifting.h5",
+        #                                            custom_objects={'PatchEncoder': mo.PatchEncoder})
+        # our_model.get_layer("our_resnet").set_weights(our_model_old.get_layer("our_resnet").get_weights().copy())
+        # our_model.get_layer("our_transformer").set_weights(our_model_old.get_layer("our_transformer").get_weights().copy())
         Path(model_folder).mkdir(parents=True, exist_ok=True)
         our_model.save(model_folder + "/" + model_name)
         print("Model saved " + model_folder + "/" + model_name)
     q.put(None)
 
 
-def run_epoch(q, k, train_info, test_info, one_hot, track_names, loaded_tracks, hic_keys):
-    import tensorflow as tf
-    import model as mo
+def run_epoch(last_proc):
 
-    # physical_devices = tf.config.experimental.list_physical_devices('GPU')
-    # assert len(physical_devices) > 0, "Not enough GPU hardware devices available"
-    # for device in physical_devices:
-    #     config1 = tf.config.experimental.set_memory_growth(device, True)
-
-    from tensorflow.keras import mixed_precision
-    mixed_precision.set_global_policy('mixed_float16')
-
-    strategy = tf.distribute.experimental.MultiWorkerMirroredStrategy()
-    GLOBAL_BATCH_SIZE = BATCH_SIZE * strategy.num_replicas_in_sync
-
-    print(datetime.now().strftime('[%H:%M:%S] ') + "Epoch " + str(k))
-    random.shuffle(train_info)
+    # print(datetime.now().strftime('[%H:%M:%S] ') + "Epoch " + str(current_epoch))
+    # random.shuffle(train_info)
+    shuffled_info = random.sample(train_info, len(train_info))
 
     input_sequences = []
     output_scores = []
-    print(datetime.now().strftime('[%H:%M:%S] ') + "Loading the model")
-
-    with strategy.scope():
-        our_model = tf.keras.models.load_model(model_folder + "/" + model_name,
-                                               custom_objects={'SAMModel': mo.SAMModel,
-                                                               'PatchEncoder': mo.PatchEncoder})
 
     # if k != 0:
     shifts = []
-    print(datetime.now().strftime('[%H:%M:%S] ') + "Preparing sequences")
+    # print(datetime.now().strftime('[%H:%M:%S] ') + "Preparing sequences")
     err = 0
-    for i, info in enumerate(train_info):
+    for i, info in enumerate(shuffled_info):
         if len(input_sequences) >= GLOBAL_BATCH_SIZE * STEPS_PER_EPOCH:
             break
         if i % 500 == 0:
             print(i, end=" ")
             gc.collect()
         try:
-            shift_bins = random.randint(-int(k / 5), int(k / 5))
+            shift_bins = random.randint(-int(current_epoch / shift_speed), int(current_epoch / shift_speed))
             start = info[1] - (info[1] % bin_size) - half_size + shift_bins * bin_size
             extra = start + input_size - len(one_hot[info[0]])
             if start < 0 or extra > 0:
@@ -169,7 +164,7 @@ def run_epoch(q, k, train_info, test_info, one_hot, track_names, loaded_tracks, 
                 ns = np.concatenate((ns, np.zeros((extra, num_features))))
             else:
                 ns = one_hot[info[0]][start:start + input_size]
-            start_bin = int(info[1] / bin_size) - half_num_regions
+            start_bin = int(info[1] / bin_size) - half_num_regions + shift_bins
             scores = []
             for key in track_names:
                 scores.append([info[0], start_bin, start_bin + num_regions])
@@ -179,37 +174,45 @@ def run_epoch(q, k, train_info, test_info, one_hot, track_names, loaded_tracks, 
         except Exception as e:
             print(e)
             err += 1
-    print("")
+    # print("")
     print(datetime.now().strftime('[%H:%M:%S] ') + "Loading parsed tracks")
 
+    start_time = time.time()
     for i, key in enumerate(track_names):
         if i % 100 == 0:
-            print(i, end=" ")
+            end_time = time.time()
+            print(f"{i} ({(end_time - start_time):.2f})", end=" ")
+            start_time = time.time()
             # gc.collect()
         if key in loaded_tracks.keys():
-            buf = loaded_tracks[key]
-            parsed_track = joblib.load(buf)
-            buf.seek(0)
+            # buf = loaded_tracks[key]
+            # parsed_track = joblib.load(buf)
+            # buf.seek(0)
+            parsed_track = loaded_tracks[key]
         else:
             parsed_track = joblib.load(parsed_tracks_folder + key)
         for s in output_scores:
             s[i] = parsed_track[s[i][0]][s[i][1]:s[i][2]].copy()
         # with Pool(4) as p:
         #     map_arr = p.starmap(load_values, zip(output_scores, repeat( [i, parsed_track] )))
-    print("")
-    print(datetime.now().strftime('[%H:%M:%S] ') + "Hi-C")
-    for key in hic_keys:
+    # print("")
+    # print(np.asarray(output_scores).shape)
+    output_hic = []
+    # print(f"Shifts {len(shifts)}")
+    # print(datetime.now().strftime('[%H:%M:%S] ') + "Hi-C")
+    for hi, key in enumerate(hic_keys):
         print(key, end=" ")
         hdf = joblib.load(parsed_hic_folder + key)
-        for i, info in enumerate(train_info):
-            if i >= GLOBAL_BATCH_SIZE * STEPS_PER_EPOCH:
+        ni = 0
+        for i, info in enumerate(shuffled_info):
+            if i >= len(shifts):
                 break
             if shifts[i] is None:
                 continue
             hd = hdf[info[0]]
             hic_mat = np.zeros((num_hic_bins, num_hic_bins))
-            start_hic = int((info[1] - half_size + shifts[i] * bin_size))
-            end_hic = start_hic + input_size
+            start_hic = int(info[1] - (info[1] % bin_size) - half_size_hic + shifts[i] * bin_size)
+            end_hic = start_hic + 2 * half_size_hic
             start_row = hd['locus1'].searchsorted(start_hic - hic_bin_size, side='left')
             end_row = hd['locus1'].searchsorted(end_hic, side='right')
             hd = hd.iloc[start_row:end_row]
@@ -226,22 +229,26 @@ def run_epoch(q, k, train_info, test_info, one_hot, track_names, loaded_tracks, 
             hic_score = hic_score[lix]
             hic_mat[l1, l2] += hic_score
             # hic_mat = hic_mat + hic_mat.T - np.diag(np.diag(hic_mat))
-            hic_mat = gaussian_filter(hic_mat, sigma=1)
-            if i == 0:
-                print(f"original {len(hic_mat.flatten())}")
+            # hic_mat = gaussian_filter(hic_mat, sigma=1)
+            # if i == 0:
+            #     print(f"original {hic_mat.shape}")
             hic_mat = hic_mat[np.triu_indices_from(hic_mat, k=1)]
-            if i == 0:
-                print(f"triu {len(hic_mat.flatten())}")
-            for hs in range(hic_track_size):
-                hic_slice = hic_mat[hs * num_regions: (hs + 1) * num_regions].copy()
-                if len(hic_slice) != num_regions:
-                    hic_slice.resize(num_regions, refcheck=False)
-                output_scores[i].append(hic_slice)
+            # if i == 0:
+            #     print(f"triu {hic_mat.shape}")
+            # for hs in range(hic_track_size):
+            #     hic_slice = hic_mat[hs * num_regions: (hs + 1) * num_regions].copy()
+            # if len(hic_slice) != num_regions:
+            # hic_mat.resize(num_regions, refcheck=False)
+            if hi == 0:
+                output_hic.append([])
+            output_hic[ni].append(hic_mat)
+            ni += 1
         del hd
         del hdf
         gc.collect()
-
-    print(datetime.now().strftime('[%H:%M:%S] ') + "Problems: " + str(err))
+    output_hic = np.asarray(output_hic)
+    # print("")
+    # print(datetime.now().strftime('[%H:%M:%S] ') + "Problems: " + str(err))
     gc.collect()
     print_memory()
     output_scores = np.asarray(output_scores, dtype=np.float16)
@@ -253,60 +260,96 @@ def run_epoch(q, k, train_info, test_info, one_hot, track_names, loaded_tracks, 
         print("{:>30}: {:>8}".format(name, cm.get_human_readable(size)))
 
     print(datetime.now().strftime('[%H:%M:%S] ') + "Training")
+    # gc.collect()
+    # print_memory()
+
+    if last_proc is not None:
+        print(mp_q.get())
+        last_proc.join()
+
+
+    p = mp.Process(target=train_step, args=(input_sequences, output_scores, output_hic,))
+    p.start()
+    return p
+
+
+def train_step(input_sequences, output_scores, output_hic):
+    import tensorflow as tf
+    import model as mo
+
+    train_data = mo.wrap(input_sequences, [output_scores, output_hic], GLOBAL_BATCH_SIZE)
+    del input_sequences
+    del output_scores
+    del output_hic
     gc.collect()
-    print_memory()
+
+    # physical_devices = tf.config.experimental.list_physical_devices('GPU')
+    # assert len(physical_devices) > 0, "Not enough GPU hardware devices available"
+    # for device in physical_devices:
+    #     config1 = tf.config.experimental.set_memory_growth(device, True)
+
+    from tensorflow.keras import mixed_precision
+    mixed_precision.set_global_policy('mixed_float16')
+    strategy = tf.distribute.MultiWorkerMirroredStrategy()
+    # print(datetime.now().strftime('[%H:%M:%S] ') + "Loading the model")
+    with strategy.scope():
+        our_model = tf.keras.models.load_model(model_folder + "/" + model_name,
+                                               custom_objects={'PatchEncoder': mo.PatchEncoder})
 
     try:
         fit_epochs = 1
-        train_data = mo.wrap(input_sequences, output_scores, GLOBAL_BATCH_SIZE)
-        gc.collect()
         our_model.fit(train_data, epochs=fit_epochs)
+        # print(datetime.now().strftime('[%H:%M:%S] ') + "Saving " + str(current_epoch) + " model. ")
         our_model.save(model_folder + "/" + model_name + "_temp.h5")
         os.remove(model_folder + "/" + model_name)
         os.rename(model_folder + "/" + model_name + "_temp.h5", model_folder + "/" + model_name)
         our_model.save(model_folder + "/" + model_name + "_no.h5", include_optimizer=False)
-        del train_data
-        gc.collect()
     except Exception as e:
         print(e)
         print(datetime.now().strftime('[%H:%M:%S] ') + "Error while training.")
-        q.put(None)
+        mp_q.put(None)
         return None
-    if k % 10 == 0:  # and k != 0
-        print(datetime.now().strftime('[%H:%M:%S] ') + "Evaluating")
-        try:
-            train_eval_chr = "chr2"
-            train_eval_chr_info = []
-            for info in train_info:
-                if info[0] == train_eval_chr:
-                    train_eval_chr_info.append(info)
-            print(f"Training set {len(train_eval_chr_info)}")
-            training_spearman = eval_perf(strategy, GLOBAL_BATCH_SIZE, train_eval_chr_info, loaded_tracks, False, k, train_eval_chr)
-            print(f"Test set {len(test_info)}")
-            test_spearman = eval_perf(strategy, GLOBAL_BATCH_SIZE, test_info, loaded_tracks, True, k, "chr1")
-            with open(model_name + "_history.csv", "a+") as myfile:
-                myfile.write(f"{training_spearman},{test_spearman}")
-                myfile.write("\n")
-        except Exception as e:
-            print(e)
-            traceback.print_exc()
-            print(datetime.now().strftime('[%H:%M:%S] ') + "Problem during evaluation")
-    print(datetime.now().strftime('[%H:%M:%S] ') + "Epoch " + str(k) + " finished. ")
-    q.put(None)
+
+    print(datetime.now().strftime('[%H:%M:%S] ') + "Epoch " + str(current_epoch) + " finished. ")
+    mp_q.put(None)
 
 
-def eval_perf(strategy, GLOBAL_BATCH_SIZE, eval_infos, loaded_tracks, should_draw, current_epoch, chr_name):
+def check_perf():
+    print(datetime.now().strftime('[%H:%M:%S] ') + "Evaluating")
+    try:
+        train_eval_chr = "chr2"
+        train_eval_chr_info = []
+        for info in train_info:
+            if info[0] == train_eval_chr:
+                train_eval_chr_info.append(info)
+        print(f"Training set {len(train_eval_chr_info)}")
+        training_spearman = eval_perf(train_eval_chr_info, False, current_epoch, train_eval_chr)
+        print(f"Test set {len(test_info)}")
+        test_spearman = eval_perf(test_info, True, current_epoch, "chr1")
+        with open(model_name + "_history.csv", "a+") as myfile:
+            myfile.write(f"{training_spearman},{test_spearman}")
+            myfile.write("\n")
+    except Exception as e:
+        print(e)
+        traceback.print_exc()
+        print(datetime.now().strftime('[%H:%M:%S] ') + "Problem during evaluation")
+    mp_q.put(None)
+
+
+def eval_perf(eval_infos, should_draw, current_epoch, chr_name):
     import model as mo
     import tensorflow as tf
     from tensorflow.python.keras import backend as K
+    from tensorflow.keras import mixed_precision
+    mixed_precision.set_global_policy('mixed_float16')
+    strategy = tf.distribute.MultiWorkerMirroredStrategy()
 
     with strategy.scope():
         our_model = tf.keras.models.load_model(model_folder + "/" + model_name + "_no.h5",
-                                               custom_objects={'SAMModel': mo.SAMModel,
-                                                               'PatchEncoder': mo.PatchEncoder})
+                                               custom_objects={'PatchEncoder': mo.PatchEncoder})
     predict_batch_size = GLOBAL_BATCH_SIZE
-    w_step = 64
-    full_preds_steps_num = 2
+    w_step = 16
+    full_preds_steps_num = 4
 
     if Path(f"pickle/{chr_name}_seq.gz").is_file():
         test_seq = joblib.load(f"pickle/{chr_name}_seq.gz")
@@ -324,9 +367,10 @@ def eval_perf(strategy, GLOBAL_BATCH_SIZE, eval_infos, loaded_tracks, should_dra
                 print(i, end=" ")
                 gc.collect()
             if key in loaded_tracks.keys():
-                buf = loaded_tracks[key]
-                parsed_track = joblib.load(buf)
-                buf.seek(0)
+                # buf = loaded_tracks[key]
+                # parsed_track = joblib.load(buf)
+                # buf.seek(0)
+                parsed_track = loaded_tracks[key]
             else:
                 parsed_track = joblib.load(parsed_tracks_folder + key)
 
@@ -335,9 +379,18 @@ def eval_perf(strategy, GLOBAL_BATCH_SIZE, eval_infos, loaded_tracks, should_dra
                 # val = parsed_track[info[0]][mid]
                 val = parsed_track[info[0]][mid - 1] + parsed_track[info[0]][mid] + parsed_track[info[0]][mid + 1]
                 eval_gt[info[2]].setdefault(key, []).append(val)
-                if j >= w_step and len(eval_gt_full) < full_preds_steps_num * w_step:
+                if j < full_preds_steps_num * w_step:
                     start_bin = int(info[1] / bin_size) - half_num_regions
-                    eval_gt_full[j - w_step].append(parsed_track[info[0]][start_bin:start_bin + num_regions])
+                    extra_bin = start_bin + num_regions - len(parsed_track[info[0]])
+                    if start_bin < 0:
+                        binned_region = parsed_track[info[0]][0: start_bin + num_regions]
+                        binned_region = np.concatenate((np.zeros(-1 * start_bin), binned_region))
+                    elif extra_bin > 0:
+                        binned_region = parsed_track[info[0]][start_bin: len(parsed_track[info[0]])]
+                        binned_region = np.concatenate((binned_region, np.zeros(extra_bin)))
+                    else:
+                        binned_region = parsed_track[info[0]][start_bin:start_bin + num_regions]
+                    eval_gt_full[j].append(binned_region)
 
         for i, gene in enumerate(eval_gt.keys()):
             if i % 10 == 0:
@@ -363,7 +416,7 @@ def eval_perf(strategy, GLOBAL_BATCH_SIZE, eval_infos, loaded_tracks, should_dra
                 print(f"Wrong! {ns.shape} {start} {extra} {info[1]}")
             test_seq.append(ns)
 
-        test_seq = np.asarray(test_seq, dtype=np.float16)
+        test_seq = np.asarray(test_seq, dtype=bool)
         print(f"Lengths: {len(test_seq)} {len(eval_gt)} {len(eval_gt_full)}")
         joblib.dump(test_seq, f"pickle/{chr_name}_seq.gz", compress="lz4")
         joblib.dump(eval_gt, f"pickle/{chr_name}_eval_gt.gz", compress="lz4")
@@ -382,21 +435,21 @@ def eval_perf(strategy, GLOBAL_BATCH_SIZE, eval_infos, loaded_tracks, should_dra
             tf.compat.v1.reset_default_graph()
             with strategy.scope():
                 our_model = tf.keras.models.load_model(model_folder + "/" + model_name + "_no.h5",
-                                                       custom_objects={'SAMModel': mo.SAMModel,
-                                                                       'PatchEncoder': mo.PatchEncoder})
+                                                       custom_objects={'PatchEncoder': mo.PatchEncoder})
 
         p1 = our_model.predict(mo.wrap2(test_seq[w:w + w_step], predict_batch_size))
         # p2 = p1[:, :, mid_bin + correction]
-        p2 = p1[:, :, mid_bin - 1] + p1[:, :, mid_bin] + p1[:, :, mid_bin + 1]
+        p2 = p1[0][:, :, mid_bin - 1] + p1[0][:, :, mid_bin] + p1[0][:, :, mid_bin + 1]
 
         if w == 0:
             predictions = p2
+            predictions_full = p1[0]
+            predictions_hic = p1[1]
         else:
             predictions = np.concatenate((predictions, p2), dtype=np.float16)
-            if w / w_step == 1:
-                predictions_full = p1
-            elif w / w_step < full_preds_steps_num:
-                predictions_full = np.concatenate((predictions_full, p1), dtype=np.float16)
+            if w / w_step < full_preds_steps_num:
+                predictions_full = np.concatenate((predictions_full, p1[0]), dtype=np.float16)
+                predictions_hic = np.concatenate((predictions_hic, p1[1]), dtype=np.float16)
 
     for i in range(len(eval_infos)):
         for it, ct in enumerate(track_names):
@@ -563,16 +616,15 @@ def eval_perf(strategy, GLOBAL_BATCH_SIZE, eval_infos, loaded_tracks, should_dra
         del eval_gt_full
         gc.collect()
         print("\nHi-C")
-        for key in hic_keys:
+        for hi, key in enumerate(hic_keys):
             print(key, end=" ")
             hdf = joblib.load(parsed_hic_folder + key)
             ni = 0
-            hic_output.append([])
             for i, info in enumerate(eval_infos):
                 hd = hdf[info[0]]
                 hic_mat = np.zeros((num_hic_bins, num_hic_bins))
-                start_hic = int((info[1] - half_size))
-                end_hic = start_hic + input_size
+                start_hic = int(info[1] - (info[1] % bin_size) - half_size_hic)
+                end_hic = start_hic + 2 * half_size_hic
                 start_row = hd['locus1'].searchsorted(start_hic - hic_bin_size, side='left')
                 end_row = hd['locus1'].searchsorted(end_hic, side='right')
                 hd = hd.iloc[start_row:end_row]
@@ -589,17 +641,18 @@ def eval_perf(strategy, GLOBAL_BATCH_SIZE, eval_infos, loaded_tracks, should_dra
                 hic_score = hic_score[lix]
                 hic_mat[l1, l2] += hic_score
                 # hic_mat = hic_mat + hic_mat.T - np.diag(np.diag(hic_mat))
-                hic_mat = gaussian_filter(hic_mat, sigma=1)
+                # hic_mat = gaussian_filter(hic_mat, sigma=1)
                 # print(f"original {len(hic_mat.flatten())}")
                 hic_mat = hic_mat[np.triu_indices_from(hic_mat, k=1)]
                 # print(f"triu {len(hic_mat.flatten())}")
-                for hs in range(hic_track_size):
-                    hic_slice = hic_mat[hs * num_regions: (hs + 1) * num_regions].copy()
-                    if len(hic_slice) != num_regions:
-                        hic_slice.resize(num_regions, refcheck=False)
-                    hic_output[ni].append(hic_slice)
+                # for hs in range(hic_track_size):
+                #     hic_slice = hic_mat[hs * num_regions: (hs + 1) * num_regions].copy()
+                #     if len(hic_slice) != num_regions:
+                # hic_mat.resize(num_regions, refcheck=False)
+                if hi == 0:
+                    hic_output.append([])
+                hic_output[ni].append(hic_mat)
                 ni += 1
-                hic_output.append([])
             del hd
             del hdf
             gc.collect()
@@ -607,10 +660,10 @@ def eval_perf(strategy, GLOBAL_BATCH_SIZE, eval_infos, loaded_tracks, should_dra
         for h in range(len(hic_keys)):
             pic_count = 0
             it = h * hic_track_size
-            it2 = len(track_names) + h * hic_track_size
-            for i in range(len(predictions_full)):
+            it2 = h * hic_track_size
+            for i in range(len(predictions_hic)):
                 mat_gt = recover_shape(hic_output[i][it:it + hic_track_size], num_hic_bins)
-                mat_pred = recover_shape(predictions_full[i][it2:it2 + hic_track_size], num_hic_bins)
+                mat_pred = recover_shape(predictions_hic[i][it2:it2 + hic_track_size], num_hic_bins)
                 fig, axs = plt.subplots(2, 1, figsize=(6, 8))
                 sns.heatmap(mat_pred, linewidth=0.0, ax=axs[0])
                 axs[0].set_title("Prediction")
@@ -620,7 +673,7 @@ def eval_perf(strategy, GLOBAL_BATCH_SIZE, eval_infos, loaded_tracks, should_dra
                 plt.savefig(figures_folder + "/hic/train_track_" + str(i + 1) + "_" + str(hic_keys[h]) + ".png")
                 plt.close(fig)
                 pic_count += 1
-                if pic_count > 5:
+                if pic_count > 50:
                     break
     return return_result
 
@@ -651,24 +704,16 @@ def load_values(s, chosen_track):
     return 1
 
 
-model_folder = "models"
-model_name = "1mb.h5"
-figures_folder = "figures_1"
-tracks_folder = "/home/user/data/tracks/"
-temp_folder = "/home/user/data/temp/"
-
-# parsed_tracks_folder = "/home/user/data/parsed_tracks/"
-# parsed_hic_folder = "/home/user/data/parsed_hic/"
-
-parsed_tracks_folder = "parsed_tracks/"
-parsed_hic_folder = "parsed_hic/"
-
-# temp_folder = "temp/"
-
 if __name__ == '__main__':
-    # our_model = mo.simple_model(input_size, num_regions, out_stack_num)
-    # os.chdir(open("data_dir").read().strip())
-    os.chdir("/home/acd13586qv/variants")
+    # import model as mo
+    # our_model = mo.simple_model(input_size, num_regions, out_stack_num, 2, hic_size)
+    script_folder = pathlib.Path(__file__).parent.resolve()
+    folders = open(str(script_folder) + "/data_dirs").read().strip().split("\n")
+    os.chdir(folders[0])
+    parsed_tracks_folder = folders[1]
+    parsed_hic_folder = folders[2]
+    model_folder = folders[3]
+    # os.chdir("/home/acd13586qv/variants")
     Path(model_folder).mkdir(parents=True, exist_ok=True)
     Path(figures_folder + "/" + "attribution").mkdir(parents=True, exist_ok=True)
     Path(figures_folder + "/" + "tracks").mkdir(parents=True, exist_ok=True)
@@ -679,31 +724,36 @@ if __name__ == '__main__':
         track_names = joblib.load("pickle/track_names.gz")
     else:
         track_names = parser.parse_tracks(ga, bin_size, tss_loc, chromosomes, tracks_folder)
-
+    # track_names = track_names[:100]
     print("Number of tracks: " + str(len(track_names)))
 
     # hic_keys = parser.parse_hic()
-    hic_keys = ["hic_ADAC418_10kb_interactions.txt.bz2"]
+    hic_keys = ["hic_ADAC418_10kb_interactions.txt.bz2", "hic_A549_10kb_interactions.txt.bz2"]
+                # "hic_HepG2_10kb_interactions.txt.bz2", "hic_THP1_10kb_interactions.txt.bz2"]
+    hic_num = len(hic_keys)
     # hic_keys = []
 
     loaded_tracks = {}
-    for i, key in enumerate(track_names):
-        if i % 100 == 0:
-            print(i, end=" ")
-            # gc.collect()
-        with open(parsed_tracks_folder + key, 'rb') as fh:
-            loaded_tracks[key] = io.BytesIO(fh.read())
+    # for i, key in enumerate(track_names):
+    #     if i % 100 == 0:
+    #         print(i, end=" ")
+    #         # gc.collect()
+    #     # with open(parsed_tracks_folder + key, 'rb') as fh:
+    #     #     loaded_tracks[key] = io.BytesIO(fh.read())
+    #     loaded_tracks[key] = joblib.load(parsed_tracks_folder + key)
+    #     if i > 2000:
+    #         break
 
     # mp.set_start_method('spawn', force=True)
     # try:
     #     mp.set_start_method('spawn')
     # except RuntimeError:
     #     pass
-    q = mp.Queue()
+    mp_q = mp.Queue()
     if not Path(model_folder + "/" + model_name).is_file():
-        p = mp.Process(target=create_model, args=(q,))
+        p = mp.Process(target=create_model, args=(mp_q,))
         p.start()
-        print(q.get())
+        print(mp_q.get())
         p.join()
         time.sleep(1)
     else:
@@ -714,7 +764,8 @@ if __name__ == '__main__':
     # p.join()
     # time.sleep(1)
     print("Training starting")
-    for k in range(num_epochs):
+    start_epoch = 0
+    for current_epoch in range(start_epoch, num_epochs, 1):
         # if k == 10:
         #     fit_epochs = 1
         #     lr = 0.0004
@@ -723,8 +774,13 @@ if __name__ == '__main__':
         #     print(q.get())
         #     p.join()
         #     time.sleep(1)
-        p = mp.Process(target=run_epoch, args=(q, k, train_info, test_info, one_hot, track_names, loaded_tracks, hic_keys,))
-        p.start()
-        print(q.get())
-        p.join()
-        time.sleep(1)
+        last_proc = run_epoch(last_proc)
+        if current_epoch % 10 == 0: # and current_epoch != 0:
+            print(mp_q.get())
+            last_proc.join()
+            last_proc = None
+            p = mp.Process(target=check_perf)
+            p.start()
+            print(mp_q.get())
+            p.join()
+
