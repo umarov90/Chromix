@@ -21,10 +21,10 @@ def simple_model(input_size, num_regions, cell_num, hic_num, hic_size):
     input_shape = (input_size, 5)
     inputs = Input(shape=input_shape)
     x = inputs
-    resnet_output = resnet_v2(x, 8, 2)
+    resnet_output = resnet_v2(x, 8, 1)
     our_resnet = Model(inputs, resnet_output, name="our_resnet")
-    num_patches = 1641  # 391 #
-    num_filters = 542 # 134
+    num_patches = 391 # 1641  # 391 #
+    num_filters = 408
     # for i in range(10):
     #     prev = x
     #     x = Conv1D(128, kernel_size=3, dilation_rate=2 ** (i+1),
@@ -127,7 +127,7 @@ def resnet_layer(inputs,
 
 def resnet_v2(input_x, num_stages, num_res_blocks):
     # Start model definition.
-    num_filters_in = 256
+    num_filters_in = 192
 
     # v2 performs Conv2D with BN-ReLU on input before splitting into 2 paths
     x = resnet_layer(inputs=input_x,

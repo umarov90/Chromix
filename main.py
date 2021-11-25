@@ -49,13 +49,13 @@ from itertools import repeat
 # random.seed(seed)
 # np.random.seed(seed)
 # tf.random.set_seed(seed)
-input_size = 210001
+input_size = 50001# 210001
 half_size = int(input_size / 2)
 bin_size = 200
 hic_bin_size = 10000
-num_hic_bins = 20
+num_hic_bins = 4 # 20
 half_size_hic = 100000
-num_regions = 1001  # int(input_size / bin_size)
+num_regions = 201 # 1001  # int(input_size / bin_size)
 half_num_regions = int(num_regions / 2)
 mid_bin = math.floor(num_regions / 2)
 BATCH_SIZE = 2
@@ -67,9 +67,9 @@ out_stack_num = 9137
 num_features = 5
 shift_speed = 205555
 last_proc = None
-hic_size = 190
+hic_size = 6 # 190
 model_folder = "/home/user/data/models"
-model_name = "shifting_wide_1.h5"
+model_name = "50k_wide_1.h5"
 figures_folder = "figures_1"
 tracks_folder = "/home/user/data/tracks/"
 temp_folder = "/home/user/data/temp/"
@@ -86,7 +86,7 @@ def recompile(q):
 
     strategy = tf.distribute.MultiWorkerMirroredStrategy()
     with strategy.scope():
-        our_model = tf.keras.models.load_model(model_folder + "/" + model_name,
+        our_model = tf.keras.models.load_model(model_folder + model_name,
                                                custom_objects={'PatchEncoder': mo.PatchEncoder})
         print(datetime.now().strftime('[%H:%M:%S] ') + "Compiling model")
         lr = 0.0005
@@ -94,8 +94,8 @@ def recompile(q):
             optimizer = tf.keras.optimizers.Adam(learning_rate=lr)
             our_model.compile(loss="mse", optimizer=optimizer)
 
-        our_model.save(model_folder + "/" + model_name)
-        print("Model saved " + model_folder + "/" + model_name)
+        our_model.save(model_folder + model_name)
+        print("Model saved " + model_folder + model_name)
     q.put(None)
 
 
@@ -119,13 +119,13 @@ def create_model(q):
             # )
             our_model.compile(loss="mse", optimizer=optimizer, loss_weights=loss_weights)
 
-        # our_model_old = tf.keras.models.load_model(model_folder + "/" + "shifting.h5",
+        # our_model_old = tf.keras.models.load_model(model_folder + "shifting.h5",
         #                                            custom_objects={'PatchEncoder': mo.PatchEncoder})
         # our_model.get_layer("our_resnet").set_weights(our_model_old.get_layer("our_resnet").get_weights().copy())
         # our_model.get_layer("our_transformer").set_weights(our_model_old.get_layer("our_transformer").get_weights().copy())
         Path(model_folder).mkdir(parents=True, exist_ok=True)
-        our_model.save(model_folder + "/" + model_name)
-        print("Model saved " + model_folder + "/" + model_name)
+        our_model.save(model_folder + model_name)
+        print("Model saved " + model_folder + model_name)
     q.put(None)
 
 
@@ -293,17 +293,17 @@ def train_step(input_sequences, output_scores, output_hic):
     strategy = tf.distribute.MultiWorkerMirroredStrategy()
     # print(datetime.now().strftime('[%H:%M:%S] ') + "Loading the model")
     with strategy.scope():
-        our_model = tf.keras.models.load_model(model_folder + "/" + model_name,
+        our_model = tf.keras.models.load_model(model_folder + model_name,
                                                custom_objects={'PatchEncoder': mo.PatchEncoder})
 
     try:
         fit_epochs = 1
         our_model.fit(train_data, epochs=fit_epochs)
         # print(datetime.now().strftime('[%H:%M:%S] ') + "Saving " + str(current_epoch) + " model. ")
-        our_model.save(model_folder + "/" + model_name + "_temp.h5")
-        os.remove(model_folder + "/" + model_name)
-        os.rename(model_folder + "/" + model_name + "_temp.h5", model_folder + "/" + model_name)
-        our_model.save(model_folder + "/" + model_name + "_no.h5", include_optimizer=False)
+        our_model.save(model_folder + model_name + "_temp.h5")
+        os.remove(model_folder + model_name)
+        os.rename(model_folder + model_name + "_temp.h5", model_folder + model_name)
+        our_model.save(model_folder + model_name + "_no.h5", include_optimizer=False)
     except Exception as e:
         print(e)
         print(datetime.now().strftime('[%H:%M:%S] ') + "Error while training.")
@@ -345,7 +345,7 @@ def eval_perf(eval_infos, should_draw, current_epoch, chr_name):
     strategy = tf.distribute.MultiWorkerMirroredStrategy()
 
     with strategy.scope():
-        our_model = tf.keras.models.load_model(model_folder + "/" + model_name + "_no.h5",
+        our_model = tf.keras.models.load_model(model_folder + model_name + "_no.h5",
                                                custom_objects={'PatchEncoder': mo.PatchEncoder})
     predict_batch_size = GLOBAL_BATCH_SIZE
     w_step = 16
@@ -434,7 +434,7 @@ def eval_perf(eval_infos, should_draw, current_epoch, chr_name):
             K.clear_session()
             tf.compat.v1.reset_default_graph()
             with strategy.scope():
-                our_model = tf.keras.models.load_model(model_folder + "/" + model_name + "_no.h5",
+                our_model = tf.keras.models.load_model(model_folder + model_name + "_no.h5",
                                                        custom_objects={'PatchEncoder': mo.PatchEncoder})
 
         p1 = our_model.predict(mo.wrap2(test_seq[w:w + w_step], predict_batch_size))
@@ -728,7 +728,7 @@ if __name__ == '__main__':
     print("Number of tracks: " + str(len(track_names)))
 
     # hic_keys = parser.parse_hic()
-    hic_keys = ["hic_ADAC418_10kb_interactions.txt.bz2", "hic_A549_10kb_interactions.txt.bz2"]
+    hic_keys = ["hic_ADAC418_10kb_interactions.txt.bz2"] #, "hic_A549_10kb_interactions.txt.bz2"
                 # "hic_HepG2_10kb_interactions.txt.bz2", "hic_THP1_10kb_interactions.txt.bz2"]
     hic_num = len(hic_keys)
     # hic_keys = []
@@ -750,7 +750,7 @@ if __name__ == '__main__':
     # except RuntimeError:
     #     pass
     mp_q = mp.Queue()
-    if not Path(model_folder + "/" + model_name).is_file():
+    if not Path(model_folder + model_name).is_file():
         p = mp.Process(target=create_model, args=(mp_q,))
         p.start()
         print(mp_q.get())
