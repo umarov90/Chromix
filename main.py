@@ -33,43 +33,40 @@ from datetime import datetime
 import traceback
 import multiprocessing as mp
 import pathlib
+import visualization as viz
 import pickle
-# import tensorflow as tf
 matplotlib.use("agg")
 from scipy.ndimage.filters import gaussian_filter
 from itertools import repeat
-# import tensorflow_addons as tfa
 # tf.compat.v1.disable_eager_execution()
-# physical_devices = tf.config.experimental.list_physical_devices('GPU')
-# assert len(physical_devices) > 0, "Not enough GPU hardware devices available"
-# for device in physical_devices:
-#     config1 = tf.config.experimental.set_memory_growth(device, True)
+# import tensorflow as tf
+
 
 # seed = 0
 # random.seed(seed)
 # np.random.seed(seed)
 # tf.random.set_seed(seed)
-input_size = 50001# 210001
+input_size = 210001 # 50001
 half_size = int(input_size / 2)
 bin_size = 200
 hic_bin_size = 10000
-num_hic_bins = 4 # 20
+num_hic_bins = 20
 half_size_hic = 100000
-num_regions = 201 # 1001  # int(input_size / bin_size)
+num_regions = 1001  # 201
 half_num_regions = int(num_regions / 2)
 mid_bin = math.floor(num_regions / 2)
 BATCH_SIZE = 2
-GLOBAL_BATCH_SIZE = 8
-STEPS_PER_EPOCH = 200
-num_epochs = 1000
+GLOBAL_BATCH_SIZE = 16
+STEPS_PER_EPOCH = 100
+num_epochs = 2000
 hic_track_size = 1
 out_stack_num = 9137
 num_features = 5
 shift_speed = 205555
 last_proc = None
-hic_size = 6 # 190
+hic_size = 190
 model_folder = "/home/user/data/models"
-model_name = "50k_wide_1.h5"
+model_name = "200k_192_1_5features.h5"
 figures_folder = "figures_1"
 tracks_folder = "/home/user/data/tracks/"
 temp_folder = "/home/user/data/temp/"
@@ -106,7 +103,7 @@ def create_model(q):
     mixed_precision.set_global_policy('mixed_float16')
     strategy = tf.distribute.MultiWorkerMirroredStrategy()
     with strategy.scope():
-        our_model = mo.simple_model(input_size, num_regions, out_stack_num, hic_num, hic_size)
+        our_model = mo.hic_model(input_size, num_features, num_regions, out_stack_num, hic_num, hic_size)
         print(datetime.now().strftime('[%H:%M:%S] ') + "Compiling model")
         lr = 0.0001
         with strategy.scope():
@@ -129,11 +126,15 @@ def create_model(q):
     q.put(None)
 
 
-def run_epoch(last_proc):
-
+def run_epoch(last_proc, fit_epochs):
     # print(datetime.now().strftime('[%H:%M:%S] ') + "Epoch " + str(current_epoch))
     # random.shuffle(train_info)
-    shuffled_info = random.sample(train_info, len(train_info))
+    # shuffled_info = random.sample(train_info, len(train_info))
+    shuffled_info = []
+    for info in train_info:
+        if info[0] == "chr21":
+            shuffled_info.append(info)
+    shuffled_info.sort(key=lambda x: x[1])
 
     input_sequences = []
     output_scores = []
@@ -179,11 +180,11 @@ def run_epoch(last_proc):
 
     start_time = time.time()
     for i, key in enumerate(track_names):
-        if i % 100 == 0:
+        if i % 500 == 0:
             end_time = time.time()
             print(f"{i} ({(end_time - start_time):.2f})", end=" ")
             start_time = time.time()
-            # gc.collect()
+            gc.collect()
         if key in loaded_tracks.keys():
             # buf = loaded_tracks[key]
             # parsed_track = joblib.load(buf)
@@ -267,26 +268,26 @@ def run_epoch(last_proc):
         print(mp_q.get())
         last_proc.join()
 
-
-    p = mp.Process(target=train_step, args=(input_sequences, output_scores, output_hic,))
+    p = mp.Process(target=train_step, args=(input_sequences, output_scores, output_hic, fit_epochs,))
     p.start()
     return p
 
 
-def train_step(input_sequences, output_scores, output_hic):
+def train_step(input_sequences, output_scores, output_hic, fit_epochs):
     import tensorflow as tf
+
+    # physical_devices = tf.config.experimental.list_physical_devices('GPU')
+    # assert len(physical_devices) > 0, "Not enough GPU hardware devices available"
+    # for device in physical_devices:
+    #     config1 = tf.config.experimental.set_memory_growth(device, True)
+
     import model as mo
 
     train_data = mo.wrap(input_sequences, [output_scores, output_hic], GLOBAL_BATCH_SIZE)
     del input_sequences
     del output_scores
     del output_hic
-    gc.collect()
-
-    # physical_devices = tf.config.experimental.list_physical_devices('GPU')
-    # assert len(physical_devices) > 0, "Not enough GPU hardware devices available"
-    # for device in physical_devices:
-    #     config1 = tf.config.experimental.set_memory_growth(device, True)
+    # gc.collect()
 
     from tensorflow.keras import mixed_precision
     mixed_precision.set_global_policy('mixed_float16')
@@ -297,7 +298,6 @@ def train_step(input_sequences, output_scores, output_hic):
                                                custom_objects={'PatchEncoder': mo.PatchEncoder})
 
     try:
-        fit_epochs = 1
         our_model.fit(train_data, epochs=fit_epochs)
         # print(datetime.now().strftime('[%H:%M:%S] ') + "Saving " + str(current_epoch) + " model. ")
         our_model.save(model_folder + model_name + "_temp.h5")
@@ -317,15 +317,16 @@ def train_step(input_sequences, output_scores, output_hic):
 def check_perf():
     print(datetime.now().strftime('[%H:%M:%S] ') + "Evaluating")
     try:
-        train_eval_chr = "chr2"
+        train_eval_chr = "chr21"
         train_eval_chr_info = []
         for info in train_info:
             if info[0] == train_eval_chr:
                 train_eval_chr_info.append(info)
+        train_eval_chr_info.sort(key=lambda x: x[1])
         print(f"Training set {len(train_eval_chr_info)}")
         training_spearman = eval_perf(train_eval_chr_info, False, current_epoch, train_eval_chr)
         print(f"Test set {len(test_info)}")
-        test_spearman = eval_perf(test_info, True, current_epoch, "chr1")
+        test_spearman = eval_perf(test_info, False, current_epoch, "chr1")
         with open(model_name + "_history.csv", "a+") as myfile:
             myfile.write(f"{training_spearman},{test_spearman}")
             myfile.write("\n")
@@ -452,8 +453,8 @@ def eval_perf(eval_infos, should_draw, current_epoch, chr_name):
                 predictions_hic = np.concatenate((predictions_hic, p1[1]), dtype=np.float16)
 
     for i in range(len(eval_infos)):
-        for it, ct in enumerate(track_names):
-            final_pred[eval_infos[i][2]].setdefault(ct, []).append(predictions[i][it])
+        for it, track in enumerate(track_names):
+            final_pred[eval_infos[i][2]].setdefault(track, []).append(predictions[i][it])
 
     for i, gene in enumerate(final_pred.keys()):
         if i % 10 == 0:
@@ -487,6 +488,7 @@ def eval_perf(eval_infos, should_draw, current_epoch, chr_name):
     corrs_p = {}
     corrs_s = {}
     all_track_spearman = {}
+    track_perf = {}
     for track in track_names:
         type = track[:track.find(".")]
         a = []
@@ -496,6 +498,7 @@ def eval_perf(eval_infos, should_draw, current_epoch, chr_name):
             b.append(eval_gt[gene][track])
         pc = stats.pearsonr(a, b)[0]
         sc = stats.spearmanr(a, b)[0]
+        track_perf[track] = sc
         if pc is not None and sc is not None:
             corrs_p.setdefault(type, []).append((pc, track))
             corrs_s.setdefault(type, []).append((sc, track))
@@ -529,95 +532,8 @@ def eval_perf(eval_infos, should_draw, current_epoch, chr_name):
         myfile.write("\n")
 
     if should_draw:
-        print("Drawing tracks")
-        pic_count = 0
-        for it, ct in enumerate(track_names):
-            type = ct[:ct.find(".")]
-            if type != "CAGE":
-                continue
-            for i in range(len(predictions_full)):
-                if np.sum(eval_gt_full[i][it]) == 0:
-                    continue
-                fig, axs = plt.subplots(2, 1, figsize=(12, 8))
-                vector1 = predictions_full[i][it]
-                vector2 = eval_gt_full[i][it]
-                x = range(num_regions)
-                d1 = {'bin': x, 'expression': vector1}
-                df1 = pd.DataFrame(d1)
-                d2 = {'bin': x, 'expression': vector2}
-                df2 = pd.DataFrame(d2)
-                sns.lineplot(data=df1, x='bin', y='expression', ax=axs[0])
-                axs[0].set_title("Prediction")
-                sns.lineplot(data=df2, x='bin', y='expression', ax=axs[1])
-                axs[1].set_title("Ground truth")
-                fig.tight_layout()
-                plt.savefig(f"{figures_folder}/tracks/epoch_{current_epoch}_{eval_infos[i][2]}_{ct}.png")
-                plt.close(fig)
-                pic_count += 1
-                if i > 20:
-                    break
-            if pic_count > 100:
-                break
-
-        pic_count = 0
-        print("Drawing gene regplot")
-        for it, track in enumerate(track_names):
-            type = track[:track.find(".")]
-            if type != "CAGE":
-                continue
-            a = []
-            b = []
-            for gene in final_pred.keys():
-                a.append(final_pred[gene][track])
-                b.append(eval_gt[gene][track])
-
-            fig, ax = plt.subplots(figsize=(6, 6))
-            r, p = stats.spearmanr(a, b)
-
-            sns.regplot(x=a, y=b,
-                        ci=None, label="r = {0:.2f}; p = {1:.2e}".format(r, p)).legend(loc="best")
-
-            ax.set(xlabel='Predicted', ylabel='Ground truth')
-            plt.title("Gene expression prediction")
-            fig.tight_layout()
-            plt.savefig(f"{figures_folder}/plots/epoch_{current_epoch}_{track}.svg")
-            plt.close(fig)
-            pic_count += 1
-            if pic_count > 100:
-                break
-
-        # attribution
-        # for c, cell in enumerate(cells):
-        #     for i in range(1200, 1210, 1):
-        #         baseline = tf.zeros(shape=(input_size, num_features))
-        #         image = test_input_sequences[i].astype('float32')
-        #         ig_attributions = attribution.integrated_gradients(our_model, baseline=baseline,
-        #                                                            image=image,
-        #                                                            target_class_idx=[mid_bin, c],
-        #                                                            m_steps=40)
-        #
-        #         attribution_mask = tf.squeeze(ig_attributions).numpy()
-        #         attribution_mask = (attribution_mask - np.min(attribution_mask)) / (
-        #                     np.max(attribution_mask) - np.min(attribution_mask))
-        #         attribution_mask = np.mean(attribution_mask, axis=-1, keepdims=True)
-        #         attribution_mask[int(input_size / 2) - 2000 : int(input_size / 2) + 2000, :] = np.nan
-        #         attribution_mask = skimage.measure.block_reduce(attribution_mask, (100, 1), np.mean)
-        #         attribution_mask = np.transpose(attribution_mask)
-        #
-        #         fig, ax = plt.subplots(figsize=(60, 6))
-        #         sns.heatmap(attribution_mask, linewidth=0.0, ax=ax)
-        #         plt.tight_layout()
-        #         plt.savefig(figures_folder + "/attribution/track_" + str(i + 1) + "_" + str(cell) + "_" + test_info[i] + ".jpg")
-        #         plt.close(fig)
-    else:
         hic_output = []
-        del final_pred
-        del eval_gt
-        del eval_gt_full
-        gc.collect()
-        print("\nHi-C")
         for hi, key in enumerate(hic_keys):
-            print(key, end=" ")
             hdf = joblib.load(parsed_hic_folder + key)
             ni = 0
             for i, info in enumerate(eval_infos):
@@ -640,15 +556,7 @@ def eval_perf(eval_infos, should_draw, current_epoch, chr_name):
                 l2 = l2[lix]
                 hic_score = hic_score[lix]
                 hic_mat[l1, l2] += hic_score
-                # hic_mat = hic_mat + hic_mat.T - np.diag(np.diag(hic_mat))
-                # hic_mat = gaussian_filter(hic_mat, sigma=1)
-                # print(f"original {len(hic_mat.flatten())}")
                 hic_mat = hic_mat[np.triu_indices_from(hic_mat, k=1)]
-                # print(f"triu {len(hic_mat.flatten())}")
-                # for hs in range(hic_track_size):
-                #     hic_slice = hic_mat[hs * num_regions: (hs + 1) * num_regions].copy()
-                #     if len(hic_slice) != num_regions:
-                # hic_mat.resize(num_regions, refcheck=False)
                 if hi == 0:
                     hic_output.append([])
                 hic_output[ni].append(hic_mat)
@@ -656,41 +564,29 @@ def eval_perf(eval_infos, should_draw, current_epoch, chr_name):
             del hd
             del hdf
             gc.collect()
-        print("Drawing contact maps")
-        for h in range(len(hic_keys)):
-            pic_count = 0
-            it = h * hic_track_size
-            it2 = h * hic_track_size
-            for i in range(len(predictions_hic)):
-                mat_gt = recover_shape(hic_output[i][it:it + hic_track_size], num_hic_bins)
-                mat_pred = recover_shape(predictions_hic[i][it2:it2 + hic_track_size], num_hic_bins)
-                fig, axs = plt.subplots(2, 1, figsize=(6, 8))
-                sns.heatmap(mat_pred, linewidth=0.0, ax=axs[0])
-                axs[0].set_title("Prediction")
-                sns.heatmap(mat_gt, linewidth=0.0, ax=axs[1])
-                axs[1].set_title("Ground truth")
-                plt.tight_layout()
-                plt.savefig(figures_folder + "/hic/train_track_" + str(i + 1) + "_" + str(hic_keys[h]) + ".png")
-                plt.close(fig)
-                pic_count += 1
-                if pic_count > 50:
-                    break
+
+        draw_arguments = [track_names, track_perf, predictions_full, eval_gt_full,
+                        test_seq, bin_size, num_regions, eval_infos, hic_keys,
+                        hic_track_size, predictions_hic, hic_output,
+                        num_hic_bins, f"{figures_folder}/tracks/epoch_{current_epoch}"]
+        joblib.dump(draw_arguments, "draw", compress=3)
+
+        viz.draw_tracks(track_names, track_perf, predictions_full, eval_gt_full,
+                        test_seq, bin_size, num_regions, eval_infos, hic_keys,
+                        hic_track_size, predictions_hic, hic_output,
+                        num_hic_bins, f"{figures_folder}/tracks/epoch_{current_epoch}")
+
+        viz.draw_regplots(track_names, track_perf, final_pred, eval_gt,
+                          f"{figures_folder}/plots/epoch_{current_epoch}")
+
+        viz.draw_attribution()
+
     return return_result
 
 
 def print_memory():
     mem = psutil.virtual_memory()
     print(f"used: {cm.get_human_readable(mem.used)} available: {cm.get_human_readable(mem.available)}")
-
-
-def recover_shape(v, size_X):
-    v = np.asarray(v).flatten()
-    end = int((size_X * size_X - size_X) / 2)
-    v = v[:end]
-    X = np.zeros((size_X, size_X))
-    X[np.triu_indices(X.shape[0], k=1)] = v
-    X = X + X.T
-    return X
 
 
 def change_seq(x):
@@ -706,13 +602,17 @@ def load_values(s, chosen_track):
 
 if __name__ == '__main__':
     # import model as mo
-    # our_model = mo.simple_model(input_size, num_regions, out_stack_num, 2, hic_size)
+    # our_model = mo.hic_model(input_size, num_features, num_regions, out_stack_num, 2, hic_size)
     script_folder = pathlib.Path(__file__).parent.resolve()
     folders = open(str(script_folder) + "/data_dirs").read().strip().split("\n")
     os.chdir(folders[0])
     parsed_tracks_folder = folders[1]
     parsed_hic_folder = folders[2]
     model_folder = folders[3]
+
+    # draw = joblib.load("draw")
+    # viz.draw_tracks(*draw)
+
     # os.chdir("/home/acd13586qv/variants")
     Path(model_folder).mkdir(parents=True, exist_ok=True)
     Path(figures_folder + "/" + "attribution").mkdir(parents=True, exist_ok=True)
@@ -728,8 +628,8 @@ if __name__ == '__main__':
     print("Number of tracks: " + str(len(track_names)))
 
     # hic_keys = parser.parse_hic()
-    hic_keys = ["hic_ADAC418_10kb_interactions.txt.bz2"] #, "hic_A549_10kb_interactions.txt.bz2"
-                # "hic_HepG2_10kb_interactions.txt.bz2", "hic_THP1_10kb_interactions.txt.bz2"]
+    hic_keys = ["hic_ADAC418_10kb_interactions.txt.bz2"]  # , "hic_A549_10kb_interactions.txt.bz2"
+    # "hic_HepG2_10kb_interactions.txt.bz2", "hic_THP1_10kb_interactions.txt.bz2"]
     hic_num = len(hic_keys)
     # hic_keys = []
 
@@ -741,7 +641,7 @@ if __name__ == '__main__':
     #     # with open(parsed_tracks_folder + key, 'rb') as fh:
     #     #     loaded_tracks[key] = io.BytesIO(fh.read())
     #     loaded_tracks[key] = joblib.load(parsed_tracks_folder + key)
-    #     if i > 2000:
+    #     if i > 1000:
     #         break
 
     # mp.set_start_method('spawn', force=True)
@@ -765,17 +665,23 @@ if __name__ == '__main__':
     # time.sleep(1)
     print("Training starting")
     start_epoch = 0
+    fit_epochs = 1
     for current_epoch in range(start_epoch, num_epochs, 1):
-        # if k == 10:
-        #     fit_epochs = 1
+        if current_epoch < 10:
+            fit_epochs = 1
+        elif current_epoch < 100:
+            fit_epochs = 2
+        else:
+            fit_epochs = 4
+        fit_epochs = 5
         #     lr = 0.0004
         #     p = mp.Process(target=recompile, args=(q, lr,))
         #     p.start()
         #     print(q.get())
         #     p.join()
         #     time.sleep(1)
-        last_proc = run_epoch(last_proc)
-        if current_epoch % 10 == 0: # and current_epoch != 0:
+        last_proc = run_epoch(last_proc, fit_epochs)
+        if current_epoch % 10 == 0:# and current_epoch != 0:
             print(mp_q.get())
             last_proc.join()
             last_proc = None
@@ -783,4 +689,3 @@ if __name__ == '__main__':
             p.start()
             print(mp_q.get())
             p.join()
-

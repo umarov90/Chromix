@@ -255,12 +255,14 @@ def get_sequences(bin_size, chromosomes):
         for chromosome in chromosomes:
             print(chromosome)
             one_hot[chromosome] = cm.encode_seq(genome[chromosome])
-            tss_layer = np.zeros((len(one_hot[chromosome]), 1)).astype(np.bool)
-            print(len(one_hot[chromosome]))
-            for tss in tss_loc[chromosome]:
-                tss_layer[tss, 0] = True
-            print(f"{chromosome}: {np.sum(tss_layer)}")
-            one_hot[chromosome] = np.hstack([one_hot[chromosome], tss_layer])
+            ######################################################################
+            tss_layer = np.zeros((len(one_hot[chromosome]), 1)).astype(bool)     #
+            print(len(one_hot[chromosome]))                                      #
+            for tss in tss_loc[chromosome]:                                      #
+                tss_layer[tss, 0] = True                                         #
+            print(f"{chromosome}: {np.sum(tss_layer)}")                          #
+            one_hot[chromosome] = np.hstack([one_hot[chromosome], tss_layer])    #
+            ######################################################################
 
         joblib.dump(one_hot, "pickle/one_hot.gz", compress=3)
 
