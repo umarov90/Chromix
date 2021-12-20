@@ -16,6 +16,7 @@ import traceback
 from multiprocessing import Pool, Manager
 import multiprocessing as mp
 from scipy.ndimage.filters import gaussian_filter
+from sklearn.cluster import KMeans
 
 
 def valid(chunks):
@@ -91,21 +92,11 @@ def parse_hic():
             print(key)
         return hic_keys
 
-
 def parse_tracks(ga, bin_size, tss_loc, chromosomes, tracks_folder):
     track_names = []
-    wl = pd.read_csv('data/white_list.txt', delimiter='\t').values.flatten().tolist()
-    # nbl = pd.read_csv('data/nbl.tsv', delimiter='\t').values.flatten().tolist()
-    # for track in os.listdir(tracks_folder):
     for filename in os.listdir(tracks_folder):
         if filename.endswith(".gz"):
-            fn = os.path.join(tracks_folder, filename)
             track = filename[:-len(".100nt.bed.gz")]
-            # if track not in wl:
-            #     continue
-            # if track in nbl:
-            #     nbl.remove(track)
-            #     continue
             fn = tracks_folder + f"{track}.100nt.bed.gz"
             size = os.path.getsize(fn)
             if size > 2 * 512000:
@@ -113,32 +104,167 @@ def parse_tracks(ga, bin_size, tss_loc, chromosomes, tracks_folder):
 
     print(f"gas {len(track_names)}")
 
-    # step_size = 50
-    # q = mp.Queue()
-    # ps = []
-    # start = 0
-    # nproc = 28
-    # end = len(track_names)
-    # for t in range(start, end, step_size):
-    #     t_end = min(t+step_size, end)
-    #     sub_tracks = track_names[t:t_end]
-    #     p = mp.Process(target=parse_some_tracks,
-    #                    args=(q, sub_tracks, ga, bin_size, chromosomes,tracks_folder,))
-    #     p.start()
-    #     ps.append(p)
-    #     if len(ps) >= nproc:
-    #         for p in ps:
-    #             p.join()
-    #         print(q.get())
-    #         ps = []
-    #
-    # if len(ps) > 0:
-    #     for p in ps:
-    #         p.join()
-    #     print(q.get())
+    step_size = 50
+    q = mp.Queue()
+    ps = []
+    start = 0
+    nproc = 28
+    end = len(track_names)
+    for t in range(start, end, step_size):
+        t_end = min(t+step_size, end)
+        sub_tracks = track_names[t:t_end]
+        p = mp.Process(target=parse_some_tracks,
+                       args=(q, sub_tracks, ga, bin_size, chromosomes,tracks_folder,))
+        p.start()
+        ps.append(p)
+        if len(ps) >= nproc:
+            for p in ps:
+                p.join()
+            print(q.get())
+            ps = []
+
+    if len(ps) > 0:
+        for p in ps:
+            p.join()
+        print(q.get())
 
     joblib.dump(track_names, "pickle/track_names.gz", compress=3)
     return track_names
+
+
+def parse_tracks1(ga, bin_size, tss_loc, chromosomes, tracks_folder):
+    # track_names_dict = {}
+    # # wl = pd.read_csv('data/white_list.txt', delimiter='\t').values.flatten().tolist()
+    # # nbl = pd.read_csv('data/nbl.tsv', delimiter='\t').values.flatten().tolist()
+    # # for track in os.listdir(tracks_folder):
+    # for filename in os.listdir(tracks_folder):
+    #     if filename.endswith(".gz"):
+    #         fn = os.path.join(tracks_folder, filename)
+    #         track = filename[:-len(".100nt.bed.gz")]
+    #         type = track[:track.find(".")]
+    #         # if track not in wl:
+    #         #     continue
+    #         # if track in nbl:
+    #         #     nbl.remove(track)
+    #         #     continue
+    #         fn = tracks_folder + f"{track}.100nt.bed.gz"
+    #         size = os.path.getsize(fn)
+    #         if size > 2 * 512000:
+    #             track_names_dict.setdefault(type, []).append(track)
+    #
+    # track_names = []
+    # ps = []
+    # q = mp.Queue()
+    # nproc = 28
+    # for type in track_names_dict.keys():
+    #     tracks = track_names_dict[type]
+    #     # if "pval" not in tracks[0]:
+    #     #     continue
+    #     chr1_data = get_tracks(None, tracks, ga, bin_size, ["chr1"], tracks_folder)
+    #     k = int(0.1 * len(tracks))
+    #     tracks = np.asarray(tracks)
+    #     start_time = time.time()
+    #     print(f"Clustering {type} {len(tracks)}")
+    #     kmeans = KMeans(n_clusters=k, random_state=0, verbose=1, n_init=2).fit(chr1_data)
+    #     print(f"Finished ({(time.time() - start_time):.2f})", end=" ")
+    #     for i in range(k):
+    #         inds = np.where(kmeans.labels_ == i)[0]
+    #         new_track_name = type + "." + str(i)
+    #         if len(inds) == 0:
+    #             continue
+    #         np.savetxt("pickle/track_info/" + new_track_name, tracks[inds], fmt="%s")
+    #         track_names.append(new_track_name)
+    #         p = mp.Process(target=get_tracks,
+    #                        args=(q, tracks[inds], ga, bin_size, chromosomes, tracks_folder, new_track_name,))
+    #         p.start()
+    #         ps.append(p)
+    #         if len(ps) >= nproc:
+    #             for p in ps:
+    #                 p.join()
+    #             print(q.get())
+    #             ps = []
+    #
+    # if len(ps) >= nproc:
+    #     for p in ps:
+    #         p.join()
+    #     print(q.get())
+    track_names = []
+    for filename in os.listdir(main.parsed_tracks_folder):
+        name = filename[filename.find(".")+1:]
+        if name.isdigit():
+            track_names.append(filename)
+    print(f"Number of tracks: {len(track_names)}")
+    joblib.dump(track_names, "pickle/track_names.gz", compress=3)
+    exit()
+    return track_names
+
+
+def normalize(gast, chromosomes, do_log=True):
+    max_val = -1
+    # all_vals = None
+    for key in gast.keys():
+        if do_log:
+            gast[key] = np.log10(gast[key] + 1)
+        if key in chromosomes:
+            max_val = max(np.max(gast[key]), max_val)
+            # if all_vals is not None:
+            #     all_vals = np.concatenate((all_vals, gast[key][tss_loc[key]]))
+            # else:
+            #     all_vals = gast[key][tss_loc[key]]
+    # tss_loc_num = len(all_vals)
+    # all_vals = all_vals[all_vals != 0]
+    # all_vals.sort()
+    # scale_val = all_vals[int(0.95 * len(all_vals))]
+    # if scale_val == 0:
+    #     print(scale_val)
+    for key in gast.keys():
+        gast[key] = gast[key] / max_val  # np.clip(gast[key], 0, scale_val) / scale_val
+        gast[key] = gaussian_filter(gast[key], sigma=1)
+    for key in gast.keys():
+        gast[key] = gast[key].astype(np.float16)
+
+
+def get_tracks(q, some_tracks, ga, bin_size, chromosomes, tracks_folder, save_name=""):
+    results = []
+    gast = copy.deepcopy(ga)
+    for track in some_tracks:
+        try:
+            fn = tracks_folder + f"{track}.100nt.bed.gz"
+            if q is None:
+                gast = copy.deepcopy(ga)
+            dtypes = {"chr": str, "start": int, "end": int, "score": float}
+            df = pd.read_csv(fn, delim_whitespace=True, names=["chr", "start", "end", "score"],
+                             dtype=dtypes, header=None, index_col=False)
+
+            chrd = list(df["chr"].unique())
+            df["mid"] = (df["start"] + (df["end"] - df["start"]) / 2) / bin_size
+            df = df.astype({"mid": int})
+
+            # group the scores over `key` and gather them in a list
+            grouped_scores = df.groupby("chr").agg(list)
+
+            # for each key, value in the dictionary...
+            for key, val in gast.items():
+                if key not in chrd or key not in chromosomes:
+                    continue
+                # first lookup the positions to update and the corresponding scores
+                pos, score = grouped_scores.loc[key, ["mid", "score"]]
+                # fancy indexing
+                gast[key][pos] += score
+            if q is None:
+                normalize(gast, chromosomes) # , "pval" not in track
+                results.append(gast[chromosomes[0]])
+            print(f"Parsed {track}.")
+        except Exception as exc:
+            print(exc)
+            traceback.print_exc()
+            print("\n\n\nCould not parse! " + track)
+    if q is None:
+        return np.asarray(results)
+    else:
+        normalize(gast, chromosomes) # , "pval" not in some_tracks[0]
+        joblib.dump(gast, main.parsed_tracks_folder + save_name, compress=1)
+        q.put(None)
 
 
 def parse_some_tracks(q, some_tracks, ga, bin_size, chromosomes, tracks_folder):
@@ -169,7 +295,7 @@ def parse_some_tracks(q, some_tracks, ga, bin_size, chromosomes, tracks_folder):
             max_val = -1
             # all_vals = None
             for key in gast.keys():
-                gast[key] = np.log(gast[key] + 1)
+                gast[key] = np.log10(gast[key] + 1)
                 if key in chromosomes:
                     max_val = max(np.max(gast[key]), max_val)
                     # if all_vals is not None:
@@ -183,11 +309,11 @@ def parse_some_tracks(q, some_tracks, ga, bin_size, chromosomes, tracks_folder):
             # if scale_val == 0:
             #     print(scale_val)
             for key in gast.keys():
-                gast[key] = gast[key] / max_val # np.clip(gast[key], 0, scale_val) / scale_val
+                gast[key] = gast[key] / max_val  # np.clip(gast[key], 0, scale_val) / scale_val
                 gast[key] = gaussian_filter(gast[key], sigma=1)
             for key in gast.keys():
                 gast[key] = gast[key].astype(np.float16)
-            joblib.dump(gast, main.parsed_tracks_folder + track, compress=1) # "lz4"
+            joblib.dump(gast, main.parsed_tracks_folder + track, compress=1)  # "lz4"
             print(f"Parsed {track}. Max value: {max_val}.")
         except Exception as exc:
             print(exc)
@@ -256,12 +382,12 @@ def get_sequences(bin_size, chromosomes):
             print(chromosome)
             one_hot[chromosome] = cm.encode_seq(genome[chromosome])
             ######################################################################
-            tss_layer = np.zeros((len(one_hot[chromosome]), 1)).astype(bool)     #
-            print(len(one_hot[chromosome]))                                      #
-            for tss in tss_loc[chromosome]:                                      #
-                tss_layer[tss, 0] = True                                         #
-            print(f"{chromosome}: {np.sum(tss_layer)}")                          #
-            one_hot[chromosome] = np.hstack([one_hot[chromosome], tss_layer])    #
+            tss_layer = np.zeros((len(one_hot[chromosome]), 1)).astype(bool)  #
+            print(len(one_hot[chromosome]))  #
+            for tss in tss_loc[chromosome]:  #
+                tss_layer[tss, 0] = True  #
+            print(f"{chromosome}: {np.sum(tss_layer)}")  #
+            one_hot[chromosome] = np.hstack([one_hot[chromosome], tss_layer])  #
             ######################################################################
 
         joblib.dump(one_hot, "pickle/one_hot.gz", compress=3)

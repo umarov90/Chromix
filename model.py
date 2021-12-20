@@ -54,14 +54,11 @@ def hic_model(input_size, num_features, num_regions, cell_num, hic_num, hic_size
         encoded_patches = Add()([x3, x2])
 
     x = LayerNormalization(epsilon=1e-6, name="ln_rep")(encoded_patches)
-    target_length = num_regions
-    trim = (x.shape[-2] - target_length) // 2
-    # temp fix
-    interactions_layer_output = x[..., trim:-trim, :]
+    interactions_layer_output = x
 
     our_interactions_layer = Model(interactions_layer_input, interactions_layer_output, name="our_transformer")
 
-    hic_input = Input(shape=(num_regions, projection_dim))
+    hic_input = Input(shape=(num_patches, projection_dim))
     hx = Conv1D(32, kernel_size=1, strides=1, name="pointwise_hic", activation=tf.nn.gelu)(hic_input)
     hx = Flatten()(hx)
     h_layers = []
@@ -72,9 +69,18 @@ def hic_model(input_size, num_features, num_regions, cell_num, hic_num, hic_size
     hic_act = LeakyReLU(alpha=0.1, name="hic_output", dtype='float32')(hic_output)
     our_hic = Model(hic_input, hic_act, name="our_hic")
 
-    head_input = Input(shape=(num_regions, projection_dim))
-    x = Conv1D(2048, kernel_size=1, strides=1, name="pointwise", activation=tf.nn.gelu)(head_input)
-    outputs = Conv1D(cell_num, kernel_size=1, strides=1, name="last_conv1d")(x)
+    head_input = Input(shape=(num_patches, projection_dim))
+    x = head_input
+    target_length = num_regions
+    trim = (x.shape[-2] - target_length) // 2
+    x = x[..., trim:-trim, :]
+
+    x = Dropout(0.5, input_shape=(None, num_regions, projection_dim))(x)
+    p_filters = 2048
+    x = Conv1D(p_filters, kernel_size=1, strides=1, name="pointwise", activation=tf.nn.gelu, use_bias=False)(x)
+    x = BatchNormalization(name="head_bn_1")(x)
+    x = Dropout(0.5, input_shape=(None, num_regions, p_filters))(x)
+    outputs = Conv1D(cell_num, kernel_size=1, strides=1, name="last_conv1d", dtype='float32', use_bias=False)(x)
     # trailing_axes = [-1, -2]
     # leading = tf.range(tf.rank(x) - len(trailing_axes))
     # trailing = trailing_axes + tf.rank(x)
@@ -95,7 +101,7 @@ def small_model(input_size, num_features, num_regions, cell_num):
     input_shape = (input_size, num_features)
     inputs = Input(shape=input_shape)
     x = inputs
-    resnet_output = resnet_v2(x, 8, 1)
+    resnet_output = resnet_v2(x, 8, 2)
     our_resnet = Model(inputs, resnet_output, name="our_resnet")
     num_patches = 391 # 1641  # 391 #
     num_filters = 408
@@ -136,7 +142,7 @@ def small_model(input_size, num_features, num_regions, cell_num):
     our_interactions_layer = Model(interactions_layer_input, interactions_layer_output, name="our_transformer")
 
     head_input = Input(shape=(num_regions, projection_dim))
-    x = Conv1D(2048, kernel_size=1, strides=1, name="pointwise", activation=tf.nn.gelu)(head_input)
+    x = Conv1D(1024, kernel_size=1, strides=1, name="pointwise", activation=tf.nn.gelu)(head_input)
     outputs = Conv1D(cell_num, kernel_size=1, strides=1, name="last_conv1d")(x)
     # trailing_axes = [-1, -2]
     # leading = tf.range(tf.rank(x) - len(trailing_axes))
@@ -292,6 +298,15 @@ def positional_encoding(position, d_model):
 
 
 def wrap(input_sequences, output_scores, bs):
+    train_data = tf.data.Dataset.from_tensor_slices((input_sequences, output_scores))
+    train_data = train_data.batch(bs)
+    options = tf.data.Options()
+    options.experimental_distribute.auto_shard_policy = tf.data.experimental.AutoShardPolicy.DATA
+    train_data = train_data.with_options(options)
+    return train_data
+
+
+def wrap_with_hic(input_sequences, output_scores, bs):
     train_data = tf.data.Dataset.from_tensor_slices(
         (input_sequences, {"our_head": output_scores[0], "our_hic": output_scores[1]}))
     train_data = train_data.batch(bs)

@@ -10,13 +10,13 @@ import mpl_toolkits.axisartist.floating_axes as floating_axes
 from matplotlib import colors
 import matplotlib
 from matplotlib.colors import LinearSegmentedColormap
+import matplotlib.ticker as ticker
 
 
 def draw_tracks(track_names, track_perf, predictions_full, eval_gt_full,
                 test_seq, bin_size, num_regions, eval_infos, hic_keys,
                 hic_track_size, predictions_hic, hic_output,
                 num_hic_bins, fig_path):
-
     mats = []
     for h in range(len(hic_keys)):
         it = h * hic_track_size
@@ -32,13 +32,16 @@ def draw_tracks(track_names, track_perf, predictions_full, eval_gt_full,
         type = track[:track.find(".")]
         if type != "CAGE":
             continue
-        if track_perf[track] < 0.7:
+        if "response" in track:
             continue
         for i in range(len(predictions_full)):
             fig = matplotlib.pyplot.figure(figsize=(20, 10))
             ax1 = setup_axes1(fig, 111, -45)
-
-            matrix = np.tril(mats[i][0])
+            ax1.set_zorder(1)
+            # ax11 = setup_axes1(fig, 111, -45)
+            # ax11.set_zorder(0)
+            mask = np.tril(np.ones_like(mats[i][0]))
+            # mask2 = np.triu(np.ones_like(mats[i][0]))
 
             # using the upper triangle matrix as mask
             red = ((1.0, 1.0, 1.0, 1.0), (1.0, 0.0, 0.0, 1.0))
@@ -47,45 +50,63 @@ def draw_tracks(track_names, track_perf, predictions_full, eval_gt_full,
             blue = ((1.0, 1.0, 1.0, 1.0), (0.0, 0.0, 1.0, 1.0))
             cmap_blue = LinearSegmentedColormap.from_list('Custom', blue, 256)
 
-            sns.heatmap(mats[i][0], annot=False, mask=matrix, ax=ax1, cbar=False, alpha=0.5, cmap=cmap_blue)
-            sns.heatmap(mats[i][1], annot=False, mask=matrix, ax=ax1, cbar=False, alpha=0.5, cmap=cmap_red)
-
+            sns.heatmap(mats[i][0], annot=False, mask=mask, ax=ax1, cbar=False, alpha=0.5, cmap=cmap_blue)
+            # sns.heatmap(mats[i][1], annot=False, mask=mask, ax=ax1, cbar=False, alpha=0.5, cmap=cmap_red)
             ####################################################
             max_val = np.max(eval_gt_full[i][it])
-            tss_layer = test_seq[i]
-            tss_marks = []
-            for region in range(5000, 45000 + bin_size, bin_size):
+            tss_layer = test_seq[i][:, 4]
+            tss_track = []
+            tss_pos = []
+            for region in range(0, 210000, bin_size):
                 if np.sum(tss_layer[region:region + bin_size]) > 0:
-                    tss_marks.append(max_val)
+                    tss_track.append(max_val)
+                    tss_pos.append(region / bin_size)
                 else:
-                    tss_marks.append(0)
+                    tss_track.append(0)
+            tss_names = []
+            start = eval_infos[i][1] - 105000
+            end = eval_infos[i][1] + 105001
+            for info in eval_infos:
+                if start < info[1] < end:
+                    tss_names.append(info[2])
+                # if start > info[1] + 105001:
+                #     break
             #####################################################
-            vector1 = predictions_full[i][it]
-            vector2 = eval_gt_full[i][it]
-            x = range(num_regions)
+            vector1 = np.pad(predictions_full[i][it], (25, 24), 'constant')
+            vector2 = np.pad(eval_gt_full[i][it], (25, 24), 'constant')
+            x = range(len(tss_track))
             d1 = {'bin': x, 'expression': vector1}
             df1 = pd.DataFrame(d1)
             d2 = {'bin': x, 'expression': vector2}
             df2 = pd.DataFrame(d2)
             #####################################################
-            d3 = {'bin': x, 'tss': tss_marks}
+            d3 = {'bin': x, 'expression': tss_track}
             df3 = pd.DataFrame(d3)
             #####################################################
-            ax2 = fig.add_axes([0, 0.6, 1, 0.2])
+            ax2 = fig.add_axes([0.1, 0.6, 0.8, 0.2])
             sns.lineplot(data=df1, x='bin', y='expression', ax=ax2)
+            ax2.fill_between(x, vector1, alpha=0.5)
             sns.lineplot(data=df2, x='bin', y='expression', ax=ax2)
             #####################################################
-            sns.histplot(data=df3, x='bin', y='tss', fill=False, ax=ax2)
+            sns.barplot(data=df3, x='bin', y='expression', ax=ax2, color='green')
+            # try:
+            #     for ind, tp in enumerate(tss_pos):
+            #         ax2.text(tp, 0, tss_names[ind], color="g")
+            # except:
+            #     pass
+            ax2.xaxis.set_major_locator(ticker.MultipleLocator(100))
+            ax2.xaxis.set_major_formatter(ticker.ScalarFormatter())
             #####################################################
-            ax2.set_title(f"{eval_infos[i][0]}:{eval_infos[i][1]}")
-            fig.tight_layout()
+            ax2.set_title(f"{eval_infos[i][0]}:{eval_infos[i][1] - 105000}-{eval_infos[i][1] + 105001}")
+            # fig.tight_layout()
             plt.savefig(f"{fig_path}_{eval_infos[i][2]}_{track}.png")
             plt.close(fig)
             pic_count += 1
-            if i > 20:
-                break
-        if pic_count > 100:
-            break
+        break
+        #     if i > 20:
+        #         break
+        # if pic_count > 100:
+        #     break
 
 
 def draw_regplots(track_names, track_perf, final_pred, eval_gt, fig_path):
