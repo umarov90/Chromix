@@ -92,6 +92,7 @@ def parse_hic():
             print(key)
         return hic_keys
 
+
 def parse_tracks(ga, bin_size, tss_loc, chromosomes, tracks_folder):
     track_names = []
     for filename in os.listdir(tracks_folder):
@@ -99,7 +100,7 @@ def parse_tracks(ga, bin_size, tss_loc, chromosomes, tracks_folder):
             track = filename[:-len(".100nt.bed.gz")]
             fn = tracks_folder + f"{track}.100nt.bed.gz"
             size = os.path.getsize(fn)
-            if size > 2 * 512000:
+            if size > 2 * 512000 or track.startswith("sc"):
                 track_names.append(track)
 
     print(f"gas {len(track_names)}")
@@ -133,61 +134,61 @@ def parse_tracks(ga, bin_size, tss_loc, chromosomes, tracks_folder):
 
 
 def parse_tracks1(ga, bin_size, tss_loc, chromosomes, tracks_folder):
-    # track_names_dict = {}
-    # # wl = pd.read_csv('data/white_list.txt', delimiter='\t').values.flatten().tolist()
-    # # nbl = pd.read_csv('data/nbl.tsv', delimiter='\t').values.flatten().tolist()
-    # # for track in os.listdir(tracks_folder):
-    # for filename in os.listdir(tracks_folder):
-    #     if filename.endswith(".gz"):
-    #         fn = os.path.join(tracks_folder, filename)
-    #         track = filename[:-len(".100nt.bed.gz")]
-    #         type = track[:track.find(".")]
-    #         # if track not in wl:
-    #         #     continue
-    #         # if track in nbl:
-    #         #     nbl.remove(track)
-    #         #     continue
-    #         fn = tracks_folder + f"{track}.100nt.bed.gz"
-    #         size = os.path.getsize(fn)
-    #         if size > 2 * 512000:
-    #             track_names_dict.setdefault(type, []).append(track)
-    #
-    # track_names = []
-    # ps = []
-    # q = mp.Queue()
-    # nproc = 28
-    # for type in track_names_dict.keys():
-    #     tracks = track_names_dict[type]
-    #     # if "pval" not in tracks[0]:
-    #     #     continue
-    #     chr1_data = get_tracks(None, tracks, ga, bin_size, ["chr1"], tracks_folder)
-    #     k = int(0.1 * len(tracks))
-    #     tracks = np.asarray(tracks)
-    #     start_time = time.time()
-    #     print(f"Clustering {type} {len(tracks)}")
-    #     kmeans = KMeans(n_clusters=k, random_state=0, verbose=1, n_init=2).fit(chr1_data)
-    #     print(f"Finished ({(time.time() - start_time):.2f})", end=" ")
-    #     for i in range(k):
-    #         inds = np.where(kmeans.labels_ == i)[0]
-    #         new_track_name = type + "." + str(i)
-    #         if len(inds) == 0:
-    #             continue
-    #         np.savetxt("pickle/track_info/" + new_track_name, tracks[inds], fmt="%s")
-    #         track_names.append(new_track_name)
-    #         p = mp.Process(target=get_tracks,
-    #                        args=(q, tracks[inds], ga, bin_size, chromosomes, tracks_folder, new_track_name,))
-    #         p.start()
-    #         ps.append(p)
-    #         if len(ps) >= nproc:
-    #             for p in ps:
-    #                 p.join()
-    #             print(q.get())
-    #             ps = []
-    #
-    # if len(ps) >= nproc:
-    #     for p in ps:
-    #         p.join()
-    #     print(q.get())
+    track_names_dict = {}
+    # wl = pd.read_csv('data/white_list.txt', delimiter='\t').values.flatten().tolist()
+    # nbl = pd.read_csv('data/nbl.tsv', delimiter='\t').values.flatten().tolist()
+    # for track in os.listdir(tracks_folder):
+    for filename in os.listdir(tracks_folder):
+        if filename.endswith(".gz"):
+            fn = os.path.join(tracks_folder, filename)
+            track = filename[:-len(".100nt.bed.gz")]
+            type = track[:track.find(".")]
+            # if track not in wl:
+            #     continue
+            # if track in nbl:
+            #     nbl.remove(track)
+            #     continue
+            fn = tracks_folder + f"{track}.100nt.bed.gz"
+            size = os.path.getsize(fn)
+            if size > 2 * 512000:
+                track_names_dict.setdefault(type, []).append(track)
+
+    track_names = []
+    ps = []
+    q = mp.Queue()
+    nproc = 28
+    for type in track_names_dict.keys():
+        tracks = track_names_dict[type]
+        # if "pval" not in tracks[0]:
+        #     continue
+        chr1_data = get_tracks(None, tracks, ga, bin_size, ["chr1"], tracks_folder)
+        k = int(0.1 * len(tracks))
+        tracks = np.asarray(tracks)
+        start_time = time.time()
+        print(f"Clustering {type} {len(tracks)}")
+        kmeans = KMeans(n_clusters=k, random_state=0, verbose=1, n_init=2).fit(chr1_data)
+        print(f"Finished ({(time.time() - start_time):.2f})", end=" ")
+        for i in range(k):
+            inds = np.where(kmeans.labels_ == i)[0]
+            new_track_name = type + "." + str(i)
+            if len(inds) == 0:
+                continue
+            np.savetxt("pickle/track_info/" + new_track_name, tracks[inds], fmt="%s")
+            track_names.append(new_track_name)
+            p = mp.Process(target=get_tracks,
+                           args=(q, tracks[inds], ga, bin_size, chromosomes, tracks_folder, new_track_name,))
+            p.start()
+            ps.append(p)
+            if len(ps) >= nproc:
+                for p in ps:
+                    p.join()
+                print(q.get())
+                ps = []
+
+    if len(ps) >= nproc:
+        for p in ps:
+            p.join()
+        print(q.get())
     track_names = []
     for filename in os.listdir(main.parsed_tracks_folder):
         name = filename[filename.find(".")+1:]
@@ -295,7 +296,11 @@ def parse_some_tracks(q, some_tracks, ga, bin_size, chromosomes, tracks_folder):
             max_val = -1
             # all_vals = None
             for key in gast.keys():
-                gast[key] = np.log10(gast[key] + 1)
+                if "scEnd5" in track:
+                    gast[key] = np.log10(np.exp(gast[key]))
+                else:
+                    gast[key] = np.log10(gast[key] + 1)
+
                 if key in chromosomes:
                     max_val = max(np.max(gast[key]), max_val)
                     # if all_vals is not None:
@@ -313,7 +318,8 @@ def parse_some_tracks(q, some_tracks, ga, bin_size, chromosomes, tracks_folder):
                 gast[key] = gaussian_filter(gast[key], sigma=1)
             for key in gast.keys():
                 gast[key] = gast[key].astype(np.float16)
-            joblib.dump(gast, main.parsed_tracks_folder + track, compress=1)  # "lz4"
+            joblib.dump(gast, main.parsed_tracks_folder + track, compress="lz4")
+            # pickle.dump(gast, open(main.parsed_tracks_folder + track, "wb"), protocol=pickle.HIGHEST_PROTOCOL)
             print(f"Parsed {track}. Max value: {max_val}.")
         except Exception as exc:
             print(exc)
@@ -335,6 +341,7 @@ def get_sequences(bin_size, chromosomes):
         test_info = joblib.load("pickle/test_info.gz")
         train_info = joblib.load("pickle/train_info.gz")
         tss_loc = joblib.load("pickle/tss_loc.gz")
+        protein_coding = joblib.load("pickle/protein_coding.gz")
     else:
         # gene_tss = pd.read_csv("data/old_TSS_flank_0.bed",
         #                     sep="\t", index_col=False, names=["chrom", "start", "end", "geneID", "score", "strand"])
@@ -343,7 +350,7 @@ def get_sequences(bin_size, chromosomes):
         gene_tss = pd.read_csv("data/hg38.GENCODEv38.pc_lnc.TSS.bed", sep="\t", index_col=False,
                                names=["chrom", "start", "end", "geneID", "score", "strand"])
         gene_info = pd.read_csv("data/hg38.GENCODEv38.pc_lnc.gene.info.tsv", sep="\t", index_col=False)
-
+        protein_coding = []
         # prom_info = pd.read_csv("data/hg38.gencode_v32.promoter.window.info.tsv", sep="\t", index_col=False)
         test_info = []
         tss_loc = {}
@@ -356,24 +363,32 @@ def get_sequences(bin_size, chromosomes):
         test_genes = gene_tss.loc[gene_tss['chrom'] == "chr1"]
         for index, row in test_genes.iterrows():
             pos = int(row["start"])
-            tss_loc.setdefault(row["chrom"], []).append(pos)
             gene_type = gene_info[gene_info['geneID'] == row["geneID"]]['geneType'].values[0]
+            gene_name = gene_info[gene_info['geneID'] == row["geneID"]]['geneName'].values[0]
+            if gene_type == "protein_coding":
+                protein_coding.append(row["geneID"])
             if gene_type != "protein_coding":
                 continue
-            test_info.append([row["chrom"], pos, row["geneID"], gene_type, row["strand"]])
+            tss_loc.setdefault(row["chrom"], []).append(pos)
+            test_info.append([row["chrom"], pos, row["geneID"], gene_type,
+                              row["strand"], gene_type != "protein_coding", gene_name])
 
         print(f"Test set complete {len(test_info)}")
         train_info = []
         train_genes = gene_tss.loc[gene_tss['chrom'] != "chr1"]
         for index, row in train_genes.iterrows():
             pos = int(row["start"])
-            tss_loc.setdefault(row["chrom"], []).append(pos)
             gene_type = gene_info[gene_info['geneID'] == row["geneID"]]['geneType'].values[0]
+            gene_name = gene_info[gene_info['geneID'] == row["geneID"]]['geneName'].values[0]
+            if gene_type == "protein_coding":
+                protein_coding.append(row["geneID"])
             if gene_type != "protein_coding":
                 continue
+            tss_loc.setdefault(row["chrom"], []).append(pos)
             if row["chrom"] not in chromosomes:
                 continue
-            train_info.append([row["chrom"], pos, row["geneID"], gene_type, row["strand"]])
+            train_info.append([row["chrom"], pos, row["geneID"], gene_type, row["strand"],
+                               gene_type != "protein_coding", gene_name])
 
         print(f"Training set complete {len(train_info)}")
 
@@ -395,9 +410,10 @@ def get_sequences(bin_size, chromosomes):
         joblib.dump(test_info, "pickle/test_info.gz", compress=3)
         joblib.dump(train_info, "pickle/train_info.gz", compress=3)
         joblib.dump(tss_loc, "pickle/tss_loc.gz", compress=3)
+        joblib.dump(protein_coding, "pickle/protein_coding.gz", compress=3)
         gc.collect()
     one_hot = joblib.load("pickle/one_hot.gz")
-    return ga, one_hot, train_info, test_info, tss_loc
+    return ga, one_hot, train_info, test_info, tss_loc, protein_coding
 
 
 def parse_one_track(ga, bin_size, fn):

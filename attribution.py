@@ -17,7 +17,7 @@ def compute_gradients(model, images, target_class_idx):
         tape.watch(images)
         logits = model(images)
         # probs = tf.nn.softmax(logits, axis=-1)[:, target_class_idx]
-        probs = logits[:, target_class_idx[1], target_class_idx[0]]
+        probs = logits[0][:, target_class_idx[1], target_class_idx[0]]
     return tape.gradient(probs, images)
 
 

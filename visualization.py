@@ -11,69 +11,82 @@ from matplotlib import colors
 import matplotlib
 from matplotlib.colors import LinearSegmentedColormap
 import matplotlib.ticker as ticker
+import matplotlib.gridspec as gridspec
 
 
 def draw_tracks(track_names, track_perf, predictions_full, eval_gt_full,
                 test_seq, bin_size, num_regions, eval_infos, hic_keys,
                 hic_track_size, predictions_hic, hic_output,
-                num_hic_bins, fig_path):
-    mats = []
+                num_hic_bins, fig_path, half_size):
+    mats = {}
     for h in range(len(hic_keys)):
         it = h * hic_track_size
         it2 = h * hic_track_size
         for i in range(len(predictions_hic)):
             mat_gt = recover_shape(hic_output[i][it:it + hic_track_size], num_hic_bins)
             mat_pred = recover_shape(predictions_hic[i][it2:it2 + hic_track_size], num_hic_bins)
-            mats.append([mat_gt, mat_pred])
+            mats.setdefault(h, []).append([mat_gt, mat_pred])
 
+    gene_info = pd.read_csv("data/hg38.GENCODEv38.pc_lnc.gene.info.tsv", sep="\t", index_col=False)
     print("Drawing tracks")
-    pic_count = 0
+    hic_to_draw = 0 # 1 hic key
+    types_to_draw = ["scEnd5", "scATAC"]
+    types = []
     for it, track in enumerate(track_names):
         type = track[:track.find(".")]
-        if type != "CAGE":
+        if type not in types_to_draw:
+            continue
+        if type in types:
             continue
         if "response" in track:
             continue
-        for i in range(len(predictions_full)):
-            fig = matplotlib.pyplot.figure(figsize=(20, 10))
-            ax1 = setup_axes1(fig, 111, -45)
-            ax1.set_zorder(1)
-            # ax11 = setup_axes1(fig, 111, -45)
-            # ax11.set_zorder(0)
-            mask = np.tril(np.ones_like(mats[i][0]))
-            # mask2 = np.triu(np.ones_like(mats[i][0]))
+        r = list(range(len(predictions_full)))
+        random.shuffle(r)
+        r = r[:10]
+        for i in r:
+            fig = plt.figure(tight_layout=True, figsize=(14, 7))
+            gs = gridspec.GridSpec(2, 2)
 
-            # using the upper triangle matrix as mask
-            red = ((1.0, 1.0, 1.0, 1.0), (1.0, 0.0, 0.0, 1.0))
-            cmap_red = LinearSegmentedColormap.from_list('Custom', red, 256)
+            ax00 = fig.add_subplot(gs[0, :])
 
-            blue = ((1.0, 1.0, 1.0, 1.0), (0.0, 0.0, 1.0, 1.0))
-            cmap_blue = LinearSegmentedColormap.from_list('Custom', blue, 256)
+            ax0 = fig.add_subplot(gs[1, 0])
+            ax1 = fig.add_subplot(gs[1, 1])
 
-            sns.heatmap(mats[i][0], annot=False, mask=mask, ax=ax1, cbar=False, alpha=0.5, cmap=cmap_blue)
-            # sns.heatmap(mats[i][1], annot=False, mask=mask, ax=ax1, cbar=False, alpha=0.5, cmap=cmap_red)
+            if len(hic_keys) > 0:
+                mat_gt = mats[hic_to_draw][i][0]
+                mat_pred = mats[hic_to_draw][i][1]
+
+                sns.heatmap(mat_pred, linewidth=0.0, ax=ax0, square=True)
+                ax0.set_title("Prediction")
+                sns.heatmap(mat_gt, linewidth=0.0, ax=ax1, square=True)
+                ax1.set_title("Ground truth")
+
             ####################################################
             max_val = np.max(eval_gt_full[i][it])
             tss_layer = test_seq[i][:, 4]
             tss_track = []
             tss_pos = []
-            for region in range(0, 210000, bin_size):
+            for region in range(0, 2*half_size, bin_size):
                 if np.sum(tss_layer[region:region + bin_size]) > 0:
                     tss_track.append(max_val)
                     tss_pos.append(region / bin_size)
                 else:
                     tss_track.append(0)
             tss_names = []
-            start = eval_infos[i][1] - 105000
-            end = eval_infos[i][1] + 105001
+            start = eval_infos[i][1] - half_size
+            end = eval_infos[i][1] + half_size + 1
+            chrom = eval_infos[i][0]
+            # df["geneName"][(df["chrom"] == chrom) & (df["C"] == 900) & (df["C"] == 900)]
             for info in eval_infos:
                 if start < info[1] < end:
-                    tss_names.append(info[2])
+                    tss_names.append(gene_info.loc[gene_info['geneID'] == info[2], 'geneName'].iloc[0])
                 # if start > info[1] + 105001:
                 #     break
             #####################################################
-            vector1 = np.pad(predictions_full[i][it], (25, 24), 'constant')
-            vector2 = np.pad(eval_gt_full[i][it], (25, 24), 'constant')
+            # print(f"tss layer {np.sum(tss_layer)}")
+            # print(f"tss names {len(tss_names)}")
+            vector1 = np.pad(predictions_full[i][it], (275, 274), 'constant')
+            vector2 = np.pad(eval_gt_full[i][it], (275, 274), 'constant')
             x = range(len(tss_track))
             d1 = {'bin': x, 'expression': vector1}
             df1 = pd.DataFrame(d1)
@@ -83,30 +96,27 @@ def draw_tracks(track_names, track_perf, predictions_full, eval_gt_full,
             d3 = {'bin': x, 'expression': tss_track}
             df3 = pd.DataFrame(d3)
             #####################################################
-            ax2 = fig.add_axes([0.1, 0.6, 0.8, 0.2])
-            sns.lineplot(data=df1, x='bin', y='expression', ax=ax2)
-            ax2.fill_between(x, vector1, alpha=0.5)
-            sns.lineplot(data=df2, x='bin', y='expression', ax=ax2)
+            sns.lineplot(data=df1, x='bin', y='expression', ax=ax00)
+            ax00.fill_between(x, vector1, alpha=0.5)
+            sns.lineplot(data=df2, x='bin', y='expression', ax=ax00)
             #####################################################
-            sns.barplot(data=df3, x='bin', y='expression', ax=ax2, color='green')
-            # try:
-            #     for ind, tp in enumerate(tss_pos):
-            #         ax2.text(tp, 0, tss_names[ind], color="g")
-            # except:
-            #     pass
-            ax2.xaxis.set_major_locator(ticker.MultipleLocator(100))
-            ax2.xaxis.set_major_formatter(ticker.ScalarFormatter())
+            sns.barplot(data=df3, x='bin', y='expression', ax=ax00, color='green')
+            try:
+                for ind, tp in enumerate(tss_pos):
+                    md = ind % 5
+                    ax00.text(tp, (max_val/5) * md, tss_names[ind], color="g")
+            except:
+                pass
+            ax00.xaxis.set_major_locator(ticker.MultipleLocator(100))
+            ax00.xaxis.set_major_formatter(ticker.ScalarFormatter())
             #####################################################
-            ax2.set_title(f"{eval_infos[i][0]}:{eval_infos[i][1] - 105000}-{eval_infos[i][1] + 105001}")
+            ax00.set_title(f"{eval_infos[i][0]}:{eval_infos[i][1] - half_size}-{eval_infos[i][1] + half_size + 1}")
             # fig.tight_layout()
             plt.savefig(f"{fig_path}_{eval_infos[i][2]}_{track}.png")
             plt.close(fig)
-            pic_count += 1
-        break
-        #     if i > 20:
-        #         break
-        # if pic_count > 100:
-        #     break
+        types.append(type)
+        if len(types) == len(types_to_draw):
+            break
 
 
 def draw_regplots(track_names, track_perf, final_pred, eval_gt, fig_path):
@@ -142,28 +152,29 @@ def draw_regplots(track_names, track_perf, final_pred, eval_gt, fig_path):
 
 def draw_attribution():
     # attribution
-    # for c, cell in enumerate(cells):
-    #     for i in range(1200, 1210, 1):
-    #         baseline = tf.zeros(shape=(input_size, num_features))
-    #         image = test_input_sequences[i].astype('float32')
-    #         ig_attributions = attribution.integrated_gradients(our_model, baseline=baseline,
-    #                                                            image=image,
-    #                                                            target_class_idx=[mid_bin, c],
-    #                                                            m_steps=40)
+    # baseline = tf.zeros(shape=(input_size, num_features))
+    # image = ns.astype('float32')
+    # ig_attributions = attribution.integrated_gradients(our_model, baseline=baseline,
+    #                                                    image=image,
+    #                                                    target_class_idx=[mid_bin, track_to_use],
+    #                                                    m_steps=40)
     #
-    #         attribution_mask = tf.squeeze(ig_attributions).numpy()
-    #         attribution_mask = (attribution_mask - np.min(attribution_mask)) / (
-    #                     np.max(attribution_mask) - np.min(attribution_mask))
-    #         attribution_mask = np.mean(attribution_mask, axis=-1, keepdims=True)
-    #         attribution_mask[int(input_size / 2) - 2000 : int(input_size / 2) + 2000, :] = np.nan
-    #         attribution_mask = skimage.measure.block_reduce(attribution_mask, (100, 1), np.mean)
-    #         attribution_mask = np.transpose(attribution_mask)
-    #
-    #         fig, ax = plt.subplots(figsize=(60, 6))
-    #         sns.heatmap(attribution_mask, linewidth=0.0, ax=ax)
-    #         plt.tight_layout()
-    #         plt.savefig(figures_folder + "/attribution/track_" + str(i + 1) + "_" + str(cell) + "_" + test_info[i] + ".jpg")
-    #         plt.close(fig)
+    # attribution_mask = tf.squeeze(ig_attributions).numpy()
+    # attribution_mask = (attribution_mask - np.min(attribution_mask)) / (
+    #         np.max(attribution_mask) - np.min(attribution_mask))
+    # attribution_mask = np.mean(attribution_mask, axis=-1, keepdims=True)
+    # # attribution_mask[int(input_size / 2) - 1000 : int(input_size / 2) + 1000, :] = np.nan
+    # print(attribution_mask.shape)
+    # attribution_mask = attribution_mask[int(input_size / 2) - 1000: int(input_size / 2) + 1000, :4]
+    # # attribution_mask = measure.block_reduce(attribution_mask, (100, 1), np.mean)
+    # print(attribution_mask.shape)
+    # attribution_mask = np.transpose(attribution_mask)
+    # print(attribution_mask.shape)
+    # fig, ax = plt.subplots(figsize=(60, 6))
+    # sns.heatmap(attribution_mask, linewidth=0.0, ax=ax)
+    # plt.tight_layout()
+    # plt.savefig(f"temp/{chrn}.{chrp}.attribution.png")
+    # plt.close(fig)
     return None
 
 
