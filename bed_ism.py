@@ -27,7 +27,7 @@ os.chdir(folders[0])
 parsed_tracks_folder = folders[1]
 parsed_hic_folder = folders[2]
 model_folder = folders[3]
-model_name = "all_tracks.h5"
+model_name = "small.h5"
 heads = joblib.load("pickle/heads.gz")
 head_tracks = heads[head_id]
 one_hot = joblib.load("pickle/one_hot.gz")
@@ -43,7 +43,8 @@ for key in tss_loc.keys():
 our_model = tf.keras.models.load_model(model_folder + model_name,
                                        custom_objects={'PatchEncoder': mo.PatchEncoder})
 our_model.get_layer("our_head").set_weights(joblib.load(model_folder + model_name + "_head_" + str(head_id)))
-
+print(our_model.get_layer("our_transformer").get_layer("pos_embedding").summary())
+exit()
 with open('data/hg38.GENCODEv38.pc_lnc.TSS.bed') as file:
     for line in file:
         vals = line.split("\t")

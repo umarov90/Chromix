@@ -46,7 +46,7 @@ import tensorflow_addons as tfa
 # random.seed(seed)
 # np.random.seed(seed)
 # tf.random.set_seed(seed)
-input_size = 50001 #210001 # 50001
+input_size = 60001 #210001 # 50001
 half_size = int(input_size / 2)
 bin_size = 200
 hic_bin_size = 10000
@@ -63,7 +63,7 @@ hic_track_size = 1
 out_stack_num = 11529
 num_features = 5
 shift_speed = 2000000
-initial_shift = 300
+initial_shift = 0
 last_proc = None
 hic_size = 190
 model_folder = "/home/user/data/models"
@@ -163,7 +163,7 @@ def create_model(q):
         #     layer_weights = layer.weights
         #     our_model.get_layer("our_hic").get_layer(layer_name).set_weights(layer_weights)
 
-        our_model.set_weights(joblib.load(model_folder + model_name + "_w"))
+        # our_model.set_weights(joblib.load(model_folder + model_name + "_w"))
 
         # our_model.get_layer("our_resnet").trainable = False
         # our_model.get_layer("our_transformer").trainable = False
@@ -173,9 +173,9 @@ def create_model(q):
         Path(model_folder).mkdir(parents=True, exist_ok=True)
         our_model.save(model_folder + model_name, include_optimizer=False)
         print("Model saved " + model_folder + model_name)
-        # for head_id in range(len(heads)):
-        #     joblib.dump(our_model.get_layer("our_head").get_weights(),
-        #                 model_folder + model_name + "_head_" + str(head_id), compress=3)
+        for head_id in range(len(heads)):
+            joblib.dump(our_model.get_layer("our_head").get_weights(),
+                        model_folder + model_name + "_head_" + str(head_id), compress=3)
     q.put(None)
 
 
@@ -354,10 +354,10 @@ def train_step(input_sequences, output_scores, output_hic, fit_epochs, head_id):
         if mixed16:
             from tensorflow.keras import mixed_precision
             mixed_precision.set_global_policy('mixed_float16')
-        # physical_devices = tf.config.experimental.list_physical_devices('GPU')
-        # assert len(physical_devices) > 0, "Not enough GPU hardware devices available"
-        # for device in physical_devices:
-        #     tf.config.experimental.set_memory_growth(device, True)
+        physical_devices = tf.config.experimental.list_physical_devices('GPU')
+        assert len(physical_devices) > 0, "Not enough GPU hardware devices available"
+        for device in physical_devices:
+            tf.config.experimental.set_memory_growth(device, True)
 
         import model as mo
         if len(output_hic) > 0:
@@ -686,6 +686,7 @@ def eval_perf(eval_infos, should_draw, current_epoch, chr_name, head_id):
             if w == 0:
                 predictions = p2
                 predictions_full = p1
+                print(f"MSE: {np.square(np.subtract(predictions_full, eval_gt_full)).mean()}")
             else:
                 predictions = np.concatenate((predictions, p2), dtype=np.float32)
                 if w / w_step < full_preds_steps_num:
@@ -744,7 +745,7 @@ def eval_perf(eval_infos, should_draw, current_epoch, chr_name, head_id):
         if not math.isnan(sc) and not math.isnan(pc):
             corr_p.append(pc)
             corr_s.append(sc)
-            genes_performance.append(f"{gene}\t{sc}")
+            genes_performance.append(f"{gene}\t{sc}\t{np.mean(b)}\t{np.std(b)}")
 
     print("")
     print(f"Across genes {len(corr_p)} {np.mean(corr_p)} {np.mean(corr_s)}")
@@ -1003,17 +1004,17 @@ if __name__ == '__main__':
     # time.sleep(1)
     print("Training starting")
     start_epoch = 0
-    fit_epochs = 10
+    fit_epochs = 1
     for current_epoch in range(start_epoch, num_epochs, 1):
         head_id = current_epoch % len(heads)
-        # if current_epoch < 10:
-        #     fit_epochs = 1
-        # elif current_epoch < 40:
-        #     fit_epochs = 2
-        # elif current_epoch < 80:
-        #     fit_epochs = 3
-        # else:
-        #     fit_epochs = 4
+        if current_epoch < 10:
+            fit_epochs = 1
+        elif current_epoch < 40:
+            fit_epochs = 2
+        elif current_epoch < 80:
+            fit_epochs = 4
+        else:
+            fit_epochs = 8
 
         # if current_epoch == 60:
         #     if last_proc is not None:
@@ -1030,7 +1031,7 @@ if __name__ == '__main__':
         # check_perf(mp_q, 0)
         # exit()
         last_proc = run_epoch(last_proc, fit_epochs, head_id)
-        if current_epoch % 50 == 0 and current_epoch != 0: # and current_epoch != 0:
+        if current_epoch % 30 == 0 and current_epoch != 0: # and current_epoch != 0:
             print("Eval epoch")
             print(mp_q.get())
             last_proc.join()
