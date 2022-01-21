@@ -367,8 +367,8 @@ def get_sequences(bin_size, chromosomes):
             gene_name = gene_info[gene_info['geneID'] == row["geneID"]]['geneName'].values[0]
             if gene_type == "protein_coding":
                 protein_coding.append(row["geneID"])
-            if gene_type != "protein_coding":
-                continue
+            # if gene_type != "protein_coding":
+            #     continue
             tss_loc.setdefault(row["chrom"], []).append(pos)
             test_info.append([row["chrom"], pos, row["geneID"], gene_type,
                               row["strand"], gene_type != "protein_coding", gene_name])
@@ -382,8 +382,8 @@ def get_sequences(bin_size, chromosomes):
             gene_name = gene_info[gene_info['geneID'] == row["geneID"]]['geneName'].values[0]
             if gene_type == "protein_coding":
                 protein_coding.append(row["geneID"])
-            if gene_type != "protein_coding":
-                continue
+            # if gene_type != "protein_coding":
+            #     continue
             tss_loc.setdefault(row["chrom"], []).append(pos)
             if row["chrom"] not in chromosomes:
                 continue

@@ -1,12 +1,8 @@
-# import keras
 from tensorflow.keras.layers import LeakyReLU, LayerNormalization, MultiHeadAttention, \
     Add, Embedding, Layer, Reshape, Dropout, \
     Dense, Conv1D, Input, Flatten, Activation, BatchNormalization
 from tensorflow.keras.models import Model
-# from tensorflow.keras.regularizers import l2
 import tensorflow as tf
-import common as cm
-import numpy as np
 
 projection_dim = 128
 # dropout_rate = 0.2
@@ -22,15 +18,14 @@ def hic_model(input_size, num_features, num_regions, cell_num, hic_num, hic_size
     input_shape = (input_size, num_features)
     inputs = Input(shape=input_shape, dtype=tf.float32)
     x = inputs
-    x = Dropout(0.5, input_shape=input_shape)(x)
-    resnet_output = resnet(x, 8, 2)
+    # x = Dropout(dropout_rate, input_shape=input_shape)(x)
+    resnet_output = resnet(x, 7, 1)
     our_resnet = Model(inputs, resnet_output, name="our_resnet")
-    num_patches = 1641  # 391 #
-    num_filters = 408
-    interactions_layer_input = Input(shape=(num_patches, num_filters))
-    interactions_layer_input = Dropout(0.5, input_shape=(num_patches, num_filters))(interactions_layer_input)
-    encoded_patches = PatchEncoder(num_patches, projection_dim)(interactions_layer_input)
+    num_patches = 938
+    num_filters = 994
 
+    interactions_layer_input = Input(shape=(num_patches, num_filters))
+    encoded_patches = PatchEncoder(num_patches, projection_dim)(interactions_layer_input)
     # Create multiple layers of the Transformer block.
     for i in range(transformer_layers):
         # Layer normalization 1.
@@ -66,13 +61,16 @@ def hic_model(input_size, num_features, num_regions, cell_num, hic_num, hic_size
 
     head_input = Input(shape=(num_patches, projection_dim))
     x = head_input
-    x = Dropout(0.5, input_shape=(num_patches, projection_dim))(x)
-    target_length = num_regions
-    trim = (x.shape[-2] - target_length) // 2
-    x = x[..., trim:-trim, :]
+
+    x = tf.transpose(x, [0, 2, 1])
+    # x = Conv1D(num_regions, kernel_size=1, strides=1, use_bias=False, name="regions_projection")(x)
+    x = Dense(num_regions, activation=tf.nn.gelu, name="regions_projection")(x)
+    x = tf.transpose(x, [0, 2, 1])
+
+    # x = Dropout(dropout_rate, input_shape=(num_regions, projection_dim))(x)
 
     x = Conv1D(2048, kernel_size=1, strides=1, name="pointwise", activation=tf.nn.gelu)(x)
-    outputs = Conv1D(cell_num, kernel_size=1, strides=1, name="last_conv1d", dtype='float32')(x)
+    outputs = Conv1D(cell_num, kernel_size=1, strides=1, name="last_conv1d")(x)
     outputs = tf.transpose(outputs, [0, 2, 1])
     print(outputs)
     head_output = LeakyReLU(alpha=0.1, name="model_final_output", dtype='float32')(outputs)
@@ -91,10 +89,10 @@ def small_model(input_size, num_features, num_regions, cell_num):
     inputs = Input(shape=input_shape, dtype=tf.float32)
     x = inputs
     # x = Dropout(dropout_rate, input_shape=input_shape)(x)
-    resnet_output = resnet(x, 8, 1)
+    resnet_output = resnet(x, 7, 1)
     our_resnet = Model(inputs, resnet_output, name="our_resnet")
-    num_patches = 469
-    num_filters = 1093
+    num_patches = 938
+    num_filters = 994
 
     interactions_layer_input = Input(shape=(num_patches, num_filters))
     encoded_patches = PatchEncoder(num_patches, projection_dim)(interactions_layer_input)
@@ -124,7 +122,8 @@ def small_model(input_size, num_features, num_regions, cell_num):
     x = head_input
 
     x = tf.transpose(x, [0, 2, 1])
-    x = Conv1D(num_regions, kernel_size=1, strides=1, use_bias=False, name="regions_projection")(x)
+    # x = Conv1D(num_regions, kernel_size=1, strides=1, use_bias=False, name="regions_projection")(x)
+    x = Dense(num_regions, activation=tf.nn.gelu, name="regions_projection")(x)
     x = tf.transpose(x, [0, 2, 1])
 
     # x = Dropout(dropout_rate, input_shape=(num_regions, projection_dim))(x)
@@ -155,10 +154,7 @@ def resnet_layer(inputs,
                   strides=strides,
                   padding='same',
                   use_bias=False,
-                  name=name + "conv1d"
-                  # kernel_regularizer=l2(1e-6),
-                  # activity_regularizer=l2(1e-6)
-                  )
+                  name=name + "conv1d")
 
     x = inputs
     if activation:
@@ -170,10 +166,10 @@ def resnet_layer(inputs,
 
 
 def resnet(input_x, num_stages, num_res_blocks):
-    # Start model definition.
+    # Initial number of filters
     num_filters = 512
 
-    # v2 performs Conv2D with BN-ReLU on input before splitting into 2 paths
+    # First convolutional layer. Since it is first, it is not preceded by activation and batch normalization
     x = resnet_layer(inputs=input_x,
                      num_filters=num_filters,
                      activation=False,
@@ -189,6 +185,7 @@ def resnet(input_x, num_stages, num_res_blocks):
             if res_block == 0 and stage != 0:
                 strides = 2
 
+            # Wide basic block with two CNN layers. First one performs down-sampling.
             y = resnet_layer(inputs=x,
                              num_filters=num_filters,
                              strides=strides,
@@ -209,6 +206,7 @@ def resnet(input_x, num_stages, num_res_blocks):
                                  name=cname + "3_")
             x = Add()([x, y])
 
+    # final activation and batch normalization
     x = LeakyReLU(alpha=0.1, name="res_act_final")(x)
     x = BatchNormalization(name="res_bn_final")(x)
 
@@ -261,15 +259,18 @@ class PatchEncoder(Layer):
     def __init__(self, num_patches, projection_dim, **kwargs):
         super(PatchEncoder, self).__init__(**kwargs)
         self.num_patches = num_patches
-        self.projection = Conv1D(projection_dim, kernel_size=1, strides=1, use_bias=False, name="projection_patch_encoder")
+        self.projection = Conv1D(projection_dim, kernel_size=1, strides=1,
+                                 activation=tf.nn.gelu, name="projection_patch_encoder")
         self.projection_dim = projection_dim
         self.position_embedding = Embedding(input_dim=num_patches, output_dim=projection_dim, name="pos_embedding")
 
     def call(self, patch):
         positions = tf.range(start=0, limit=self.num_patches, delta=1)
+        # Add positions encoding to the projection
         encoded = self.projection(patch) + self.position_embedding(positions)
         return encoded
 
+    # Needed for loading the model
     def get_config(self):
         config = super().get_config().copy()
         config.update({
