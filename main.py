@@ -1,4 +1,5 @@
 import os
+import logging
 import joblib
 import gc
 import random
@@ -17,9 +18,10 @@ import pathlib
 import pickle
 import evaluation
 from main_params import MainParams
-
-matplotlib.use("agg")
 import tensorflow_addons as tfa
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+logging.getLogger("tensorflow").setLevel(logging.ERROR)
+matplotlib.use("agg")
 
 
 def create_model(q):
@@ -333,6 +335,9 @@ def train_step(input_sequences, output_scores, output_hic, fit_epochs, head_id):
                 print("loading hic optimizer")
                 optimizers[3].set_weights(joblib.load(p.model_path + "_opt_hic"))
 
+            # optimizers[0].epsilon = 1e-8
+            # optimizers[1].epsilon = 1e-8
+            # optimizers[2].epsilon = 1e-8
             # optimizers[0].learning_rate = resnet_lr
             # optimizers[1].learning_rate = transformer_lr
             # optimizers[2].learning_rate = head_lr
@@ -414,11 +419,11 @@ def print_memory():
     print(f"used: {cm.get_human_readable(mem.used)} available: {cm.get_human_readable(mem.available)}")
 
 
+last_proc = None
+p = MainParams()
 if __name__ == '__main__':
     # import model as mo
     # our_model = mo.small_model(input_size, num_features, num_regions, out_stack_num)
-    last_proc = None
-    p = MainParams()
     script_folder = pathlib.Path(__file__).parent.resolve()
     folders = open(str(script_folder) + "/data_dirs").read().strip().split("\n")
     os.chdir(folders[0])
@@ -495,12 +500,12 @@ if __name__ == '__main__':
         # check_perf(mp_q, 0)
         # exit()
         last_proc = run_epoch(last_proc, fit_epochs, head_id)
-        if current_epoch % 30 == 0 and current_epoch != 0: # and current_epoch != 0:
+        if current_epoch % 40 == 0 and current_epoch != 0: # and current_epoch != 0:
             print("Eval epoch")
             print(mp_q.get())
             last_proc.join()
             last_proc = None
-            p = mp.Process(target=check_perf, args=(mp_q, 0,))
-            p.start()
+            proc = mp.Process(target=check_perf, args=(mp_q, 0,))
+            proc.start()
             print(mp_q.get())
-            p.join()
+            proc.join()

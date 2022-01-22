@@ -44,9 +44,6 @@ def eval_perf(p, our_model, eval_track_names, eval_infos, should_draw, current_e
                 print(i, end=" ")
                 gc.collect()
             if key in loaded_tracks.keys():
-                # buf = loaded_tracks[key]
-                # parsed_track = joblib.load(buf)
-                # buf.seek(0)
                 parsed_track = loaded_tracks[key]
             else:
                 # parsed_track = joblib.load(parsed_tracks_folder + key)
@@ -147,8 +144,7 @@ def eval_perf(p, our_model, eval_track_names, eval_infos, should_draw, current_e
     for w in range(0, len(test_seq), w_step):
         print(w, end=" ")
         p1 = our_model.predict(mo.wrap2(test_seq[w:w + w_step], predict_batch_size))
-        # p2 = p1[:, :, mid_bin + correction]
-        if len(p.hic_keys) > 0:
+        if len(hic_keys) > 0:
             p2 = p1[0][:, :, p.mid_bin - 1] + p1[0][:, :, p.mid_bin] + p1[0][:, :, p.mid_bin + 1]
             if w == 0:
                 predictions = p2
@@ -161,11 +157,6 @@ def eval_perf(p, our_model, eval_track_names, eval_infos, should_draw, current_e
                     predictions_hic = np.concatenate((predictions_hic, p1[1]), dtype=np.float16)
         else:
             p2 = p1[:, :, p.mid_bin - 1] + p1[:, :, p.mid_bin] + p1[:, :, p.mid_bin + 1]
-            # if np.isnan(p2).any() or np.isinf(p2).any():
-            #     print("nan predicted")
-            #     joblib.dump(test_seq[w:w + w_step], "nan_testseq")
-            #     joblib.dump(p2, "nan_testseq")
-
             if w == 0:
                 predictions = p2
                 predictions_full = p1
@@ -197,16 +188,12 @@ def eval_perf(p, our_model, eval_track_names, eval_infos, should_draw, current_e
 
     p_gene_set = []
     final_pred_tss = {}
-    non_p = 0
     for i in range(len(eval_infos)):
-        if eval_infos[i][5]:
-            non_p += 1
-            continue
-        p_gene_set.append(eval_infos[i][2])
+        if not eval_infos[i][5]:
+            p_gene_set.append(eval_infos[i][2])
         for it, track in enumerate(eval_track_names):
             final_pred[eval_infos[i][2]].setdefault(track, []).append(predictions[i][it])
             final_pred_tss.setdefault(track, []).append(predictions[i][it])
-    print(f"Skipped {non_p} not protein coding genes")
     for i, gene in enumerate(final_pred.keys()):
         if i % 10 == 0:
             print(i, end=" ")
@@ -279,7 +266,6 @@ def eval_perf(p, our_model, eval_track_names, eval_infos, should_draw, current_e
         type_pcc = [i[0] for i in corrs_p[track_type]]
         print(f"{track_type} correlation : {np.mean(type_pcc)}"
               f" {np.mean([i[0] for i in corrs_s[track_type]])} {len(type_pcc)}")
-    return_result = np.mean([i[0] for i in corrs_s["CAGE"]])
 
     with open("result_cage_test.csv", "w+") as myfile:
         for ccc in corrs_p["CAGE"]:

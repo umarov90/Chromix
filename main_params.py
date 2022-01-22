@@ -23,7 +23,7 @@ class MainParams:
         self.shift_speed = 2000000
         self.initial_shift = 300
         self.hic_size = 190
-        self.model_folder = "/home/user/data/models"
+        self.model_folder = "/home/user/data/models/"
         self.model_name = "small.h5"
         self.model_path = self.model_folder + self.model_name
         self.figures_folder = "figures_1"
