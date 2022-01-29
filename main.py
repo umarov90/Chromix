@@ -277,14 +277,19 @@ def train_step(input_sequences, output_scores, output_hic, fit_epochs, head_id):
             print(f"=== Training with head {head_id} ===")
             hic_lr = 0.0001
             head_lr = 0.001
-            # head_wd = 0.00001
+            head_wd = 0.00001
             transformer_lr = 0.0001
-            # transformer_wd = 0.00001
+            transformer_wd = 0.00001
             resnet_lr = 0.00001
-            # resnet_wd = 0.000001
+            resnet_wd = 0.000001
             # cap_e = min(current_epoch, 10)
             # resnet_lr = 0.00001 + cap_e * 0.00001
             # tfa.optimizers.AdamW
+            # optimizers = [
+            #     tf.keras.optimizers.Adam(learning_rate=resnet_lr),
+            #     tfa.optimizers.AdamW(learning_rate=transformer_lr, weight_decay=transformer_wd),
+            #     tf.keras.optimizers.Adam(learning_rate=head_lr)
+            # ]
             optimizers = [
                 tf.keras.optimizers.Adam(learning_rate=resnet_lr),
                 tf.keras.optimizers.Adam(learning_rate=transformer_lr),
@@ -393,16 +398,18 @@ def check_perf(mp_q, head_id):
                 joblib.load(p.model_path + "_head_" + str(head_id)))
         train_eval_chr = "chr2"
         train_eval_chr_info = []
-        for info in train_info:
+        train_info_eval = joblib.load("pickle/train_info_eval.gz")
+        for info in train_info_eval:
             if info[0] == train_eval_chr:
                 train_eval_chr_info.append(info)
         train_eval_chr_info.sort(key=lambda x: x[1])
         print(f"Training set {len(train_eval_chr_info)}")
         training_spearman = evaluation.eval_perf(p, our_model,  heads[head_id], train_eval_chr_info,
                                                  False, current_epoch, train_eval_chr, one_hot, hic_keys, loaded_tracks)
-        print(f"Test set {len(test_info)}")
-        test_info.sort(key=lambda x: x[1])
-        test_spearman = evaluation.eval_perf(p, our_model,  heads[head_id], test_info,
+        test_info_eval = joblib.load("pickle/test_info_eval.gz")
+        print(f"Test set {len(test_info_eval)}")
+        test_info_eval.sort(key=lambda x: x[1])
+        test_spearman = evaluation.eval_perf(p, our_model,  heads[head_id], test_info_eval,
                                              False, current_epoch, "chr1", one_hot, hic_keys, loaded_tracks)
         with open(p.model_name + "_history.csv", "a+") as myfile:
             myfile.write(f"{training_spearman},{test_spearman}")
@@ -435,6 +442,7 @@ if __name__ == '__main__':
     # viz.draw_tracks(*draw)
 
     ga, one_hot, train_info, test_info, tss_loc, protein_coding = parser.get_sequences(p.bin_size, p.chromosomes)
+    parser.parse_eval_data(p.chromosomes)
     if Path("pickle/track_names.gz").is_file():
         track_names = joblib.load("pickle/track_names.gz")
     else:
@@ -455,6 +463,8 @@ if __name__ == '__main__':
 
     for head in heads:
         print(len(head))
+    # heads = [heads[0][:5000]]
+    # joblib.dump(heads, "pickle/heads.gz", compress=3)
     # hic_keys = parser.parse_hic()
     # hic_keys = ["hic_THP1_10kb_interactions.txt.bz2"]  # , "hic_A549_10kb_interactions.txt.bz2"
     # "hic_HepG2_10kb_interactions.txt.bz2", "hic_THP1_10kb_interactions.txt.bz2"]
@@ -464,11 +474,10 @@ if __name__ == '__main__':
     mp_q = mp.Queue()
 
     if not Path(p.model_folder + p.model_name).is_file():
-        p = mp.Process(target=create_model, args=(mp_q,))
-        p.start()
+        proc = mp.Process(target=create_model, args=(mp_q,))
+        proc.start()
         print(mp_q.get())
-        p.join()
-        time.sleep(1)
+        proc.join()
     else:
         print("Model exists")
 
@@ -500,7 +509,7 @@ if __name__ == '__main__':
         # check_perf(mp_q, 0)
         # exit()
         last_proc = run_epoch(last_proc, fit_epochs, head_id)
-        if current_epoch % 40 == 0 and current_epoch != 0: # and current_epoch != 0:
+        if current_epoch % 10 == 0 and current_epoch >= 20: # and current_epoch != 0:
             print("Eval epoch")
             print(mp_q.get())
             last_proc.join()

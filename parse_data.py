@@ -233,8 +233,8 @@ def get_sequences(bin_size, chromosomes):
             gene_name = gene_info[gene_info['geneID'] == row["geneID"]]['geneName'].values[0]
             if gene_type == "protein_coding":
                 protein_coding.append(row["geneID"])
-            if gene_type != "protein_coding":
-                continue
+            # if gene_type != "protein_coding":
+            #     continue
             tss_loc.setdefault(row["chrom"], []).append(pos)
             test_info.append([row["chrom"], pos, row["geneID"], gene_type,
                               row["strand"], gene_type != "protein_coding", gene_name])
@@ -248,8 +248,8 @@ def get_sequences(bin_size, chromosomes):
             gene_name = gene_info[gene_info['geneID'] == row["geneID"]]['geneName'].values[0]
             if gene_type == "protein_coding":
                 protein_coding.append(row["geneID"])
-            if gene_type != "protein_coding":
-                continue
+            # if gene_type != "protein_coding":
+            #     continue
             tss_loc.setdefault(row["chrom"], []).append(pos)
             if row["chrom"] not in chromosomes:
                 continue
@@ -280,6 +280,41 @@ def get_sequences(bin_size, chromosomes):
         gc.collect()
     one_hot = joblib.load("pickle/one_hot.gz")
     return ga, one_hot, train_info, test_info, tss_loc, protein_coding
+
+
+def parse_eval_data(chromosomes):
+    if not Path("pickle/train_info_eval.gz").is_file():
+        # gene_tss = pd.read_csv("data/old_TSS_flank_0.bed",
+        #                     sep="\t", index_col=False, names=["chrom", "start", "end", "geneID", "score", "strand"])
+        # gene_info = pd.read_csv("data/old_gene.info.tsv", sep="\t", index_col=False)
+        gene_tss = pd.read_csv("data/hg38.GENCODEv38.pc_lnc.TSS.bed", sep="\t", index_col=False,
+                               names=["chrom", "start", "end", "geneID", "score", "strand"])
+        gene_info = pd.read_csv("data/hg38.GENCODEv38.pc_lnc.gene.info.tsv", sep="\t", index_col=False)
+        test_info = []
+        test_genes = gene_tss.loc[gene_tss['chrom'] == "chr1"]
+        for index, row in test_genes.iterrows():
+            pos = int(row["start"]) - 1
+            gene_type = gene_info[gene_info['geneID'] == row["geneID"]]['geneType'].values[0]
+            gene_name = gene_info[gene_info['geneID'] == row["geneID"]]['geneName'].values[0]
+            test_info.append([row["chrom"], pos, row["geneID"], gene_type,
+                              row["strand"], gene_type != "protein_coding", gene_name])
+
+        print(f"Test set complete {len(test_info)}")
+        train_info = []
+        train_genes = gene_tss.loc[gene_tss['chrom'] != "chr1"]
+        for index, row in train_genes.iterrows():
+            pos = int(row["start"]) - 1
+            gene_type = gene_info[gene_info['geneID'] == row["geneID"]]['geneType'].values[0]
+            gene_name = gene_info[gene_info['geneID'] == row["geneID"]]['geneName'].values[0]
+            if row["chrom"] not in chromosomes:
+                continue
+            train_info.append([row["chrom"], pos, row["geneID"], gene_type, row["strand"],
+                               gene_type != "protein_coding", gene_name])
+
+        print(f"Training set complete {len(train_info)}")
+
+        joblib.dump(test_info, "pickle/test_info_eval.gz", compress=3)
+        joblib.dump(train_info, "pickle/train_info_eval.gz", compress=3)
 
 
 def parse_one_track(ga, bin_size, fn):

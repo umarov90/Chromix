@@ -26,8 +26,8 @@ def eval_perf(p, our_model, eval_track_names, eval_infos, should_draw, current_e
         # eval_gt = joblib.load(f"pickle/{chr_name}_eval_gt.gz")
         eval_gt = pickle.load(open(f"pickle/{chr_name}_eval_gt.gz", "rb"))
         print(datetime.now().strftime('[%H:%M:%S] ') + "Loading gt 2. ")
-        # eval_gt_tss = joblib.load(f"pickle/{chr_name}_eval_gt_tss.gz")
-        eval_gt_tss = pickle.load(open(f"pickle/{chr_name}_eval_gt_tss.gz", "rb"))
+        eval_gt_tss = joblib.load(f"pickle/{chr_name}_eval_gt_tss.gz")
+        # eval_gt_tss = pickle.load(open(f"pickle/{chr_name}_eval_gt_tss.gz", "rb"))
         print(datetime.now().strftime('[%H:%M:%S] ') + "Loading gt 3. ")
         eval_gt_full = joblib.load(f"pickle/{chr_name}_eval_gt_full.gz")
         print(datetime.now().strftime('[%H:%M:%S] ') + "Finished loading. ")
@@ -80,6 +80,10 @@ def eval_perf(p, our_model, eval_track_names, eval_infos, should_draw, current_e
             for track in eval_track_names:
                 eval_gt[gene][track] = np.mean(eval_gt[gene][track])
         print("")
+
+        for key in eval_gt_tss.keys():
+            eval_gt_tss[key] = np.asarray(eval_gt_tss[key], dtype=np.float16)
+
         eval_gt_full = np.asarray(eval_gt_full)
 
         test_seq = []
@@ -113,18 +117,18 @@ def eval_perf(p, our_model, eval_track_names, eval_infos, should_draw, current_e
         pickle.dump(eval_gt, open(f"pickle/{chr_name}_eval_gt.gz", "wb"), protocol=pickle.HIGHEST_PROTOCOL)
         del eval_gt
         gc.collect()
-        # joblib.dump(eval_gt_tss, f"pickle/{chr_name}_eval_gt_tss.gz", compress="lz4")
-        pickle.dump(eval_gt_tss, open(f"pickle/{chr_name}_eval_gt_tss.gz", "wb"), protocol=pickle.HIGHEST_PROTOCOL)
+        joblib.dump(eval_gt_tss, f"pickle/{chr_name}_eval_gt_tss.gz", compress="lz4")
+        # pickle.dump(eval_gt_tss, open(f"pickle/{chr_name}_eval_gt_tss.gz", "wb"), protocol=pickle.HIGHEST_PROTOCOL)
         del eval_gt_tss
         gc.collect()
         joblib.dump(eval_gt_full, f"pickle/{chr_name}_eval_gt_full.gz", compress="lz4")
         # pickle.dump(eval_gt_full, open(f"pickle/{chr_name}_eval_gt_full.gz", "wb"), protocol=pickle.HIGHEST_PROTOCOL)
         test_seq = joblib.load(f"pickle/{chr_name}_seq.gz")
         eval_gt = joblib.load(f"pickle/{chr_name}_eval_gt.gz")
-        eval_gt_tss = pickle.load(open(f"pickle/{chr_name}_eval_gt_tss.gz", "rb"))
+        eval_gt_tss = joblib.load(f"pickle/{chr_name}_eval_gt_tss.gz")
 
     start_val = {}
-    tracks_for_bed = {"CAGE":[], "scEnd5":[], "scATAC":[]}
+    tracks_for_bed = {"scEnd5": []}# {"CAGE":[], "scEnd5":[], "scATAC":[]}
     bed_num = 5
     track_inds_bed = []
     for t, track in enumerate(eval_track_names):
@@ -174,9 +178,9 @@ def eval_perf(p, our_model, eval_track_names, eval_infos, should_draw, current_e
         print(" -bed ", end="")
         for c, locus in enumerate(predictions_for_bed):
             ind = w + c
-            locus_start = eval_infos[ind][1] - p.half_num_regions * p.bin_size - (eval_infos[ind][1] % p.bin_size)
+            mid = eval_infos[ind][1] - p.half_num_regions * p.bin_size - (eval_infos[ind][1] % p.bin_size)
             for b in range(p.num_regions):
-                start = locus_start + b * p.bin_size
+                start = mid + b * p.bin_size
                 for t in track_inds_bed:
                     track = eval_track_names[t]
                     start_val.setdefault(track, {}).setdefault(start, []).append(locus[t][b])
@@ -283,11 +287,11 @@ def eval_perf(p, our_model, eval_track_names, eval_infos, should_draw, current_e
     print("Saving bed files")
     for track in start_val.keys():
         for start in start_val[track].keys():
-            start_val[track][start] = np.mean(start_val[track][start])
-        with open("bed_output/" + track + ".bed", 'w+') as f:
-            for start in sorted(start_val[track].keys()):
-                f.write(f"{chr_name}\t{start}\t{start+p.bin_size}\t{start_val[track][start]}")
-                f.write("\n")
+            start_val[track][start] = np.mean(start_val[track][start]) # MAX can be better on the test set!
+        # with open("bed_output/" + chr_name + "_" + track + ".bedGraph", 'w+') as f:
+        #     for start in sorted(start_val[track].keys()):
+        #         f.write(f"{chr_name}\t{start}\t{start+p.bin_size}\t{start_val[track][start]}")
+        #         f.write("\n")
 
     print("Across tracks (TSS)")
     corrs_p = {}
@@ -323,6 +327,35 @@ def eval_perf(p, our_model, eval_track_names, eval_infos, should_draw, current_e
         print(f"{track_type} correlation : {np.mean(type_pcc)}"
               f" {np.mean([i[0] for i in corrs_s[track_type]])} {len(type_pcc)}")
     return_result = np.mean([i[0] for i in corrs_s["CAGE"]])
+
+    print("Across tracks (TSS) [Averaged across evaluations]")
+    corrs_p = {}
+    corrs_s = {}
+    all_track_spearman = {}
+    track_perf = {}
+    for track in start_val.keys():
+        type = track[:track.find(".")]
+        a = eval_gt_tss[track]
+        # b = final_pred_tss[track]
+        b = []
+        for info in eval_infos:
+            mid = info[1] - (info[1] % p.bin_size)
+            val = start_val[track][mid - p.bin_size] + start_val[track][mid] + start_val[track][mid + p.bin_size]
+            b.append(val)
+        a = np.nan_to_num(a, neginf=0, posinf=0)
+        b = np.nan_to_num(b, neginf=0, posinf=0)
+        pc = stats.pearsonr(a, b)[0]
+        sc = stats.spearmanr(a, b)[0]
+        track_perf[track] = sc
+        if pc is not None and sc is not None:
+            corrs_p.setdefault(type, []).append((pc, track))
+            corrs_s.setdefault(type, []).append((sc, track))
+            all_track_spearman[track] = stats.spearmanr(a, b)[0]
+
+    for track_type in corrs_p.keys():
+        type_pcc = [i[0] for i in corrs_p[track_type]]
+        print(f"{track_type} correlation : {np.mean(type_pcc)}"
+              f" {np.mean([i[0] for i in corrs_s[track_type]])} {len(type_pcc)}")
 
     if should_draw:
         hic_output = []

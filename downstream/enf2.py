@@ -1,3 +1,8 @@
+import gc
+import os
+import pickle
+
+# os.environ["CUDA_VISIBLE_DEVICES"] = '-1'
 import tensorflow_hub as hub
 import joblib
 import gzip
@@ -10,6 +15,9 @@ import matplotlib.pyplot as plt
 import matplotlib as mpl
 import seaborn as sns
 import tensorflow as tf
+from scipy import stats
+import pathlib
+import pyBigWig
 
 transform_path = 'gs://dm-enformer/models/enformer.finetuned.SAD.robustscaler-PCA500-robustscaler.transform.pkl'
 model_path = 'https://tfhub.dev/deepmind/enformer/1'
@@ -163,28 +171,122 @@ def variant_centered_sequences(vcf_file, sequence_length, gzipped=False,
                             'ref': variant.ref,
                             'alt': variant.alt}}
 
+
 def plot_tracks(tracks, interval, height=1.5):
-  fig, axes = plt.subplots(len(tracks), 1, figsize=(20, height * len(tracks)), sharex=True)
-  for ax, (title, y) in zip(axes, tracks.items()):
-    ax.fill_between(np.linspace(interval.start, interval.end, num=len(y)), y)
-    ax.set_title(title)
-    sns.despine(top=True, right=True, bottom=True)
-  ax.set_xlabel(str(interval))
-  plt.tight_layout()
-  plt.savefig("enf_test.png")
-  plt.close(fig)
+    fig, axes = plt.subplots(len(tracks), 1, figsize=(20, height * len(tracks)), sharex=True)
+    for ax, (title, y) in zip(axes, tracks.items()):
+        ax.fill_between(np.linspace(interval.start, interval.end, num=len(y)), y)
+        ax.set_title(title)
+        sns.despine(top=True, right=True, bottom=True)
+    ax.set_xlabel(str(interval))
+    plt.tight_layout()
+    plt.savefig("enf_test.png")
+    plt.close(fig)
+
 
 model = Enformer(model_path)
 
 fasta_extractor = FastaStringExtractor(fasta_file)
 
-target_interval = kipoiseq.Interval('chr11', 35_082_742, 35_197_430)  # @param
+script_folder = pathlib.Path(__file__).parent.resolve()
+folders = open(str(script_folder) + "/../data_dirs").read().strip().split("\n")
+os.chdir(folders[0])
 
-sequence_one_hot = one_hot_encode(fasta_extractor.extract(target_interval.resize(SEQUENCE_LENGTH)))
-predictions = model.predict_on_batch(sequence_one_hot[np.newaxis])['human'][0]
+# tracks = {'DNASE:CD14-positive monocyte female': predictions[:, 41],
+#           'DNASE:keratinocyte female': predictions[:, 42],
+#           'CHIP:H3K27ac:keratinocyte female': predictions[:, 706],
+#           'CAGE:Keratinocyte - epidermal': np.log10(1 + predictions[:, 4799])}
+# plot_tracks(tracks, target_interval)
+gene_tss = pd.read_csv("data/enformer/enformer_test_tss_less.bed", sep="\t", index_col=False,
+                       names=["chr", "start", "end", "type"])
 
-tracks = {'DNASE:CD14-positive monocyte female': predictions[:, 41],
-          'DNASE:keratinocyte female': predictions[:, 42],
-          'CHIP:H3K27ac:keratinocyte female': predictions[:, 706],
-          'CAGE:Keratinocyte - epidermal': np.log10(1 + predictions[:, 4799])}
-plot_tracks(tracks, target_interval)
+gene_tss = gene_tss.head(16)
+# eval_tracks = pd.read_csv("data/eval_tracks.tsv", sep=",", header=None)[0].tolist()
+eval_tracks = df_targets[df_targets['description'].str.contains("CAGE")]['identifier'].tolist()
+# extract from enformer targets identifier where row contains cage
+# full_name = pickle.load(open(f"pickle/full_name.p", "rb"))
+full_name = {}
+tracks_folder = "/media/user/EE3C38483C380DD9/tracks/"
+for filename in os.listdir(tracks_folder):
+    for track in eval_tracks:
+        if track in filename:
+            size = os.path.getsize(tracks_folder + filename)
+            if size > 2 * 512000:
+                full_name[track] = filename
+            else:
+                eval_tracks.remove(track)
+            break
+# pickle.dump(full_name, open(f"pickle/full_name.p", "wb"), protocol=pickle.HIGHEST_PROTOCOL)
+# np.savetxt("data/eval_tracks.tsv", eval_tracks, delimiter="\t", fmt='% s')
+print(f"Eval tracks {len(eval_tracks)}")
+
+# track_ind = pickle.load(open(f"pickle/track_ind.p", "rb"))
+track_ind = {}
+for j, track in enumerate(eval_tracks):
+    track_ind[track] = df_targets[df_targets['identifier'].str.contains(track)].index
+# pickle.dump(track_ind, open(f"pickle/track_ind.p", "wb"), protocol=pickle.HIGHEST_PROTOCOL)
+
+pred_matrix = np.zeros((len(eval_tracks), len(gene_tss)))
+
+batch = []
+print("Predicting")
+gene_index = 0
+for index, row in gene_tss.iterrows():
+    target_interval = kipoiseq.Interval(row["chr"], row["start"], row["end"])
+    sequence_one_hot = one_hot_encode(fasta_extractor.extract(target_interval.resize(SEQUENCE_LENGTH)))
+    batch.append(sequence_one_hot)
+    if len(batch) > 3 or index == len(gene_tss) - 1:
+        predictions = model.predict_on_batch(batch)['human']
+        for p in predictions:
+            for j, track in enumerate(eval_tracks):
+                t = track_ind[track]
+                gene_expression = p[446, t] + p[447, t] + p[448, t]
+                pred_matrix[j, gene_index] = gene_expression
+            gene_index += 1
+        batch = []
+        print(index, end=" ")
+print("")
+
+# np.savetxt("enformer.tsv", pred_matrix, delimiter="\t")
+
+gt_matrix = np.zeros((len(eval_tracks), len(gene_tss)))
+print("Loading GT")
+for i, track in enumerate(eval_tracks):
+    if i % 50 == 0:
+        gc.collect()
+        print(i, end=" ")
+    dtypes = {"chr": str, "start": int, "end": int, "score": float}
+    df = pd.read_csv(tracks_folder + full_name[track], delim_whitespace=True, names=["chr", "start", "end", "score"],
+                     dtype=dtypes, header=None, index_col=False)
+    for index, row in gene_tss.iterrows():
+        starts = [row["start"] - row["start"] % 100,
+                  row["start"] - row["start"] % 100 - 100,
+                  row["start"] - row["start"] % 100 + 100]
+        vals = df[(df["chr"] == row["chr"]) & (df["start"].isin(starts))]["score"].tolist()
+        sum = 0
+        if len(vals) > 0:
+            for v in vals:
+                sum += np.log10(v)
+        gt_matrix[i, index] = sum
+
+print("")
+corrs = []
+for i in range(len(eval_tracks)):
+    a = pred_matrix[i, :]
+    b = gt_matrix[i, :]
+    corr = stats.spearmanr(a, b)[0]
+    corrs.append(corr)
+
+print(f"Across tracks {np.mean(np.nan_to_num(corrs))}")
+
+corrs = []
+for i in range(len(gene_tss)):
+    a = pred_matrix[:, i]
+    b = gt_matrix[:, i]
+    corr = stats.spearmanr(a, b)[0]
+    corrs.append(corr)
+
+print(f"Across genes {np.mean(np.nan_to_num(corrs))}")
+
+
+

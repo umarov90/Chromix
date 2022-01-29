@@ -4,21 +4,21 @@ from tensorflow.keras.layers import LeakyReLU, LayerNormalization, MultiHeadAtte
 from tensorflow.keras.models import Model
 import tensorflow as tf
 
-projection_dim = 128
-# dropout_rate = 0.2
+projection_dim = 128 # 512
+dropout_rate = 0.0 # 0.1
 num_heads = 8
 transformer_units = [
     projection_dim * 2,
     projection_dim,
 ]
-transformer_layers = 8
+transformer_layers = 6
 
 
 def hic_model(input_size, num_features, num_regions, cell_num, hic_num, hic_size):
     input_shape = (input_size, num_features)
     inputs = Input(shape=input_shape, dtype=tf.float32)
     x = inputs
-    # x = Dropout(dropout_rate, input_shape=input_shape)(x)
+    x = Dropout(dropout_rate, noise_shape=(None, input_size, 1))(x)
     resnet_output = resnet(x, 7, 1)
     our_resnet = Model(inputs, resnet_output, name="our_resnet")
     num_patches = 938
@@ -88,7 +88,6 @@ def small_model(input_size, num_features, num_regions, cell_num):
     input_shape = (input_size, num_features)
     inputs = Input(shape=input_shape, dtype=tf.float32)
     x = inputs
-    # x = Dropout(dropout_rate, input_shape=input_shape)(x)
     resnet_output = resnet(x, 7, 1)
     our_resnet = Model(inputs, resnet_output, name="our_resnet")
     num_patches = 938
@@ -102,14 +101,14 @@ def small_model(input_size, num_features, num_regions, cell_num):
         x1 = LayerNormalization(epsilon=1e-6, name="ln_" + str(i) + "_1")(encoded_patches)
         # Create a multi-head attention layer.
         attention_output = MultiHeadAttention(
-            num_heads=num_heads, key_dim=projection_dim, name="mha_" + str(i)
+            num_heads=num_heads, key_dim=projection_dim, dropout=dropout_rate, name="mha_" + str(i)
         )(x1, x1)
         # Skip connection 1.
         x2 = Add()([attention_output, encoded_patches])
         # Layer normalization 2.
         x3 = LayerNormalization(epsilon=1e-6, name="ln_" + str(i) + "_2")(x2)
         # MLP.
-        x3 = mlp(x3, hidden_units=transformer_units, name="mlp_" + str(i))
+        x3 = mlp(x3, hidden_units=transformer_units, dropout_rate=dropout_rate, name="mlp_" + str(i))
         # Skip connection 2.
         encoded_patches = Add()([x3, x2])
 
@@ -126,7 +125,7 @@ def small_model(input_size, num_features, num_regions, cell_num):
     x = Dense(num_regions, activation=tf.nn.gelu, name="regions_projection")(x)
     x = tf.transpose(x, [0, 2, 1])
 
-    # x = Dropout(dropout_rate, input_shape=(num_regions, projection_dim))(x)
+    x = Dropout(dropout_rate, input_shape=(num_regions, projection_dim))(x)
 
     x = Conv1D(2048, kernel_size=1, strides=1, name="pointwise", activation=tf.nn.gelu)(x)
     outputs = Conv1D(cell_num, kernel_size=1, strides=1, name="last_conv1d")(x)
@@ -190,7 +189,7 @@ def resnet(input_x, num_stages, num_res_blocks):
                              num_filters=num_filters,
                              strides=strides,
                              name=cname + "1_")
-
+            y = Dropout(dropout_rate)(y)
             y = resnet_layer(inputs=y,
                              num_filters=num_filters,
                              name=cname + "2_")
@@ -213,14 +212,14 @@ def resnet(input_x, num_stages, num_res_blocks):
     return x
 
 
-def mlp(x, hidden_units, name): # dropout_rate,
+def mlp(x, hidden_units, dropout_rate, name):
     for units in hidden_units:
         x = Conv1D(units,
                    kernel_size=1,
                    strides=1,
                    activation=tf.nn.gelu,
                    name=name + str(units))(x)
-        # x = Dropout(dropout_rate)(x)
+        x = Dropout(dropout_rate)(x)
     return x
 
 
