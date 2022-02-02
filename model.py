@@ -4,14 +4,15 @@ from tensorflow.keras.layers import LeakyReLU, LayerNormalization, MultiHeadAtte
 from tensorflow.keras.models import Model
 import tensorflow as tf
 
-projection_dim = 128 # 512
-dropout_rate = 0.0 # 0.1
+projection_dim = 128
+dropout_rate = 0.0
 num_heads = 8
 transformer_units = [
     projection_dim * 2,
     projection_dim,
 ]
 transformer_layers = 6
+leaky_alpha = 0.2
 
 
 def hic_model(input_size, num_features, num_regions, cell_num, hic_num, hic_size):
@@ -131,7 +132,7 @@ def small_model(input_size, num_features, num_regions, cell_num):
     outputs = Conv1D(cell_num, kernel_size=1, strides=1, name="last_conv1d")(x)
     outputs = tf.transpose(outputs, [0, 2, 1])
     print(outputs)
-    head_output = LeakyReLU(alpha=0.1, name="model_final_output", dtype='float32')(outputs)
+    head_output = outputs
     our_head = Model(head_input, head_output, name="our_head")
     print(our_head)
 
@@ -157,7 +158,7 @@ def resnet_layer(inputs,
 
     x = inputs
     if activation:
-        x = LeakyReLU(alpha=0.1, name=name + "act")(x)
+        x = LeakyReLU(alpha=leaky_alpha, name=name + "act")(x)
     if batch_normalization:
         x = BatchNormalization(name=name + "bn")(x)
     x = conv(x)

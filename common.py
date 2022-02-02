@@ -91,15 +91,15 @@ def rev_comp(s):
     vals = []
     for v in reversed_arr:
         if v[0]:
-            vals.append([False, False, False, True])
+            vals.append([False, False, False, True, v[4]])
         elif v[1]:
-            vals.append([False, False, True, False])
+            vals.append([False, False, True, False, v[4]])
         elif v[2]:
-            vals.append([False, True, False, False])
+            vals.append([False, True, False, False, v[4]])
         elif v[3]:
-            vals.append([True, False, False, False])
+            vals.append([True, False, False, False, v[4]])
         else:
-            vals.append([False, False, False, False])
+            vals.append([False, False, False, False, v[4]])
     return np.array(vals, dtype=bool)
 
 

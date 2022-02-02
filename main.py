@@ -156,6 +156,7 @@ def run_epoch(last_proc, fit_epochs, head_id):
     gc.enable()
     # print("")
     # print(np.asarray(output_scores).shape)
+    half = len(input_sequences) // 2
     output_hic = []
     # print(f"Shifts {len(shifts)}")
     # print(datetime.now().strftime('[%H:%M:%S] ') + "Hi-C")
@@ -187,13 +188,15 @@ def run_epoch(last_proc, fit_epochs, head_id):
             l2 = l2[lix]
             hic_score = hic_score[lix]
             hic_mat[l1, l2] += hic_score
-            # hic_mat = hic_mat + hic_mat.T - np.diag(np.diag(hic_mat))
+            hic_mat = hic_mat + hic_mat.T - np.diag(np.diag(hic_mat))
             # hic_mat = gaussian_filter(hic_mat, sigma=1)
-            # if i == 0:
-            #     print(f"original {hic_mat.shape}")
+            if ni < half:
+                hic_mat = np.rot90(hic_mat, k=2)
+            if i == 0:
+                print(f"original {hic_mat.shape}")
             hic_mat = hic_mat[np.triu_indices_from(hic_mat, k=1)]
-            # if i == 0:
-            #     print(f"triu {hic_mat.shape}")
+            if i == 0:
+                print(f"triu {hic_mat.shape}")
             # for hs in range(hic_track_size):
             #     hic_slice = hic_mat[hs * num_regions: (hs + 1) * num_regions].copy()
             # if len(hic_slice) != num_regions:
@@ -215,6 +218,14 @@ def run_epoch(last_proc, fit_epochs, head_id):
         print("nan in the output")
         exit()
     input_sequences = np.asarray(input_sequences, dtype=bool)
+
+    with mp.Pool(8) as pool:
+        rc_arr = pool.map(change_seq, input_sequences[:half])
+    input_sequences[:half] = rc_arr
+
+    for i in range(half):
+        output_scores[i] = np.flip(output_scores[i], axis=1)
+
     gc.collect()
     print_memory()
     for name, size in sorted(((name, sys.getsizeof(value)) for name, value in locals().items()),
@@ -424,6 +435,9 @@ def check_perf(mp_q, head_id):
 def print_memory():
     mem = psutil.virtual_memory()
     print(f"used: {cm.get_human_readable(mem.used)} available: {cm.get_human_readable(mem.available)}")
+
+def change_seq(x):
+    return cm.rev_comp(x)
 
 
 last_proc = None
