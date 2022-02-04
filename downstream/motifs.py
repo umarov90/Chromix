@@ -14,6 +14,8 @@ from main_params import MainParams
 os.environ["CUDA_VISIBLE_DEVICES"] = '-1'
 
 MAX_TRACKS = 2
+MAX_PROMOTERS = 2
+OUT_DIR = "temp/"
 
 
 def find_nearest(array, value):
@@ -46,16 +48,19 @@ with strategy.scope():
     our_model.get_layer("our_head").set_weights(joblib.load(model_folder + p.model_name + "_head_" + str(head_id)))
 
 test_seq = joblib.load(f"pickle/chr1_seq.gz")
-subheaders = []
+meme_motifs = []
 tracks_count = 0
 for track_to_use, track in enumerate(head_tracks):
     type = track[:track.find(".")]
     if type != "scEnd5":
         continue
+    print(track)
     picked_sub_seqs = []
     picked_sub_seqs_scores = []
     for si, seq in enumerate(test_seq):
-        if si > 1:
+        if si % 10 == 0:
+            print(si, end=" ")
+        if si > MAX_PROMOTERS:
             break
         # attribution
         baseline = tf.zeros(shape=(p.input_size, p.num_features))
@@ -109,18 +114,20 @@ for track_to_use, track in enumerate(head_tracks):
         crp_logo.ax.set_ylabel("Y", labelpad=-1)
         crp_logo.ax.xaxis.set_ticks_position('none')
         crp_logo.ax.xaxis.set_tick_params(pad=-1)
-        plt.savefig(f"temp/logo{ci}_{np.mean(cluster_scores[ci])}.png")
+        plt.savefig(f"{OUT_DIR}{track}_logo{ci + 1}_{np.mean(cluster_scores[ci])}.png")
         plt.close(fig)
-        subheaders.append(f"MOTIF crp\nletter-probability matrix: alength= 4 w= 10 nsites= {len(cluster_scores[ci])} E= {np.mean(cluster_scores[ci])}")
+        meme_motifs.append(f"MOTIF {ci + 1}\nletter-probability matrix:"
+                           f" alength= 4 w= 10 nsites= {len(cluster_scores[ci])}"
+                           f" E= {np.mean(cluster_scores[ci])}\n{cluster_df.to_string(header=False, index=False)}")
 
-    header = "MEME version 4\nALPHABET= ACGT\nstrands: + -\nBackground letter frequencies\nA 0.25 C 0.25 G 0.25 T 0.25\n"
+    header = "MEME version 4\n\nALPHABET= ACGT\n\nstrands: + -\n\nBackground letter frequencies\nA 0.25 C 0.25 G 0.25 T 0.25\n\n"
 
-    with open("temp/motifs.meme", "w") as f:
+    with open(f"{OUT_DIR}{track}_motifs.meme", "w") as f:
         f.write(header)
-        for s in subheaders:
+        for s in meme_motifs:
             f.write(s)
-            f.write("\n")
-
+            f.write("\n\n")
+    print("")
     tracks_count += 1
     if tracks_count > MAX_TRACKS:
         break
