@@ -11,7 +11,7 @@ transformer_units = [
     projection_dim * 2,
     projection_dim,
 ]
-transformer_layers = 6
+transformer_layers = 12
 leaky_alpha = 0.2
 
 

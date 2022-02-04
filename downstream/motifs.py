@@ -22,7 +22,7 @@ def find_nearest(array, value):
 
 p = MainParams()
 script_folder = pathlib.Path(__file__).parent.resolve()
-folders = open(str(script_folder) + "/data_dirs").read().strip().split("\n")
+folders = open(str(script_folder) + "/../data_dirs").read().strip().split("\n")
 os.chdir(folders[0])
 parsed_tracks_folder = folders[1]
 parsed_hic_folder = folders[2]
@@ -49,8 +49,9 @@ for track_to_use, track in enumerate(head_tracks):
     if type != "scEnd5":
         continue
     picked_sub_seqs = []
+    picked_sub_seqs_scores = []
     for si, seq in enumerate(test_seq):
-        if si > 100:
+        if si > 1:
             break
         # attribution
         baseline = tf.zeros(shape=(p.input_size, p.num_features))
@@ -63,14 +64,9 @@ for track_to_use, track in enumerate(head_tracks):
         attribution_mask = tf.squeeze(ig_attributions).numpy()
         attribution_mask = (attribution_mask - np.min(attribution_mask)) / (
                 np.max(attribution_mask) - np.min(attribution_mask))
-        attribution_mask = np.mean(attribution_mask, axis=-1, keepdims=True)
-        # attribution_mask[int(input_size / 2) - 1000 : int(input_size / 2) + 1000, :] = np.nan
-        print(attribution_mask.shape)
-        start = int(p.input_size / 2) - 1000
-        attribution_mask = attribution_mask[start: start + 1000, :4]
-        print(attribution_mask.shape)
-        attribution_mask = np.transpose(attribution_mask)
-        print(attribution_mask.shape)
+        attribution_mask = np.sum(attribution_mask[:, :4], axis=-1)
+        start = int(p.input_size / 2) - 500
+        attribution_mask = attribution_mask[start: start + 1000]
         top_n = 50
         top = attribution_mask.argsort()[-top_n:][::-1]
         picked = []
@@ -79,17 +75,23 @@ for track_to_use, track in enumerate(head_tracks):
                 nv = find_nearest(picked, v)
                 if abs(v - nv) < 10:
                     continue
-                else:
-                    picked.append(v)
-            picked_sub_seqs.append(seq[start + v - 5: start + v + 5])
+            picked_sub_seqs.append(seq[start + v - 5: start + v + 5][:, :4].flatten())
+            picked_sub_seqs_scores.append(attribution_mask[v])
+            picked.append(v)
+            if len(picked) >= 5:
+                break
     picked_sub_seqs = np.asarray(picked_sub_seqs)
-    kmeans = KMeans(n_clusters=40, random_state=0).fit(picked_sub_seqs)
+    k = 2
+    cluster_scores = {}
+    kmeans = KMeans(n_clusters=2, random_state=0).fit(picked_sub_seqs)
+    for i in range(len(picked_sub_seqs)):
+        cluster_scores.setdefault(kmeans.labels_[i], []).append(picked_sub_seqs_scores[i])
     for ci, cluster in enumerate(kmeans.cluster_centers_):
+        cluster = cluster.reshape((-1, 4))
         fig, ax = plt.subplots(figsize=(16, 6))
-        crp_df = -logomaker.get_example_matrix('crp_energy_matrix',
-                                               print_description=False)
+        cluster_df = pd.DataFrame({'A': cluster[:, 0], 'C': cluster[:, 1], 'G': cluster[:, 2], 'T': cluster[:, 3]})
         # create Logo object
-        crp_logo = logomaker.Logo(crp_df,
+        crp_logo = logomaker.Logo(cluster_df,
                                   shade_below=.5,
                                   fade_below=.5,
                                   font_name='Arial Rounded MT Bold')
@@ -103,5 +105,5 @@ for track_to_use, track in enumerate(head_tracks):
         crp_logo.ax.set_ylabel("Y", labelpad=-1)
         crp_logo.ax.xaxis.set_ticks_position('none')
         crp_logo.ax.xaxis.set_tick_params(pad=-1)
-        plt.savefig(f"temp/logo{ci}.png")
+        plt.savefig(f"temp/logo{ci}_{np.mean(cluster_scores[ci])}.png")
         plt.close(fig)
