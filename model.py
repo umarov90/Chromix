@@ -50,11 +50,11 @@ def hic_model(input_size, num_features, num_regions, cell_num, hic_num, hic_size
     our_interactions_layer = Model(interactions_layer_input, interactions_layer_output, name="our_transformer")
 
     hic_input = Input(shape=(num_patches, projection_dim))
-    hx = Conv1D(32, kernel_size=1, strides=1, name="pointwise_hic", activation=tf.nn.gelu)(hic_input)
+    hx = Conv1D(32, kernel_size=1, strides=1, name="pointwise_hic", activation=LeakyReLU(alpha=leaky_alpha))(hic_input)
     hx = Flatten()(hx)
     h_layers = []
     for h in range(hic_num):
-        h_layers.append(Dense(hic_size, activation=tf.keras.activations.softplus)(hx))
+        h_layers.append(Dense(hic_size)(hx))
     hic_output = tf.stack(h_layers, axis=1)
     print(hic_output)
     hic_act = LeakyReLU(alpha=0.1, name="hic_output", dtype='float32')(hic_output)
@@ -65,12 +65,12 @@ def hic_model(input_size, num_features, num_regions, cell_num, hic_num, hic_size
 
     x = tf.transpose(x, [0, 2, 1])
     # x = Conv1D(num_regions, kernel_size=1, strides=1, use_bias=False, name="regions_projection")(x)
-    x = Dense(num_regions, activation=tf.nn.gelu, name="regions_projection")(x)
+    x = Dense(num_regions, activation=LeakyReLU(alpha=leaky_alpha), name="regions_projection")(x)
     x = tf.transpose(x, [0, 2, 1])
 
     # x = Dropout(dropout_rate, input_shape=(num_regions, projection_dim))(x)
 
-    x = Conv1D(2048, kernel_size=1, strides=1, name="pointwise", activation=tf.nn.gelu)(x)
+    x = Conv1D(2048, kernel_size=1, strides=1, name="pointwise", activation=LeakyReLU(alpha=leaky_alpha))(x)
     outputs = Conv1D(cell_num, kernel_size=1, strides=1, name="last_conv1d")(x)
     outputs = tf.transpose(outputs, [0, 2, 1])
     print(outputs)
@@ -123,12 +123,12 @@ def small_model(input_size, num_features, num_regions, cell_num):
 
     x = tf.transpose(x, [0, 2, 1])
     # x = Conv1D(num_regions, kernel_size=1, strides=1, use_bias=False, name="regions_projection")(x)
-    x = Dense(num_regions, activation=tf.nn.gelu, name="regions_projection")(x)
+    x = Dense(num_regions, activation=LeakyReLU(alpha=leaky_alpha), name="regions_projection")(x)
     x = tf.transpose(x, [0, 2, 1])
 
     x = Dropout(dropout_rate, input_shape=(num_regions, projection_dim))(x)
 
-    x = Conv1D(2048, kernel_size=1, strides=1, name="pointwise", activation=tf.nn.gelu)(x)
+    x = Conv1D(2048, kernel_size=1, strides=1, name="pointwise", activation=LeakyReLU(alpha=leaky_alpha))(x)
     outputs = Conv1D(cell_num, kernel_size=1, strides=1, name="last_conv1d")(x)
     outputs = tf.transpose(outputs, [0, 2, 1])
     print(outputs)
@@ -218,7 +218,7 @@ def mlp(x, hidden_units, dropout_rate, name):
         x = Conv1D(units,
                    kernel_size=1,
                    strides=1,
-                   activation=tf.nn.gelu,
+                   activation=LeakyReLU(alpha=leaky_alpha),
                    name=name + str(units))(x)
         x = Dropout(dropout_rate)(x)
     return x
@@ -260,7 +260,7 @@ class PatchEncoder(Layer):
         super(PatchEncoder, self).__init__(**kwargs)
         self.num_patches = num_patches
         self.projection = Conv1D(projection_dim, kernel_size=1, strides=1,
-                                 activation=tf.nn.gelu, name="projection_patch_encoder")
+                                 activation=LeakyReLU(alpha=leaky_alpha), name="projection_patch_encoder")
         self.projection_dim = projection_dim
         self.position_embedding = Embedding(input_dim=num_patches, output_dim=projection_dim, name="pos_embedding")
 

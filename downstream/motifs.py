@@ -13,6 +13,8 @@ from sklearn.cluster import KMeans
 from main_params import MainParams
 os.environ["CUDA_VISIBLE_DEVICES"] = '-1'
 
+MAX_TRACKS = 2
+
 
 def find_nearest(array, value):
     array = np.asarray(array)
@@ -44,6 +46,8 @@ with strategy.scope():
     our_model.get_layer("our_head").set_weights(joblib.load(model_folder + p.model_name + "_head_" + str(head_id)))
 
 test_seq = joblib.load(f"pickle/chr1_seq.gz")
+subheaders = []
+tracks_count = 0
 for track_to_use, track in enumerate(head_tracks):
     type = track[:track.find(".")]
     if type != "scEnd5":
@@ -107,3 +111,16 @@ for track_to_use, track in enumerate(head_tracks):
         crp_logo.ax.xaxis.set_tick_params(pad=-1)
         plt.savefig(f"temp/logo{ci}_{np.mean(cluster_scores[ci])}.png")
         plt.close(fig)
+        subheaders.append(f"MOTIF crp\nletter-probability matrix: alength= 4 w= 10 nsites= {len(cluster_scores[ci])} E= {np.mean(cluster_scores[ci])}")
+
+    header = "MEME version 4\nALPHABET= ACGT\nstrands: + -\nBackground letter frequencies\nA 0.25 C 0.25 G 0.25 T 0.25\n"
+
+    with open("temp/motifs.meme", "w") as f:
+        f.write(header)
+        for s in subheaders:
+            f.write(s)
+            f.write("\n")
+
+    tracks_count += 1
+    if tracks_count > MAX_TRACKS:
+        break
