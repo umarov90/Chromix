@@ -8,7 +8,7 @@ projection_dim = 128
 dropout_rate = 0.0
 num_heads = 8
 transformer_units = [
-    projection_dim * 2,
+    projection_dim * 4,
     projection_dim,
 ]
 transformer_layers = 12
@@ -50,32 +50,30 @@ def hic_model(input_size, num_features, num_regions, cell_num, hic_num, hic_size
     our_interactions_layer = Model(interactions_layer_input, interactions_layer_output, name="our_transformer")
 
     hic_input = Input(shape=(num_patches, projection_dim))
-    hx = Conv1D(32, kernel_size=1, strides=1, name="pointwise_hic", activation=LeakyReLU(alpha=leaky_alpha))(hic_input)
+    hx = Conv1D(32, kernel_size=1, strides=1, name="pointwise_hic", activation=tf.nn.gelu)(hic_input)
     hx = Flatten()(hx)
     h_layers = []
     for h in range(hic_num):
         h_layers.append(Dense(hic_size)(hx))
     hic_output = tf.stack(h_layers, axis=1)
     print(hic_output)
-    hic_act = LeakyReLU(alpha=0.1, name="hic_output", dtype='float32')(hic_output)
-    our_hic = Model(hic_input, hic_act, name="our_hic")
+    our_hic = Model(hic_input, hic_output, name="our_hic")
 
     head_input = Input(shape=(num_patches, projection_dim))
     x = head_input
 
     x = tf.transpose(x, [0, 2, 1])
     # x = Conv1D(num_regions, kernel_size=1, strides=1, use_bias=False, name="regions_projection")(x)
-    x = Dense(num_regions, activation=LeakyReLU(alpha=leaky_alpha), name="regions_projection")(x)
+    x = Dense(num_regions, activation=tf.nn.gelu, name="regions_projection")(x)
     x = tf.transpose(x, [0, 2, 1])
 
     # x = Dropout(dropout_rate, input_shape=(num_regions, projection_dim))(x)
 
-    x = Conv1D(2048, kernel_size=1, strides=1, name="pointwise", activation=LeakyReLU(alpha=leaky_alpha))(x)
+    x = Conv1D(2048, kernel_size=1, strides=1, name="pointwise", activation=tf.nn.gelu)(x)
     outputs = Conv1D(cell_num, kernel_size=1, strides=1, name="last_conv1d")(x)
     outputs = tf.transpose(outputs, [0, 2, 1])
     print(outputs)
-    head_output = LeakyReLU(alpha=0.1, name="model_final_output", dtype='float32')(outputs)
-    our_head = Model(head_input, head_output, name="our_head")
+    our_head = Model(head_input, outputs, name="our_head")
     print(our_head)
 
     our_model = Model(inputs, [our_head(our_interactions_layer(our_resnet(inputs))),
@@ -123,12 +121,12 @@ def small_model(input_size, num_features, num_regions, cell_num):
 
     x = tf.transpose(x, [0, 2, 1])
     # x = Conv1D(num_regions, kernel_size=1, strides=1, use_bias=False, name="regions_projection")(x)
-    x = Dense(num_regions, activation=LeakyReLU(alpha=leaky_alpha), name="regions_projection")(x)
+    x = Dense(num_regions, activation=tf.nn.gelu, name="regions_projection")(x)
     x = tf.transpose(x, [0, 2, 1])
 
     x = Dropout(dropout_rate, input_shape=(num_regions, projection_dim))(x)
 
-    x = Conv1D(2048, kernel_size=1, strides=1, name="pointwise", activation=LeakyReLU(alpha=leaky_alpha))(x)
+    x = Conv1D(2048, kernel_size=1, strides=1, name="pointwise", activation=tf.nn.gelu)(x)
     outputs = Conv1D(cell_num, kernel_size=1, strides=1, name="last_conv1d")(x)
     outputs = tf.transpose(outputs, [0, 2, 1])
     print(outputs)
@@ -207,7 +205,7 @@ def resnet(input_x, num_stages, num_res_blocks):
             x = Add()([x, y])
 
     # final activation and batch normalization
-    x = LeakyReLU(alpha=0.1, name="res_act_final")(x)
+    x = Activation(tf.nn.gelu, name="res_act_final")(x)
     x = BatchNormalization(name="res_bn_final")(x)
 
     return x
@@ -218,7 +216,7 @@ def mlp(x, hidden_units, dropout_rate, name):
         x = Conv1D(units,
                    kernel_size=1,
                    strides=1,
-                   activation=LeakyReLU(alpha=leaky_alpha),
+                   activation=tf.nn.gelu,
                    name=name + str(units))(x)
         x = Dropout(dropout_rate)(x)
     return x
@@ -260,7 +258,7 @@ class PatchEncoder(Layer):
         super(PatchEncoder, self).__init__(**kwargs)
         self.num_patches = num_patches
         self.projection = Conv1D(projection_dim, kernel_size=1, strides=1,
-                                 activation=LeakyReLU(alpha=leaky_alpha), name="projection_patch_encoder")
+                                 activation=tf.nn.gelu, name="projection_patch_encoder")
         self.projection_dim = projection_dim
         self.position_embedding = Embedding(input_dim=num_patches, output_dim=projection_dim, name="pos_embedding")
 

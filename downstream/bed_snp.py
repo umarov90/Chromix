@@ -17,6 +17,7 @@ os.environ["CUDA_VISIBLE_DEVICES"] = '-1'
 
 TRACK_NUM = 40
 DISEASE_NUM = 200
+BED_DIR = "/home/user/data/hg38_bed/"
 
 
 def find_nearest(array, value):
@@ -43,15 +44,14 @@ with strategy.scope():
                                            custom_objects={'PatchEncoder': mo.PatchEncoder})
     our_model.get_layer("our_head").set_weights(joblib.load(model_folder + p.model_name + "_head_" + str(head_id)))
 
-bed_dir = "/home/user/data/hg38_bed/"
 track_names = []
 disease_names = []
 heatmap_matrix = []
-for i, filename in enumerate(sorted(os.listdir(bed_dir))):
+for i, filename in enumerate(sorted(os.listdir(BED_DIR))):
     disease_name = filename[cm.find_nth(filename, '.', 2) + 1: cm.find_nth(filename, '.', 3)]
     disease_names.append(disease_name)
-    snp_pos = pd.read_csv(bed_dir + filename, sep="\t", index_col=False,
-                                   names=["chrom", "start", "end", "info", "score"])
+    snp_pos = pd.read_csv(BED_DIR + filename, sep="\t", index_col=False,
+                          names=["chrom", "start", "end", "info", "score"])
 
     seqs1 = []
     seqs2 = []

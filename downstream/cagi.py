@@ -1,24 +1,18 @@
 import os
 import re
-
+import pathlib
 import joblib
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 import logging
 logging.getLogger("tensorflow").setLevel(logging.ERROR)
 import tensorflow as tf
-import gc
-import random
 import pandas as pd
 import math
 import numpy as np
 import common as cm
-from pathlib import Path
-import pickle
 import matplotlib
 import model as mo
-import matplotlib.pyplot as plt
-import seaborn as sns
-from datetime import datetime
+import main_params
 matplotlib.use("agg")
 
 
@@ -38,13 +32,21 @@ genes = genes[genes.type == "gene"]
 genes["gene_name"] = genes["info"].apply(lambda x: re.search('gene_name "(.*)"; level', x).group(1)).copy()
 genes.drop(genes.columns.difference(['chr', 'start', "end", "gene_name"]), 1, inplace=True)
 
-if Path("pickle/genome.p").is_file():
-    genome = pickle.load(open("pickle/genome.p", "rb"))
-else:
-    genome, ga = cm.parse_genome("hg38.fa", 1000)
-    pickle.dump(genome, open("pickle/genome.p", "wb"), protocol=pickle.HIGHEST_PROTOCOL)
+p = main_params.MainParams()
+script_folder = pathlib.Path(__file__).parent.resolve()
+folders = open(str(script_folder) + "/../data_dirs").read().strip().split("\n")
+os.chdir(folders[0])
+model_folder = folders[3]
+heads = joblib.load("pickle/heads.gz")
+head_id = 0
+head_tracks = heads[head_id]
+one_hot = joblib.load("pickle/one_hot.gz")
 
-our_model = tf.keras.models.load_model(model_path, custom_objects={'PatchEncoder': mo.PatchEncoder})
+strategy = tf.distribute.MultiWorkerMirroredStrategy()
+with strategy.scope():
+    our_model = tf.keras.models.load_model(model_folder + p.model_name,
+                                           custom_objects={'PatchEncoder': mo.PatchEncoder})
+    our_model.get_layer("our_head").set_weights(joblib.load(model_folder + p.model_name + "_head_" + str(head_id)))
 
 
 def calculate_score(chrn, pos, ref, alt, element):
@@ -52,7 +54,7 @@ def calculate_score(chrn, pos, ref, alt, element):
         ind_alt = cm.nuc_to_ind(alt)
         gene = genes.loc[genes['gene_name'] == element]["start"].values[0]
         start = gene - half_size
-        seq = genome[chrn][gene - half_size, gene + half_size + 1]
+        seq = one_hot[chrn][gene - half_size, gene + half_size + 1]
         pos = pos - start
         a1 = our_model.predict(seq[:-1])
         if ind_alt != -1:
