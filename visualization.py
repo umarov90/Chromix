@@ -14,17 +14,16 @@ import matplotlib.ticker as ticker
 import matplotlib.gridspec as gridspec
 
 
-def draw_tracks(track_names, track_perf, predictions_full, eval_gt_full,
-                test_seq, bin_size, num_regions, eval_infos, hic_keys,
-                hic_track_size, predictions_hic, hic_output,
-                num_hic_bins, fig_path, half_size):
+def draw_tracks(p, track_names, predictions_full, eval_gt_full,
+                test_seq, infos, hic_keys,
+                predictions_hic, hic_output, fig_path):
     mats = {}
     for h in range(len(hic_keys)):
-        it = h * hic_track_size
-        it2 = h * hic_track_size
+        it = h * p.hic_track_size
+        it2 = h * p.hic_track_size
         for i in range(len(predictions_hic)):
-            mat_gt = recover_shape(hic_output[i][it:it + hic_track_size], num_hic_bins)
-            mat_pred = recover_shape(predictions_hic[i][it2:it2 + hic_track_size], num_hic_bins)
+            mat_gt = recover_shape(hic_output[i][it:it + p.hic_track_size], p.num_hic_bins)
+            mat_pred = recover_shape(predictions_hic[i][it2:it2 + p.hic_track_size], p.num_hic_bins)
             mats.setdefault(h, []).append([mat_gt, mat_pred])
 
     gene_info = pd.read_csv("data/hg38.GENCODEv38.pc_lnc.gene.info.tsv", sep="\t", index_col=False)
@@ -66,18 +65,18 @@ def draw_tracks(track_names, track_perf, predictions_full, eval_gt_full,
             tss_layer = test_seq[i][:, 4]
             tss_track = []
             tss_pos = []
-            for region in range(0, 2*half_size, bin_size):
-                if np.sum(tss_layer[region:region + bin_size]) > 0:
+            for region in range(0, 2*p.half_size, p.bin_size):
+                if np.sum(tss_layer[region:region + p.bin_size]) > 0:
                     tss_track.append(max_val)
-                    tss_pos.append(region / bin_size)
+                    tss_pos.append(region / p.bin_size)
                 else:
                     tss_track.append(0)
             tss_names = []
-            start = eval_infos[i][1] - half_size
-            end = eval_infos[i][1] + half_size + 1
-            chrom = eval_infos[i][0]
+            start = infos[i][1] - p.half_size
+            end = infos[i][1] + p.half_size + 1
+            chrom = infos[i][0]
             # df["geneName"][(df["chrom"] == chrom) & (df["C"] == 900) & (df["C"] == 900)]
-            for info in eval_infos:
+            for info in infos:
                 if start < info[1] < end:
                     tss_names.append(gene_info.loc[gene_info['geneID'] == info[2], 'geneName'].iloc[0])
                 # if start > info[1] + 105001:
@@ -110,9 +109,9 @@ def draw_tracks(track_names, track_perf, predictions_full, eval_gt_full,
             ax00.xaxis.set_major_locator(ticker.MultipleLocator(100))
             ax00.xaxis.set_major_formatter(ticker.ScalarFormatter())
             #####################################################
-            ax00.set_title(f"{eval_infos[i][0]}:{eval_infos[i][1] - half_size}-{eval_infos[i][1] + half_size + 1}")
+            ax00.set_title(f"{infos[i][0]}:{infos[i][1] - p.half_size}-{infos[i][1] + p.half_size + 1}")
             # fig.tight_layout()
-            plt.savefig(f"{fig_path}_{eval_infos[i][2]}_{track}.png")
+            plt.savefig(f"{fig_path}{infos[i][2]}_{track}.png")
             plt.close(fig)
         types.append(type)
         if len(types) == len(types_to_draw):

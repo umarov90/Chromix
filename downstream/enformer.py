@@ -205,7 +205,7 @@ model_name = "small.h5"
 # plot_tracks(tracks, target_interval)
 
 # enformer_test_tss TRY !!!!!!!!!!!!!!!!!!!!!
-gene_tss = pd.read_csv("data/enformer/enformer_test_tss_less.bed", sep="\t", index_col=False,
+gene_tss = pd.read_csv("data/enformer/enformer_gencode.bed", sep="\t", index_col=False,
                        names=["chr", "start", "end", "type"])
 
 # gene_tss = gene_tss.head(640)

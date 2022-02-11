@@ -144,10 +144,9 @@ def run_epoch(last_proc, fit_epochs, head_id):
             # buf.seek(0)
             parsed_track = loaded_tracks[key]
         else:
-            # print("should not happen!!!")
-            # parsed_track = joblib.load(parsed_tracks_folder + key)
-            with open(p.parsed_tracks_folder + key, 'rb') as fp:
-                parsed_track = pickle.load(fp)
+            parsed_track = joblib.load(p.parsed_tracks_folder + key)
+            # with open(p.parsed_tracks_folder + key, 'rb') as fp:
+            #     parsed_track = pickle.load(fp)
 
         for s in output_scores:
             s[i] = parsed_track[s[i][0]][s[i][1]:s[i][2]].copy()
@@ -213,7 +212,7 @@ def run_epoch(last_proc, fit_epochs, head_id):
     # print(datetime.now().strftime('[%H:%M:%S] ') + "Problems: " + str(err))
     gc.collect()
     print_memory()
-    output_scores = np.asarray(output_scores, dtype=np.float16)
+    output_scores = np.asarray(output_scores)
     if np.isnan(output_scores).any() or np.isinf(output_scores).any():
         print("nan in the output")
         exit()
@@ -278,7 +277,7 @@ def train_step(input_sequences, output_scores, output_hic, fit_epochs, head_id):
         del input_sequences
         del output_scores
         del output_hic
-        # gc.collect()
+        gc.collect()
         strategy = tf.distribute.MultiWorkerMirroredStrategy()
         # print(datetime.now().strftime('[%H:%M:%S] ') + "Loading the model")
         with strategy.scope():
@@ -436,6 +435,7 @@ def print_memory():
     mem = psutil.virtual_memory()
     print(f"used: {cm.get_human_readable(mem.used)} available: {cm.get_human_readable(mem.available)}")
 
+
 def change_seq(x):
     return cm.rev_comp(x)
 
@@ -520,8 +520,8 @@ if __name__ == '__main__':
         else:
             fit_epochs = 8
 
-        # check_perf(mp_q, 0)
-        # exit()
+        check_perf(mp_q, 0)
+        exit()
         last_proc = run_epoch(last_proc, fit_epochs, head_id)
         if current_epoch % 10 == 0 and current_epoch >= 20: # and current_epoch != 0:
             print("Eval epoch")

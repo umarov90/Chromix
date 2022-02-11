@@ -11,10 +11,11 @@ import attribution
 import logomaker
 from sklearn.cluster import KMeans
 from main_params import MainParams
-os.environ["CUDA_VISIBLE_DEVICES"] = '-1'
+# os.environ["CUDA_VISIBLE_DEVICES"] = '-1'
 
 MAX_TRACKS = 2
-MAX_PROMOTERS = 2
+MAX_PROMOTERS = 1000
+k = 100
 OUT_DIR = "temp/"
 
 
@@ -90,7 +91,6 @@ for track_to_use, track in enumerate(head_tracks):
             if len(picked) >= 5:
                 break
     picked_sub_seqs = np.asarray(picked_sub_seqs)
-    k = 2
     cluster_scores = {}
     kmeans = KMeans(n_clusters=2, random_state=0).fit(picked_sub_seqs)
     for i in range(len(picked_sub_seqs)):

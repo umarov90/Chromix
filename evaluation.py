@@ -15,9 +15,6 @@ def eval_perf(p, our_model, eval_track_names, eval_infos, should_draw, current_e
     print("Model loaded")
     predict_batch_size = p.GLOBAL_BATCH_SIZE
     w_step = 500
-    full_preds_steps_num = 1
-
-    predictions_hic = []
 
     if Path(f"pickle/{chr_name}_seq.gz").is_file():
         print(datetime.now().strftime('[%H:%M:%S] ') + "Loading sequences. ")
@@ -28,17 +25,12 @@ def eval_perf(p, our_model, eval_track_names, eval_infos, should_draw, current_e
         print(datetime.now().strftime('[%H:%M:%S] ') + "Loading gt 2. ")
         eval_gt_tss = joblib.load(f"pickle/{chr_name}_eval_gt_tss.gz")
         # eval_gt_tss = pickle.load(open(f"pickle/{chr_name}_eval_gt_tss.gz", "rb"))
-        print(datetime.now().strftime('[%H:%M:%S] ') + "Loading gt 3. ")
-        eval_gt_full = joblib.load(f"pickle/{chr_name}_eval_gt_full.gz")
         print(datetime.now().strftime('[%H:%M:%S] ') + "Finished loading. ")
     else:
         eval_gt = {}
-        eval_gt_full = []
         eval_gt_tss = {}
         for i in range(len(eval_infos)):
             eval_gt[eval_infos[i][2]] = {}
-            if i < full_preds_steps_num * w_step:
-                eval_gt_full.append([])
         for i, key in enumerate(eval_track_names):
             if i % 100 == 0:
                 print(i, end=" ")
@@ -46,9 +38,9 @@ def eval_perf(p, our_model, eval_track_names, eval_infos, should_draw, current_e
             if key in loaded_tracks.keys():
                 parsed_track = loaded_tracks[key]
             else:
-                # parsed_track = joblib.load(parsed_tracks_folder + key)
-                with open(p.parsed_tracks_folder + key, 'rb') as fp:
-                    parsed_track = pickle.load(fp)
+                parsed_track = joblib.load(p.parsed_tracks_folder + key)
+                # with open(p.parsed_tracks_folder + key, 'rb') as fp:
+                #     parsed_track = pickle.load(fp)
             mids = []
             for j, info in enumerate(eval_infos):
                 mid = int(info[1] / p.bin_size)
@@ -59,18 +51,6 @@ def eval_perf(p, our_model, eval_track_names, eval_infos, should_draw, current_e
                 val = parsed_track[info[0]][mid - 1] + parsed_track[info[0]][mid] + parsed_track[info[0]][mid + 1]
                 eval_gt_tss.setdefault(key, []).append(val)
                 eval_gt[info[2]].setdefault(key, []).append(val)
-                if j < full_preds_steps_num * w_step:
-                    start_bin = int(info[1] / p.bin_size) - p.half_num_regions
-                    extra_bin = start_bin + p.num_regions - len(parsed_track[info[0]])
-                    if start_bin < 0:
-                        binned_region = parsed_track[info[0]][0: start_bin + p.num_regions]
-                        binned_region = np.concatenate((np.zeros(-1 * start_bin), binned_region))
-                    elif extra_bin > 0:
-                        binned_region = parsed_track[info[0]][start_bin: len(parsed_track[info[0]])]
-                        binned_region = np.concatenate((binned_region, np.zeros(extra_bin)))
-                    else:
-                        binned_region = parsed_track[info[0]][start_bin:start_bin + p.num_regions]
-                    eval_gt_full[j].append(binned_region)
             if i == 0:
                 print(f"Skipped: {len(eval_infos) - len(mids)}")
 
@@ -83,8 +63,6 @@ def eval_perf(p, our_model, eval_track_names, eval_infos, should_draw, current_e
 
         for key in eval_gt_tss.keys():
             eval_gt_tss[key] = np.asarray(eval_gt_tss[key], dtype=np.float16)
-
-        eval_gt_full = np.asarray(eval_gt_full)
 
         test_seq = []
         starts = []
@@ -107,7 +85,7 @@ def eval_perf(p, our_model, eval_track_names, eval_infos, should_draw, current_e
             test_seq.append(ns)
         print(f"Skipped: {len(eval_infos) - len(starts)}")
         test_seq = np.asarray(test_seq, dtype=bool)
-        print(f"Lengths: {len(test_seq)} {len(eval_gt)} {len(eval_gt_full)}")
+        print(f"Lengths: {len(test_seq)} {len(eval_gt)}")
         gc.collect()
         joblib.dump(test_seq, f"pickle/{chr_name}_seq.gz", compress="lz4")
         # pickle.dump(test_seq, open(f"pickle/{chr_name}_seq.gz", "wb"), protocol=pickle.HIGHEST_PROTOCOL)
@@ -119,13 +97,8 @@ def eval_perf(p, our_model, eval_track_names, eval_infos, should_draw, current_e
         gc.collect()
         joblib.dump(eval_gt_tss, f"pickle/{chr_name}_eval_gt_tss.gz", compress="lz4")
         # pickle.dump(eval_gt_tss, open(f"pickle/{chr_name}_eval_gt_tss.gz", "wb"), protocol=pickle.HIGHEST_PROTOCOL)
-        del eval_gt_tss
-        gc.collect()
-        joblib.dump(eval_gt_full, f"pickle/{chr_name}_eval_gt_full.gz", compress="lz4")
-        # pickle.dump(eval_gt_full, open(f"pickle/{chr_name}_eval_gt_full.gz", "wb"), protocol=pickle.HIGHEST_PROTOCOL)
         test_seq = joblib.load(f"pickle/{chr_name}_seq.gz")
         eval_gt = joblib.load(f"pickle/{chr_name}_eval_gt.gz")
-        eval_gt_tss = joblib.load(f"pickle/{chr_name}_eval_gt_tss.gz")
 
     start_val = {}
     tracks_for_bed = {"scEnd5": []}# {"CAGE":[], "scEnd5":[], "scATAC":[]}
@@ -152,23 +125,14 @@ def eval_perf(p, our_model, eval_track_names, eval_infos, should_draw, current_e
             p2 = p1[0][:, :, p.mid_bin - 1] + p1[0][:, :, p.mid_bin] + p1[0][:, :, p.mid_bin + 1]
             if w == 0:
                 predictions = p2
-                predictions_full = p1[0]
-                predictions_hic = p1[1]
             else:
                 predictions = np.concatenate((predictions, p2), dtype=np.float32)
-                if w / w_step < full_preds_steps_num:
-                    predictions_full = np.concatenate((predictions_full, p1[0]), dtype=np.float16)
-                    predictions_hic = np.concatenate((predictions_hic, p1[1]), dtype=np.float16)
         else:
             p2 = p1[:, :, p.mid_bin - 1] + p1[:, :, p.mid_bin] + p1[:, :, p.mid_bin + 1]
             if w == 0:
                 predictions = p2
-                predictions_full = p1
-                print(f"MSE: {np.square(np.subtract(predictions_full, eval_gt_full)).mean()}")
             else:
                 predictions = np.concatenate((predictions, p2), dtype=np.float32)
-                if w / w_step < full_preds_steps_num:
-                    predictions_full = np.concatenate((predictions_full, p1), dtype=np.float16)
 
         if len(hic_keys) > 0:
             predictions_for_bed = p1[0]
@@ -358,50 +322,8 @@ def eval_perf(p, our_model, eval_track_names, eval_infos, should_draw, current_e
               f" {np.mean([i[0] for i in corrs_s[track_type]])} {len(type_pcc)}")
 
     if should_draw:
-        hic_output = []
-        for hi, key in enumerate(hic_keys):
-            hdf = joblib.load(p.parsed_hic_folder + key)
-            ni = 0
-            for i, info in enumerate(eval_infos):
-                hd = hdf[info[0]]
-                hic_mat = np.zeros((p.num_hic_bins, p.num_hic_bins))
-                start_hic = int(info[1] - (info[1] % p.bin_size) - p.half_size_hic)
-                end_hic = start_hic + 2 * p.half_size_hic
-                start_row = hd['locus1'].searchsorted(start_hic - p.hic_bin_size, side='left')
-                end_row = hd['locus1'].searchsorted(end_hic, side='right')
-                hd = hd.iloc[start_row:end_row]
-                # convert start of the input region to the bin number
-                start_hic = int(start_hic / p.hic_bin_size)
-                # subtract start bin from the binned entries in the range [start_row : end_row]
-                l1 = (np.floor(hd["locus1"].values / p.hic_bin_size) - start_hic).astype(int)
-                l2 = (np.floor(hd["locus2"].values / p.hic_bin_size) - start_hic).astype(int)
-                hic_score = hd["score"].values
-                # drop contacts with regions outside the [start_row : end_row] range
-                lix = (l2 < len(hic_mat)) & (l2 >= 0) & (l1 >= 0)
-                l1 = l1[lix]
-                l2 = l2[lix]
-                hic_score = hic_score[lix]
-                hic_mat[l1, l2] += hic_score
-                hic_mat = hic_mat[np.triu_indices_from(hic_mat, k=1)]
-                if hi == 0:
-                    hic_output.append([])
-                hic_output[ni].append(hic_mat)
-                ni += 1
-            del hd
-            del hdf
-            gc.collect()
-
-        draw_arguments = [p, eval_track_names, track_perf, predictions_full, eval_gt_full,
-                        test_seq, eval_infos, hic_keys,
-                        predictions_hic, hic_output,
-                        f"{p.figures_folder}/tracks/epoch_{current_epoch}"]
-        joblib.dump(draw_arguments, "draw", compress=3)
-
-        viz.draw_tracks(*draw_arguments)
-
         viz.draw_regplots(eval_track_names, track_perf, final_pred, eval_gt,
                           f"{p.figures_folder}/plots/epoch_{current_epoch}")
-        viz.draw_attribution()
 
     return return_result
 

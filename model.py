@@ -3,12 +3,13 @@ from tensorflow.keras.layers import LeakyReLU, LayerNormalization, MultiHeadAtte
     Dense, Conv1D, Input, Flatten, Activation, BatchNormalization
 from tensorflow.keras.models import Model
 import tensorflow as tf
+import numpy as np
 
 projection_dim = 128
 dropout_rate = 0.0
 num_heads = 8
 transformer_units = [
-    projection_dim * 4,
+    projection_dim * 2,
     projection_dim,
 ]
 transformer_layers = 12
@@ -252,6 +253,47 @@ def wrap2(input_sequences, bs):
         train_data = train_data.with_options(options)
         return train_data
 
+
+def batch_predict(model, seqs):
+    w_step = 500
+    predict_batch_size = 8
+    for w in range(0, len(seqs), w_step):
+        print(w, end=" ")
+        p1 = model.predict(wrap2(seqs[w:w + w_step], predict_batch_size))
+        # if len(hic_keys) > 0:
+        #     p2 = p1[0][:, :, p.mid_bin - 1] + p1[0][:, :, p.mid_bin] + p1[0][:, :, p.mid_bin + 1]
+        #     if w == 0:
+        #         predictions = p2
+        #     else:
+        #         predictions = np.concatenate((predictions, p2), dtype=np.float32)
+        # else:
+        if w == 0:
+            predictions = p1
+        else:
+            predictions = np.concatenate((predictions, p1), dtype=np.float32)
+    return predictions
+
+
+def batch_predict_effect(model, seqs1, seqs2):
+    w_step = 500
+    predict_batch_size = 8
+    for w in range(0, len(seqs1), w_step):
+        print(w, end=" ")
+        p1 = model.predict(wrap2(seqs1[w:w + w_step], predict_batch_size))
+        p2 = model.predict(wrap2(seqs2[w:w + w_step], predict_batch_size))
+        # if len(hic_keys) > 0:
+        #     p2 = p1[0][:, :, p.mid_bin - 1] + p1[0][:, :, p.mid_bin] + p1[0][:, :, p.mid_bin + 1]
+        #     if w == 0:
+        #         predictions = p2
+        #     else:
+        #         predictions = np.concatenate((predictions, p2), dtype=np.float32)
+        # else:
+        effect = np.mean(p1 - p2, axis=-1)
+        if w == 0:
+            predictions = effect
+        else:
+            predictions = np.concatenate((predictions, effect), dtype=np.float32)
+    return predictions
 
 class PatchEncoder(Layer):
     def __init__(self, num_patches, projection_dim, **kwargs):
