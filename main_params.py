@@ -4,21 +4,21 @@ from pathlib import Path
 
 class MainParams:
     def __init__(self):
-        self.input_size = 60001  # 210001 # 50001
+        self.input_size = 50001  # 210001 # 50001
         self.half_size = int(self.input_size / 2)
         self.bin_size = 100
         self.hic_bin_size = 10000
         self.num_hic_bins = 20
         self.half_size_hic = 100000
-        self.num_regions = 401  # 501  # 201
+        self.num_regions = 401  # 1001
         self.half_num_regions = int(self.num_regions / 2)
         self.mid_bin = math.floor(self.num_regions / 2)
-        self.BATCH_SIZE = 4  # 1
+        self.BATCH_SIZE = 8  # 1
         self.GLOBAL_BATCH_SIZE = 4 * self.BATCH_SIZE
-        self.STEPS_PER_EPOCH = 100
+        self.STEPS_PER_EPOCH = 80
         self.num_epochs = 2000
         self.hic_track_size = 1
-        self.out_stack_num = 5000 #11529
+        self.out_stack_num = 4000 #11529
         self.num_features = 5
         self.shift_speed = 2000000
         self.initial_shift = 300

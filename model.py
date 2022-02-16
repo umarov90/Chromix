@@ -1,3 +1,5 @@
+import math
+
 from tensorflow.keras.layers import LeakyReLU, LayerNormalization, MultiHeadAttention, \
     Add, Embedding, Layer, Reshape, Dropout, \
     Dense, Conv1D, Input, Flatten, Activation, BatchNormalization
@@ -5,14 +7,7 @@ from tensorflow.keras.models import Model
 import tensorflow as tf
 import numpy as np
 
-projection_dim = 128
 dropout_rate = 0.0
-num_heads = 8
-transformer_units = [
-    projection_dim * 2,
-    projection_dim,
-]
-transformer_layers = 12
 leaky_alpha = 0.2
 
 
@@ -20,38 +15,18 @@ def hic_model(input_size, num_features, num_regions, cell_num, hic_num, hic_size
     input_shape = (input_size, num_features)
     inputs = Input(shape=input_shape, dtype=tf.float32)
     x = inputs
-    x = Dropout(dropout_rate, noise_shape=(None, input_size, 1))(x)
-    resnet_output = resnet(x, 7, 1)
+    resnet_output = resnet(x, input_size)
     our_resnet = Model(inputs, resnet_output, name="our_resnet")
-    num_patches = 938
-    num_filters = 994
+    num_patches = 6563
+    num_filters = 904
 
-    interactions_layer_input = Input(shape=(num_patches, num_filters))
-    encoded_patches = PatchEncoder(num_patches, projection_dim)(interactions_layer_input)
-    # Create multiple layers of the Transformer block.
-    for i in range(transformer_layers):
-        # Layer normalization 1.
-        x1 = LayerNormalization(epsilon=1e-6, name="ln_" + str(i) + "_1")(encoded_patches)
-        # Create a multi-head attention layer.
-        attention_output = MultiHeadAttention(
-            num_heads=num_heads, key_dim=projection_dim, name="mha_" + str(i)
-        )(x1, x1)
-        # Skip connection 1.
-        x2 = Add()([attention_output, encoded_patches])
-        # Layer normalization 2.
-        x3 = LayerNormalization(epsilon=1e-6, name="ln_" + str(i) + "_2")(x2)
-        # MLP.
-        x3 = mlp(x3, hidden_units=transformer_units, name="mlp_" + str(i))
-        # Skip connection 2.
-        encoded_patches = Add()([x3, x2])
+    hic_input = Input(shape=(num_patches, num_filters))
+    hx = Conv1D(128, kernel_size=1, strides=1, name="pointwise_hic_1", activation=tf.nn.gelu)(hic_input)
 
-    x = LayerNormalization(epsilon=1e-6, name="ln_rep")(encoded_patches)
-    interactions_layer_output = x
+    hx = tf.transpose(hx, [0, 2, 1])
+    hx = Conv1D(input_size // 1000, kernel_size=1, strides=1, name="pointwise_hic_2", activation=tf.nn.gelu)(hx)
+    hx = tf.transpose(hx, [0, 2, 1])
 
-    our_interactions_layer = Model(interactions_layer_input, interactions_layer_output, name="our_transformer")
-
-    hic_input = Input(shape=(num_patches, projection_dim))
-    hx = Conv1D(32, kernel_size=1, strides=1, name="pointwise_hic", activation=tf.nn.gelu)(hic_input)
     hx = Flatten()(hx)
     h_layers = []
     for h in range(hic_num):
@@ -60,7 +35,7 @@ def hic_model(input_size, num_features, num_regions, cell_num, hic_num, hic_size
     print(hic_output)
     our_hic = Model(hic_input, hic_output, name="our_hic")
 
-    head_input = Input(shape=(num_patches, projection_dim))
+    head_input = Input(shape=(num_patches, num_filters))
     x = head_input
 
     x = tf.transpose(x, [0, 2, 1])
@@ -68,64 +43,7 @@ def hic_model(input_size, num_features, num_regions, cell_num, hic_num, hic_size
     x = Dense(num_regions, activation=tf.nn.gelu, name="regions_projection")(x)
     x = tf.transpose(x, [0, 2, 1])
 
-    # x = Dropout(dropout_rate, input_shape=(num_regions, projection_dim))(x)
-
-    x = Conv1D(2048, kernel_size=1, strides=1, name="pointwise", activation=tf.nn.gelu)(x)
-    outputs = Conv1D(cell_num, kernel_size=1, strides=1, name="last_conv1d")(x)
-    outputs = tf.transpose(outputs, [0, 2, 1])
-    print(outputs)
-    our_head = Model(head_input, outputs, name="our_head")
-    print(our_head)
-
-    our_model = Model(inputs, [our_head(our_interactions_layer(our_resnet(inputs))),
-                               our_hic(our_interactions_layer(our_resnet(inputs)))], name="our_model")
-    print("\nModel constructed")
-    print(our_model.summary())
-    return our_model
-
-
-def small_model(input_size, num_features, num_regions, cell_num):
-    input_shape = (input_size, num_features)
-    inputs = Input(shape=input_shape, dtype=tf.float32)
-    x = inputs
-    resnet_output = resnet(x, 7, 1)
-    our_resnet = Model(inputs, resnet_output, name="our_resnet")
-    num_patches = 938
-    num_filters = 994
-
-    interactions_layer_input = Input(shape=(num_patches, num_filters))
-    encoded_patches = PatchEncoder(num_patches, projection_dim)(interactions_layer_input)
-    # Create multiple layers of the Transformer block.
-    for i in range(transformer_layers):
-        # Layer normalization 1.
-        x1 = LayerNormalization(epsilon=1e-6, name="ln_" + str(i) + "_1")(encoded_patches)
-        # Create a multi-head attention layer.
-        attention_output = MultiHeadAttention(
-            num_heads=num_heads, key_dim=projection_dim, dropout=dropout_rate, name="mha_" + str(i)
-        )(x1, x1)
-        # Skip connection 1.
-        x2 = Add()([attention_output, encoded_patches])
-        # Layer normalization 2.
-        x3 = LayerNormalization(epsilon=1e-6, name="ln_" + str(i) + "_2")(x2)
-        # MLP.
-        x3 = mlp(x3, hidden_units=transformer_units, dropout_rate=dropout_rate, name="mlp_" + str(i))
-        # Skip connection 2.
-        encoded_patches = Add()([x3, x2])
-
-    x = LayerNormalization(epsilon=1e-6, name="ln_rep")(encoded_patches)
-    interactions_layer_output = x
-
-    our_interactions_layer = Model(interactions_layer_input, interactions_layer_output, name="our_transformer")
-
-    head_input = Input(shape=(num_patches, projection_dim))
-    x = head_input
-
-    x = tf.transpose(x, [0, 2, 1])
-    # x = Conv1D(num_regions, kernel_size=1, strides=1, use_bias=False, name="regions_projection")(x)
-    x = Dense(num_regions, activation=tf.nn.gelu, name="regions_projection")(x)
-    x = tf.transpose(x, [0, 2, 1])
-
-    x = Dropout(dropout_rate, input_shape=(num_regions, projection_dim))(x)
+    x = Dropout(dropout_rate, input_shape=(num_regions, num_filters))(x)
 
     x = Conv1D(2048, kernel_size=1, strides=1, name="pointwise", activation=tf.nn.gelu)(x)
     outputs = Conv1D(cell_num, kernel_size=1, strides=1, name="last_conv1d")(x)
@@ -135,7 +53,44 @@ def small_model(input_size, num_features, num_regions, cell_num):
     our_head = Model(head_input, head_output, name="our_head")
     print(our_head)
 
-    our_model = Model(inputs, our_head(our_interactions_layer(our_resnet(inputs))), name="our_model")
+    our_model = Model(inputs, [our_head(our_resnet(inputs)),
+                               our_hic(our_resnet(inputs))], name="our_model")
+    print("\nModel constructed")
+    print(our_model.summary())
+    return our_model
+
+
+def small_model(input_size, num_features, num_regions, cell_num):
+    input_shape = (input_size, num_features)
+    inputs = Input(shape=input_shape, dtype=tf.float32)
+    x = inputs
+    resnet_output = resnet(x, input_size)
+    our_resnet = Model(inputs, resnet_output, name="our_resnet")
+    num_patches = 500
+    num_filters = 904
+
+    head_input = Input(shape=(num_patches, num_filters))
+    x = head_input
+
+    # x = tf.transpose(x, [0, 2, 1])
+    # # x = Conv1D(num_regions, kernel_size=1, strides=1, use_bias=False, name="regions_projection")(x)
+    # x = Dense(input_size // 100, activation=tf.nn.gelu, name="regions_projection")(x)
+    # x = tf.transpose(x, [0, 2, 1])
+
+    trim = (x.shape[-2] - num_regions) // 2
+    x = x[..., trim + 1:-trim, :]
+
+    x = Dropout(dropout_rate, input_shape=(num_regions, num_filters))(x)
+
+    x = Conv1D(2048, kernel_size=1, strides=1, name="pointwise", activation=tf.nn.gelu)(x)
+    outputs = Conv1D(cell_num, kernel_size=1, strides=1, name="last_conv1d")(x)
+    outputs = tf.transpose(outputs, [0, 2, 1])
+    print(outputs)
+    head_output = outputs
+    our_head = Model(head_input, head_output, name="our_head")
+    print(our_head)
+
+    our_model = Model(inputs, our_head(our_resnet(inputs)), name="our_model")
     print("\nModel constructed")
     print(our_model.summary())
     return our_model
@@ -143,7 +98,7 @@ def small_model(input_size, num_features, num_regions, cell_num):
 
 def resnet_layer(inputs,
                  num_filters=16,
-                 kernel_size=3,
+                 kernel_size=7,
                  strides=1,
                  activation=True,
                  batch_normalization=True,
@@ -151,8 +106,8 @@ def resnet_layer(inputs,
     conv = Conv1D(num_filters,
                   kernel_size=kernel_size,
                   strides=strides,
-                  padding='same',
-                  use_bias=False,
+                  padding="same",
+                  # use_bias=False,
                   name=name + "conv1d")
 
     x = inputs
@@ -164,7 +119,7 @@ def resnet_layer(inputs,
     return x
 
 
-def resnet(input_x, num_stages, num_res_blocks):
+def resnet(input_x, input_size):
     # Initial number of filters
     num_filters = 512
 
@@ -173,53 +128,59 @@ def resnet(input_x, num_stages, num_res_blocks):
                      num_filters=num_filters,
                      activation=False,
                      batch_normalization=False,
+                     strides=3,
+                     kernel_size=15,
                      name="rl_1_")
-
+    current_len = input_size // 3
     # Instantiate the stack of residual units
-    for stage in range(num_stages):
-        for res_block in range(num_res_blocks):
-            cname = "rl_" + str(stage) + "_" + str(res_block) + "_"
-            strides = 1
-            num_filters = int(num_filters * 1.1)
-            if res_block == 0 and stage != 0:
-                strides = 2
+    num_blocks = 6
+    for block in range(num_blocks):
+        cname = "rl_" + str(block) + "_"
+        strides = 1
+        y = x
+        num_filters = int(num_filters * 1.1)
+        activation = True
+        if block != 0:
+            # Downsample
+            y = LeakyReLU(alpha=leaky_alpha, name="dwn_" + str(block))(y)
+            y = tf.transpose(y, [0, 2, 1])
+            current_len = math.ceil(current_len / 2)
+            if block == num_blocks - 1:
+                current_len = input_size // 100
+            # Replace by conv maybe
+            y = Dense(current_len, activation=LeakyReLU(alpha=leaky_alpha),
+                      name="regions_projection_" + str(block))(y)
+            y = tf.transpose(y, [0, 2, 1])
+            strides = 2
+            activation = False
 
-            # Wide basic block with two CNN layers. First one performs down-sampling.
-            y = resnet_layer(inputs=x,
+        # Wide basic block with two CNN layers.
+        y = resnet_layer(inputs=y,
+                         num_filters=num_filters,
+                         activation=activation,
+                         name=cname + "1_")
+        y = Dropout(dropout_rate)(y)
+        y = resnet_layer(inputs=y,
+                         num_filters=num_filters,
+                         batch_normalization=False,
+                         name=cname + "2_")
+        if block != num_blocks - 1:
+            # linear projection residual shortcut connection to match
+            # changed dims
+            x = resnet_layer(inputs=x,
                              num_filters=num_filters,
                              strides=strides,
-                             name=cname + "1_")
-            y = Dropout(dropout_rate)(y)
-            y = resnet_layer(inputs=y,
-                             num_filters=num_filters,
-                             name=cname + "2_")
-            if res_block == 0:
-                # linear projection residual shortcut connection to match
-                # changed dims
-                x = resnet_layer(inputs=x,
-                                 num_filters=num_filters,
-                                 kernel_size=1,
-                                 strides=strides,
-                                 activation=False,
-                                 batch_normalization=False,
-                                 name=cname + "3_")
+                             activation=False,
+                             batch_normalization=False,
+                             name=cname + "3_")
             x = Add()([x, y])
+        else:
+            x = y
 
     # final activation and batch normalization
-    x = Activation(tf.nn.gelu, name="res_act_final")(x)
-    x = BatchNormalization(name="res_bn_final")(x)
+    x = LeakyReLU(alpha=leaky_alpha, name="res_act_final")(x)
+    # x = BatchNormalization(name="res_bn_final")(x)
 
-    return x
-
-
-def mlp(x, hidden_units, dropout_rate, name):
-    for units in hidden_units:
-        x = Conv1D(units,
-                   kernel_size=1,
-                   strides=1,
-                   activation=tf.nn.gelu,
-                   name=name + str(units))(x)
-        x = Dropout(dropout_rate)(x)
     return x
 
 
@@ -294,27 +255,3 @@ def batch_predict_effect(model, seqs1, seqs2):
         else:
             predictions = np.concatenate((predictions, effect), dtype=np.float32)
     return predictions
-
-class PatchEncoder(Layer):
-    def __init__(self, num_patches, projection_dim, **kwargs):
-        super(PatchEncoder, self).__init__(**kwargs)
-        self.num_patches = num_patches
-        self.projection = Conv1D(projection_dim, kernel_size=1, strides=1,
-                                 activation=tf.nn.gelu, name="projection_patch_encoder")
-        self.projection_dim = projection_dim
-        self.position_embedding = Embedding(input_dim=num_patches, output_dim=projection_dim, name="pos_embedding")
-
-    def call(self, patch):
-        positions = tf.range(start=0, limit=self.num_patches, delta=1)
-        # Add positions encoding to the projection
-        encoded = self.projection(patch) + self.position_embedding(positions)
-        return encoded
-
-    # Needed for loading the model
-    def get_config(self):
-        config = super().get_config().copy()
-        config.update({
-            'num_patches': self.num_patches,
-            'projection_dim': self.projection_dim,
-        })
-        return config

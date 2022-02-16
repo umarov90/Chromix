@@ -10,7 +10,8 @@ import visualization as viz
 import common as cm
 
 
-def eval_perf(p, our_model, eval_track_names, eval_infos, should_draw, current_epoch, chr_name, one_hot, hic_keys, loaded_tracks):
+def eval_perf(p, our_model, eval_track_names, eval_infos, should_draw, current_epoch, chr_name, one_hot, hic_keys,
+              loaded_tracks):
     import model as mo
     print("Model loaded")
     predict_batch_size = p.GLOBAL_BATCH_SIZE
@@ -48,7 +49,8 @@ def eval_perf(p, our_model, eval_track_names, eval_infos, should_draw, current_e
                 #     continue
                 # mids.append(mid)
                 # val = parsed_track[info[0]][mid]
-                val = parsed_track[info[0]][mid - 1] + parsed_track[info[0]][mid] + parsed_track[info[0]][mid + 1]
+                val = parsed_track[info[0]][mid - 1] + parsed_track[info[0]][mid] + \
+                      parsed_track[info[0]][mid + 1] + parsed_track[info[0]][mid + 2] + parsed_track[info[0]][mid - 2]
                 eval_gt_tss.setdefault(key, []).append(val)
                 eval_gt[info[2]].setdefault(key, []).append(val)
             if i == 0:
@@ -101,7 +103,7 @@ def eval_perf(p, our_model, eval_track_names, eval_infos, should_draw, current_e
         eval_gt = joblib.load(f"pickle/{chr_name}_eval_gt.gz")
 
     start_val = {}
-    tracks_for_bed = {"scEnd5": []}# {"CAGE":[], "scEnd5":[], "scATAC":[]}
+    tracks_for_bed = {"scEnd5": []}  # {"CAGE":[], "scEnd5":[], "scATAC":[]}
     bed_num = 5
     track_inds_bed = []
     for t, track in enumerate(eval_track_names):
@@ -128,7 +130,7 @@ def eval_perf(p, our_model, eval_track_names, eval_infos, should_draw, current_e
             else:
                 predictions = np.concatenate((predictions, p2), dtype=np.float32)
         else:
-            p2 = p1[:, :, p.mid_bin - 1] + p1[:, :, p.mid_bin] + p1[:, :, p.mid_bin + 1]
+            p2 = p1[:, :, p.mid_bin - 1] + p1[:, :, p.mid_bin] + p1[:, :, p.mid_bin + 1] + p1[:, :, p.mid_bin + 2] + p1[:, :, p.mid_bin - 2]
             if w == 0:
                 predictions = p2
             else:
@@ -251,7 +253,7 @@ def eval_perf(p, our_model, eval_track_names, eval_infos, should_draw, current_e
     print("Saving bed files")
     for track in start_val.keys():
         for start in start_val[track].keys():
-            start_val[track][start] = np.mean(start_val[track][start]) # MAX can be better on the test set!
+            start_val[track][start] = np.mean(start_val[track][start])  # MAX can be better on the test set!
         # with open("bed_output/" + chr_name + "_" + track + ".bedGraph", 'w+') as f:
         #     for start in sorted(start_val[track].keys()):
         #         f.write(f"{chr_name}\t{start}\t{start+p.bin_size}\t{start_val[track][start]}")

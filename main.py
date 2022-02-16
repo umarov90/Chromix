@@ -19,6 +19,7 @@ import pickle
 import evaluation
 from main_params import MainParams
 import tensorflow_addons as tfa
+
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 logging.getLogger("tensorflow").setLevel(logging.ERROR)
 matplotlib.use("agg")
@@ -30,36 +31,14 @@ def create_model(q):
     strategy = tf.distribute.MultiWorkerMirroredStrategy()
     with strategy.scope():
         our_model = mo.small_model(p.input_size, p.num_features, p.num_regions, p.out_stack_num)
-        # our_model = mo.hic_model(input_size, num_features, num_regions, out_stack_num, hic_num, hic_size)
+        # our_model = mo.hic_model(p.input_size, p.num_features, p.num_regions, p.out_stack_num, hic_num, p.hic_size)
         # print("loading model")
-        # our_model_old = tf.keras.models.load_model(model_folder + "bigger_transformer.h5",
-        #                                            custom_objects={'PatchEncoder': mo.PatchEncoder})
+        # our_model_old = tf.keras.models.load_model(p.model_folder + "small.h5")
         # print("model loaded")
         # for layer in our_model_old.get_layer("our_resnet").layers:
         #     layer_name = layer.name
         #     layer_weights = layer.weights
         #     our_model.get_layer("our_resnet").get_layer(layer_name).set_weights(layer_weights)
-        #
-        # for layer in our_model_old.get_layer("our_transformer").layers:
-        #     layer_name = layer.name
-        #     layer_weights = layer.weights
-        #     if "input" in layer_name:
-        #         continue
-        #     if isinstance(layer, mo.PatchEncoder):
-        #         layer_weights = layer.projection.weights
-        #         our_model.get_layer("our_transformer").get_layer(layer_name).projection.set_weights(layer_weights)
-        #     elif isinstance(layer.weights, list):
-        #         try:
-        #             new_weights_list = []
-        #             for li in range(len(layer.weights)):
-        #                 new_shape = our_model.get_layer("our_transformer").get_layer(layer_name).weights[li].shape
-        #                 new_weights_list.append(np.resize(layer.weights[li], new_shape))
-        #             our_model.get_layer("our_transformer").get_layer(layer_name).set_weights(new_weights_list)
-        #         except:
-        #             pass
-        #     else:
-        #         new_shape = our_model.get_layer("our_transformer").get_layer(layer_name).shape
-        #         our_model.get_layer("our_resnet").get_layer(layer_name).set_weights(np.resize(layer_weights, new_shape))
 
         # for layer in our_model_old.get_layer("our_head").layers:
         #     layer_name = layer.name
@@ -100,7 +79,8 @@ def run_epoch(last_proc, fit_epochs, head_id):
             print(i, end=" ")
             gc.collect()
         try:
-            shift_bins = random.randint(-int(current_epoch / p.shift_speed) - p.initial_shift, int(current_epoch / p.shift_speed) + p.initial_shift)
+            shift_bins = random.randint(-int(current_epoch / p.shift_speed) - p.initial_shift,
+                                        int(current_epoch / p.shift_speed) + p.initial_shift)
             start = info[1] - (info[1] % p.bin_size) - p.half_size + shift_bins * p.bin_size
             extra = start + p.input_size - len(one_hot[info[0]])
             if start < 0 or extra > 0:
@@ -247,7 +227,7 @@ def run_epoch(last_proc, fit_epochs, head_id):
 
 
 def safe_save(thing, place):
-    joblib.dump(thing, place + "_temp", compress=3)
+    joblib.dump(thing, place + "_temp", compress="lz4")
     if os.path.exists(place):
         os.remove(place)
     os.rename(place + "_temp", place)
@@ -281,46 +261,41 @@ def train_step(input_sequences, output_scores, output_hic, fit_epochs, head_id):
         strategy = tf.distribute.MultiWorkerMirroredStrategy()
         # print(datetime.now().strftime('[%H:%M:%S] ') + "Loading the model")
         with strategy.scope():
-            our_model = tf.keras.models.load_model(p.model_path,
-                                                   custom_objects={'PatchEncoder': mo.PatchEncoder})
+            our_model = tf.keras.models.load_model(p.model_path)
             our_model.get_layer("our_head").set_weights(joblib.load(p.model_path + "_head_" + str(head_id)))
             print(f"=== Training with head {head_id} ===")
             hic_lr = 0.0001
             head_lr = 0.001
             head_wd = 0.00001
-            transformer_lr = 0.0001
-            transformer_wd = 0.00001
-            resnet_lr = 0.00001
+            resnet_lr = 0.0001
             resnet_wd = 0.000001
-            # cap_e = min(current_epoch, 10)
-            # resnet_lr = 0.00001 + cap_e * 0.00001
+            # cap_e = min(current_epoch, 40)
+            # transformer_lr = 0.0000005 + cap_e * 0.0000025
             # tfa.optimizers.AdamW
             # optimizers = [
             #     tf.keras.optimizers.Adam(learning_rate=resnet_lr),
             #     tfa.optimizers.AdamW(learning_rate=transformer_lr, weight_decay=transformer_wd),
             #     tf.keras.optimizers.Adam(learning_rate=head_lr)
             # ]
-            optimizers = [
-                tf.keras.optimizers.Adam(learning_rate=resnet_lr),
-                tf.keras.optimizers.Adam(learning_rate=transformer_lr),
-                tf.keras.optimizers.Adam(learning_rate=head_lr)
-            ]
+            optimizers = {"our_resnet": tf.keras.optimizers.Adam(learning_rate=resnet_lr),
+                          "our_head": tf.keras.optimizers.Adam(learning_rate=head_lr)}
 
-            optimizers_and_layers = [(optimizers[0], our_model.get_layer("our_resnet")),
-                                     (optimizers[1], our_model.get_layer("our_transformer")),
-                                     (optimizers[2], our_model.get_layer("our_head"))
+            optimizers_and_layers = [(optimizers["our_resnet"], our_model.get_layer("our_resnet")),
+                                     (optimizers["our_head"], our_model.get_layer("our_head"))
                                      ]
             if hic_num > 0:
-                optimizers.append(tfa.optimizers.AdamW(learning_rate=hic_lr, weight_decay=0.0001))
-                optimizers_and_layers.append((optimizers[3], our_model.get_layer("our_hic")))
+                optimizers["our_hic"] = tf.keras.optimizers.Adam(learning_rate=hic_lr)
+                optimizers_and_layers.append((optimizers["our_hic"], our_model.get_layer("our_hic")))
 
             optimizer = tfa.optimizers.MultiOptimizer(optimizers_and_layers)
 
-            our_model.get_layer("our_transformer").trainable = True
+            # if current_epoch > 20:
             our_model.get_layer("our_resnet").trainable = True
+            # else:
+            #     our_model.get_layer("our_resnet").trainable = False
 
             if hic_num > 0:
-                loss_weights = {"our_head": 1.0, "our_hic": 0.02}
+                loss_weights = {"our_head": 1.0, "our_hic": 0.05}
                 losses = {
                     "our_head": "mse",
                     "our_hic": "mse",
@@ -336,31 +311,22 @@ def train_step(input_sequences, output_scores, output_hic, fit_epochs, head_id):
 
             if os.path.exists(p.model_path + "_opt_resnet"):
                 print("loading resnet optimizer")
-                optimizers[0].set_weights(joblib.load(p.model_path + "_opt_resnet"))
-
-            if os.path.exists(p.model_path + "_opt_transformer"):
-                print("loading transformer optimizer")
-                optimizers[1].set_weights(joblib.load(p.model_path + "_opt_transformer"))
+                optimizers["our_resnet"].set_weights(joblib.load(p.model_path + "_opt_resnet"))
 
             if os.path.exists(p.model_path + "_opt_head_" + str(head_id)):
                 print("loading head optimizer")
-                optimizers[2].set_weights(joblib.load(p.model_path + "_opt_head_" + str(head_id)))
+                optimizers["our_head"].set_weights(joblib.load(p.model_path + "_opt_head_" + str(head_id)))
 
             if hic_num > 0 and os.path.exists(p.model_path + "_opt_hic"):
                 print("loading hic optimizer")
-                optimizers[3].set_weights(joblib.load(p.model_path + "_opt_hic"))
+                optimizers["our_hic"].set_weights(joblib.load(p.model_path + "_opt_hic"))
 
-            # optimizers[0].epsilon = 1e-8
-            # optimizers[1].epsilon = 1e-8
-            # optimizers[2].epsilon = 1e-8
-            # optimizers[0].learning_rate = resnet_lr
-            # optimizers[1].learning_rate = transformer_lr
-            # optimizers[2].learning_rate = head_lr
-            # if hic_num > 0:
-            #     optimizers[3].learning_rate = hic_lr
+            optimizers["our_resnet"].learning_rate = resnet_lr
+            optimizers["our_head"].learning_rate = head_lr
+            if hic_num > 0:
+                optimizers["our_hic"].learning_rate = hic_lr
 
         print(len(our_model.trainable_weights))
-        print(len(our_model.get_layer("our_transformer").trainable_weights))
         print(len(our_model.get_layer("our_resnet").trainable_weights))
         print(len(our_model.get_layer("our_head").trainable_weights))
         if hic_num > 0:
@@ -379,11 +345,10 @@ def train_step(input_sequences, output_scores, output_hic, fit_epochs, head_id):
             os.remove(p.model_path)
         os.rename(p.model_path + "_temp.h5", p.model_path)
         safe_save(our_model.get_layer("our_head").get_weights(), p.model_path + "_head_" + str(head_id))
-        safe_save(optimizers[0].get_weights(), p.model_path + "_opt_resnet")
-        safe_save(optimizers[1].get_weights(), p.model_path + "_opt_transformer")
-        safe_save(optimizers[2].get_weights(), p.model_path + "_opt_head_" + str(head_id))
+        safe_save(optimizers["our_resnet"].get_weights(), p.model_path + "_opt_resnet")
+        safe_save(optimizers["our_head"].get_weights(), p.model_path + "_opt_head_" + str(head_id))
         if hic_num > 1:
-            safe_save(optimizers[3].get_weights(), p.model_path + "_opt_hic")
+            safe_save(optimizers["our_hic"].get_weights(), p.model_path + "_opt_hic")
         joblib.dump(our_model.get_weights(), p.model_path + "_w", compress=3)
     except Exception as e:
         print(e)
@@ -402,8 +367,7 @@ def check_perf(mp_q, head_id):
     try:
         strategy = tf.distribute.MultiWorkerMirroredStrategy()
         with strategy.scope():
-            our_model = tf.keras.models.load_model(p.model_path,
-                                                   custom_objects={'PatchEncoder': mo.PatchEncoder})
+            our_model = tf.keras.models.load_model(p.model_path)
             our_model.get_layer("our_head").set_weights(
                 joblib.load(p.model_path + "_head_" + str(head_id)))
         train_eval_chr = "chr2"
@@ -414,12 +378,12 @@ def check_perf(mp_q, head_id):
                 train_eval_chr_info.append(info)
         train_eval_chr_info.sort(key=lambda x: x[1])
         print(f"Training set {len(train_eval_chr_info)}")
-        training_spearman = evaluation.eval_perf(p, our_model,  heads[head_id], train_eval_chr_info,
+        training_spearman = evaluation.eval_perf(p, our_model, heads[head_id], train_eval_chr_info,
                                                  False, current_epoch, train_eval_chr, one_hot, hic_keys, loaded_tracks)
         test_info_eval = joblib.load("pickle/test_info_eval.gz")
         print(f"Test set {len(test_info_eval)}")
         test_info_eval.sort(key=lambda x: x[1])
-        test_spearman = evaluation.eval_perf(p, our_model,  heads[head_id], test_info_eval,
+        test_spearman = evaluation.eval_perf(p, our_model, heads[head_id], test_info_eval,
                                              False, current_epoch, "chr1", one_hot, hic_keys, loaded_tracks)
         with open(p.model_name + "_history.csv", "a+") as myfile:
             myfile.write(f"{training_spearman},{test_spearman}")
@@ -444,7 +408,7 @@ last_proc = None
 p = MainParams()
 if __name__ == '__main__':
     # import model as mo
-    # our_model = mo.small_model(input_size, num_features, num_regions, out_stack_num)
+    # our_model = mo.small_model(p.input_size, p.num_features, p.num_regions, p.out_stack_num)
     script_folder = pathlib.Path(__file__).parent.resolve()
     folders = open(str(script_folder) + "/data_dirs").read().strip().split("\n")
     os.chdir(folders[0])
@@ -475,15 +439,18 @@ if __name__ == '__main__':
         heads[-1].extend(track_names[:4000 - len(heads[-1])])
         joblib.dump(heads, "pickle/heads.gz", compress=3)
 
+    # random.shuffle(track_names)
+    # heads = [track_names]
+    # joblib.dump(heads, "pickle/heads.gz", compress=3)
+
     for head in heads:
         print(len(head))
-    # heads = [heads[0][:5000]]
-    # joblib.dump(heads, "pickle/heads.gz", compress=3)
     # hic_keys = parser.parse_hic()
-    # hic_keys = ["hic_THP1_10kb_interactions.txt.bz2"]  # , "hic_A549_10kb_interactions.txt.bz2"
-    # "hic_HepG2_10kb_interactions.txt.bz2", "hic_THP1_10kb_interactions.txt.bz2"]
+    # hic_keys = ["hic_THP1_10kb_interactions.txt.bz2", "hic_A549_10kb_interactions.txt.bz2",
+    #             "hic_HepG2_10kb_interactions.txt.bz2"]
     hic_keys = []
     hic_num = len(hic_keys)
+    print(f"hic {hic_num}")
 
     mp_q = mp.Queue()
 
@@ -520,10 +487,10 @@ if __name__ == '__main__':
         else:
             fit_epochs = 8
 
-        check_perf(mp_q, 0)
-        exit()
+        # check_perf(mp_q, 0)
+        # exit()
         last_proc = run_epoch(last_proc, fit_epochs, head_id)
-        if current_epoch % 10 == 0 and current_epoch >= 20: # and current_epoch != 0:
+        if current_epoch % 20 == 0 and current_epoch >= 20:  # and current_epoch != 0:
             print("Eval epoch")
             print(mp_q.get())
             last_proc.join()

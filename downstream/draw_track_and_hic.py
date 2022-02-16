@@ -8,13 +8,12 @@ import visualization as viz
 import model as mo
 import numpy as np
 
-infos = []
+infos = joblib.load("pickle/test_info.gz")[:100]
+hic_keys = ["hic_THP1_10kb_interactions.txt.bz2"]
+eval_track_names = []
+
 eval_gt_full = []
 p = MainParams()
-eval_track_names = []
-hic_keys = []
-
-
 one_hot = joblib.load("pickle/one_hot.gz")
 w_step = 500
 predict_batch_size = 4
@@ -27,6 +26,12 @@ model_folder = folders[3]
 heads = joblib.load("pickle/heads.gz")
 head_id = 0
 head_tracks = heads[head_id]
+
+for track in head_tracks:
+    if "scEnd5" in track:
+        eval_track_names.append(track)
+        if len(eval_track_names) > 9:
+            break
 
 strategy = tf.distribute.MultiWorkerMirroredStrategy()
 with strategy.scope():
