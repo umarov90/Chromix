@@ -38,8 +38,7 @@ one_hot = joblib.load("pickle/one_hot.gz")
 
 strategy = tf.distribute.MultiWorkerMirroredStrategy()
 with strategy.scope():
-    our_model = tf.keras.models.load_model(model_folder + p.model_name,
-                                           custom_objects={'PatchEncoder': mo.PatchEncoder})
+    our_model = tf.keras.models.load_model(model_folder + p.model_name)
     our_model.get_layer("our_head").set_weights(joblib.load(model_folder + p.model_name + "_head_" + str(head_id)))
 
 track_names = []
@@ -86,15 +85,15 @@ for i, filename in enumerate(sorted(os.listdir(BED_DIR))):
         # mae = np.sum(np.absolute((vals1[:, track_to_use, :] - vals2[:, track_to_use, :])))
         mae = 0
         for a in range(len(seqs1)):
-            # mean1 = np.mean(np.absolute((vals1[a, :] - vals2[3 * a, :])))
+            mean1 = np.mean(np.absolute((vals1[a, :] - vals2[3 * a, :])))
             mae1 = np.absolute((vals1[a, track_to_use] - vals2[3 * a, track_to_use]))
-            # mae1 = mae1 / mean1 - 1
-            # mean2 = np.mean(np.absolute((vals1[a, :] - vals2[3 * a + 1, :])))
+            mae1 = mae1 / mean1 - 1
+            mean2 = np.mean(np.absolute((vals1[a, :] - vals2[3 * a + 1, :])))
             mae2 = np.absolute((vals1[a, track_to_use] - vals2[3 * a + 1, track_to_use]))
-            # mae2 = mae2 / mean2 - 1
-            # mean3 = np.mean(np.absolute((vals1[a, :] - vals2[3 * a + 2, :])))
+            mae2 = mae2 / mean2 - 1
+            mean3 = np.mean(np.absolute((vals1[a, :] - vals2[3 * a + 2, :])))
             mae3 = np.absolute((vals1[a, track_to_use] - vals2[3 * a + 2, track_to_use]))
-            # mae3 = mae3 / mean3 - 1
+            mae3 = mae3 / mean3 - 1
             mae += max(mae1, mae2, mae3)
         mae = mae / len(seqs1)
         maes.append(mae)
@@ -113,4 +112,4 @@ joblib.dump(heatmap_matrix, "temp/heat.p")
 heatmap_matrix = joblib.load("temp/heat.p")
 heatmap_matrix = pd.DataFrame(data=heatmap_matrix, index=disease_names, columns=track_names)
 g = sns.clustermap(heatmap_matrix, rasterized=True, figsize=(16, 5*16), yticklabels=True, xticklabels=True)
-plt.savefig(f"temp/clustermap.svg")
+plt.savefig(f"temp/clustermap_fold.svg")

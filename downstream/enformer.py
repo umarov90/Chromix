@@ -205,10 +205,10 @@ model_name = "small.h5"
 # plot_tracks(tracks, target_interval)
 
 # enformer_test_tss TRY !!!!!!!!!!!!!!!!!!!!!
-gene_tss = pd.read_csv("data/enformer/enformer_gencode.bed", sep="\t", index_col=False,
+gene_tss = pd.read_csv("data/enformer/enformer_test_tss_less.bed", sep="\t", index_col=False,
                        names=["chr", "start", "end", "type"])
 
-# gene_tss = gene_tss.head(640)
+gene_tss = gene_tss.head(100)
 # eval_tracks = pd.read_csv("data/eval_tracks.tsv", sep=",", header=None)[0].tolist()
 enf_tracks = df_targets[df_targets['description'].str.contains("CAGE")]['identifier'].tolist()
 # extract from enformer targets identifier where row contains cage
@@ -282,8 +282,7 @@ joblib.dump(pred_matrix, "/media/user/EE3C38483C380DD9/temp/pred_matrix.p", comp
 one_hot = joblib.load("pickle/one_hot.gz")
 strategy = tf.distribute.MultiWorkerMirroredStrategy()
 with strategy.scope():
-    our_model = tf.keras.models.load_model(model_folder + model_name,
-                                           custom_objects={'PatchEncoder': mo.PatchEncoder})
+    our_model = tf.keras.models.load_model(model_folder + model_name)
     our_model.get_layer("our_head").set_weights(joblib.load(model_folder + model_name + "_head_" + str(head_id)))
 
 pred_matrix_our = np.zeros((len(eval_tracks), len(gene_tss)))

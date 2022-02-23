@@ -38,8 +38,11 @@ def create_model(q):
         # for layer in our_model_old.get_layer("our_resnet").layers:
         #     layer_name = layer.name
         #     layer_weights = layer.weights
-        #     our_model.get_layer("our_resnet").get_layer(layer_name).set_weights(layer_weights)
-
+        #     try:
+        #         our_model.get_layer("our_resnet").get_layer(layer_name).set_weights(layer_weights)
+        #     except:
+        #         print(layer_name)
+        #
         # for layer in our_model_old.get_layer("our_head").layers:
         #     layer_name = layer.name
         #     if "input" in layer_name:
@@ -291,6 +294,11 @@ def train_step(input_sequences, output_scores, output_hic, fit_epochs, head_id):
 
             # if current_epoch > 20:
             our_model.get_layer("our_resnet").trainable = True
+            # for layer in our_model.get_layer("our_resnet").layers:
+            #     if "regions_projection" in layer.name or "bn" in layer.name:
+            #         layer.trainable = True
+            #     else:
+            #         layer.trainable = False
             # else:
             #     our_model.get_layer("our_resnet").trainable = False
 
@@ -475,17 +483,15 @@ if __name__ == '__main__':
 
     print("Training starting")
     start_epoch = 0
-    fit_epochs = 1
+    fit_epochs = 2
     for current_epoch in range(start_epoch, p.num_epochs, 1):
         head_id = current_epoch % len(heads)
-        if current_epoch < 10:
-            fit_epochs = 1
-        elif current_epoch < 40:
-            fit_epochs = 2
-        elif current_epoch < 80:
-            fit_epochs = 4
-        else:
-            fit_epochs = 8
+        # if current_epoch < 10:
+        #     fit_epochs = 1
+        # elif current_epoch < 40:
+        #     fit_epochs = 2
+        # else:
+        #     fit_epochs = 3
 
         # check_perf(mp_q, 0)
         # exit()

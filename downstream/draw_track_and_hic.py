@@ -35,8 +35,7 @@ for track in head_tracks:
 
 strategy = tf.distribute.MultiWorkerMirroredStrategy()
 with strategy.scope():
-    our_model = tf.keras.models.load_model(model_folder + p.model_name,
-                                           custom_objects={'PatchEncoder': mo.PatchEncoder})
+    our_model = tf.keras.models.load_model(model_folder + p.model_name)
     our_model.get_layer("our_head").set_weights(joblib.load(model_folder + p.model_name + "_head_" + str(head_id)))
 
 for i in range(len(infos)):

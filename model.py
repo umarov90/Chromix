@@ -15,7 +15,7 @@ def hic_model(input_size, num_features, num_regions, cell_num, hic_num, hic_size
     input_shape = (input_size, num_features)
     inputs = Input(shape=input_shape, dtype=tf.float32)
     x = inputs
-    resnet_output = resnet(x, input_size)
+    resnet_output = resnet(x, input_size, 200)
     our_resnet = Model(inputs, resnet_output, name="our_resnet")
     num_patches = 6563
     num_filters = 904
@@ -64,10 +64,10 @@ def small_model(input_size, num_features, num_regions, cell_num):
     input_shape = (input_size, num_features)
     inputs = Input(shape=input_shape, dtype=tf.float32)
     x = inputs
-    resnet_output = resnet(x, input_size)
+    resnet_output = resnet(x, input_size, 200)
     our_resnet = Model(inputs, resnet_output, name="our_resnet")
-    num_patches = 500
-    num_filters = 904
+    num_patches = 250
+    num_filters = 1006
 
     head_input = Input(shape=(num_patches, num_filters))
     x = head_input
@@ -82,7 +82,7 @@ def small_model(input_size, num_features, num_regions, cell_num):
 
     x = Dropout(dropout_rate, input_shape=(num_regions, num_filters))(x)
 
-    x = Conv1D(2048, kernel_size=1, strides=1, name="pointwise", activation=tf.nn.gelu)(x)
+    x = Conv1D(2048, kernel_size=1, strides=1, name="pointwise", activation=LeakyReLU(alpha=leaky_alpha))(x)
     outputs = Conv1D(cell_num, kernel_size=1, strides=1, name="last_conv1d")(x)
     outputs = tf.transpose(outputs, [0, 2, 1])
     print(outputs)
@@ -101,25 +101,21 @@ def resnet_layer(inputs,
                  kernel_size=7,
                  strides=1,
                  activation=True,
-                 batch_normalization=True,
                  name="rl_"):
     conv = Conv1D(num_filters,
                   kernel_size=kernel_size,
                   strides=strides,
                   padding="same",
-                  # use_bias=False,
                   name=name + "conv1d")
 
     x = inputs
     if activation:
         x = LeakyReLU(alpha=leaky_alpha, name=name + "act")(x)
-    if batch_normalization:
-        x = BatchNormalization(name=name + "bn")(x)
     x = conv(x)
     return x
 
 
-def resnet(input_x, input_size):
+def resnet(input_x, input_size, bin_size):
     # Initial number of filters
     num_filters = 512
 
@@ -127,18 +123,18 @@ def resnet(input_x, input_size):
     x = resnet_layer(inputs=input_x,
                      num_filters=num_filters,
                      activation=False,
-                     batch_normalization=False,
                      strides=3,
                      kernel_size=15,
                      name="rl_1_")
     current_len = input_size // 3
     # Instantiate the stack of residual units
-    num_blocks = 6
+    num_blocks = 7
     for block in range(num_blocks):
         cname = "rl_" + str(block) + "_"
         strides = 1
         y = x
-        num_filters = int(num_filters * 1.1)
+        if block != num_blocks - 1:
+            num_filters = int(num_filters * 1.12)
         activation = True
         if block != 0:
             # Downsample
@@ -146,7 +142,7 @@ def resnet(input_x, input_size):
             y = tf.transpose(y, [0, 2, 1])
             current_len = math.ceil(current_len / 2)
             if block == num_blocks - 1:
-                current_len = input_size // 100
+                current_len = input_size // bin_size
             # Replace by conv maybe
             y = Dense(current_len, activation=LeakyReLU(alpha=leaky_alpha),
                       name="regions_projection_" + str(block))(y)
@@ -162,25 +158,22 @@ def resnet(input_x, input_size):
         y = Dropout(dropout_rate)(y)
         y = resnet_layer(inputs=y,
                          num_filters=num_filters,
-                         batch_normalization=False,
                          name=cname + "2_")
         if block != num_blocks - 1:
-            # linear projection residual shortcut connection to match
-            # changed dims
+            # linear projection residual shortcut connection to match changed dims
             x = resnet_layer(inputs=x,
                              num_filters=num_filters,
                              strides=strides,
                              activation=False,
-                             batch_normalization=False,
                              name=cname + "3_")
-            x = Add()([x, y])
         else:
-            x = y
+            x = tf.transpose(x, [0, 2, 1])
+            x = Conv1D(input_size // bin_size, kernel_size=1, name="linear_regions_projection_" + str(block))(x)
+            x = tf.transpose(x, [0, 2, 1])
+        x = Add()([x, y])
 
-    # final activation and batch normalization
+    # final activation
     x = LeakyReLU(alpha=leaky_alpha, name="res_act_final")(x)
-    # x = BatchNormalization(name="res_bn_final")(x)
-
     return x
 
 

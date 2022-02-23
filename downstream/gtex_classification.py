@@ -41,8 +41,7 @@ one_hot = joblib.load("pickle/one_hot.gz")
 
 strategy = tf.distribute.MultiWorkerMirroredStrategy()
 with strategy.scope():
-    our_model = tf.keras.models.load_model(model_folder + p.model_name,
-                                           custom_objects={'PatchEncoder': mo.PatchEncoder})
+    our_model = tf.keras.models.load_model(model_folder + p.model_name)
     our_model.get_layer("our_head").set_weights(joblib.load(model_folder + p.model_name + "_head_" + str(head_id)))
 
 vcf_names = set([])
@@ -97,7 +96,8 @@ for name in vcf_names:
     print(f"Predicting {len(seqs2)}")
     vals2 = mo.batch_predict(our_model, np.asarray(seqs2))
     print("Done")
-    dif = np.mean(vals1 - vals2, axis=-1) # Combine max and mean for random forest?
+    dif = np.mean(vals1,  axis=-1) - np.mean(vals2,  axis=-1) # Combine max and mean for random forest?
+    # alt_prediction.mean(axis=1) - ref_prediction.mean(axis=1)
 
     X_train, X_test, Y_train, Y_test = train_test_split(dif, np.asarray(Y_label), test_size=0.1, random_state=1)
     clf = RandomForestClassifier(random_state=0) # max_depth=100,
