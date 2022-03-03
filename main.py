@@ -33,7 +33,7 @@ def create_model(q):
         our_model = mo.small_model(p.input_size, p.num_features, p.num_regions, p.out_stack_num)
         # our_model = mo.hic_model(p.input_size, p.num_features, p.num_regions, p.out_stack_num, hic_num, p.hic_size)
         # print("loading model")
-        # our_model_old = tf.keras.models.load_model(p.model_folder + "small.h5")
+        # our_model_old = tf.keras.models.load_model(p.model_folder + "small_full.h5")
         # print("model loaded")
         # for layer in our_model_old.get_layer("our_resnet").layers:
         #     layer_name = layer.name
@@ -57,13 +57,13 @@ def create_model(q):
         #     layer_weights = layer.weights
         #     our_model.get_layer("our_hic").get_layer(layer_name).set_weights(layer_weights)
 
-        # our_model.set_weights(joblib.load(model_folder + model_name + "_w"))
+        our_model.set_weights(joblib.load(p.model_folder + "small_full.h5" + "_w"))
 
         our_model.save(p.model_path, include_optimizer=False)
         print("Model saved " + p.model_path)
-        for head_id in range(len(heads)):
-            joblib.dump(our_model.get_layer("our_head").get_weights(),
-                        p.model_path + "_head_" + str(head_id), compress=3)
+        # for head_id in range(len(heads)):
+        #     joblib.dump(our_model.get_layer("our_head").get_weights(),
+        #                 p.model_path + "_head_" + str(head_id), compress=3)
     q.put(None)
 
 
@@ -269,9 +269,8 @@ def train_step(input_sequences, output_scores, output_hic, fit_epochs, head_id):
             print(f"=== Training with head {head_id} ===")
             hic_lr = 0.0001
             head_lr = 0.001
-            head_wd = 0.00001
             resnet_lr = 0.0001
-            resnet_wd = 0.000001
+            resnet_wd = 0.00001
             # cap_e = min(current_epoch, 40)
             # transformer_lr = 0.0000005 + cap_e * 0.0000025
             # tfa.optimizers.AdamW
@@ -280,7 +279,7 @@ def train_step(input_sequences, output_scores, output_hic, fit_epochs, head_id):
             #     tfa.optimizers.AdamW(learning_rate=transformer_lr, weight_decay=transformer_wd),
             #     tf.keras.optimizers.Adam(learning_rate=head_lr)
             # ]
-            optimizers = {"our_resnet": tf.keras.optimizers.Adam(learning_rate=resnet_lr),
+            optimizers = {"our_resnet": tfa.optimizers.AdamW(learning_rate=resnet_lr, weight_decay=resnet_wd),
                           "our_head": tf.keras.optimizers.Adam(learning_rate=head_lr)}
 
             optimizers_and_layers = [(optimizers["our_resnet"], our_model.get_layer("our_resnet")),
@@ -292,13 +291,15 @@ def train_step(input_sequences, output_scores, output_hic, fit_epochs, head_id):
 
             optimizer = tfa.optimizers.MultiOptimizer(optimizers_and_layers)
 
-            # if current_epoch > 20:
+            # if current_epoch >= 20:
             our_model.get_layer("our_resnet").trainable = True
-            # for layer in our_model.get_layer("our_resnet").layers:
-            #     if "regions_projection" in layer.name or "bn" in layer.name:
-            #         layer.trainable = True
-            #     else:
-            #         layer.trainable = False
+            #     if current_epoch == 20:
+            #         os.remove(p.model_path + "_opt_resnet")
+            # # for layer in our_model.get_layer("our_resnet").layers:
+            # #     if "regions_projection" in layer.name or "bn" in layer.name:
+            # #         layer.trainable = True
+            # #     else:
+            # #         layer.trainable = False
             # else:
             #     our_model.get_layer("our_resnet").trainable = False
 
@@ -330,6 +331,7 @@ def train_step(input_sequences, output_scores, output_hic, fit_epochs, head_id):
                 optimizers["our_hic"].set_weights(joblib.load(p.model_path + "_opt_hic"))
 
             optimizers["our_resnet"].learning_rate = resnet_lr
+            optimizers["our_resnet"].weight_decay = resnet_wd
             optimizers["our_head"].learning_rate = head_lr
             if hic_num > 0:
                 optimizers["our_hic"].learning_rate = hic_lr
@@ -388,11 +390,12 @@ def check_perf(mp_q, head_id):
         print(f"Training set {len(train_eval_chr_info)}")
         training_spearman = evaluation.eval_perf(p, our_model, heads[head_id], train_eval_chr_info,
                                                  False, current_epoch, train_eval_chr, one_hot, hic_keys, loaded_tracks)
+        # training_spearman = 0
         test_info_eval = joblib.load("pickle/test_info_eval.gz")
         print(f"Test set {len(test_info_eval)}")
         test_info_eval.sort(key=lambda x: x[1])
         test_spearman = evaluation.eval_perf(p, our_model, heads[head_id], test_info_eval,
-                                             False, current_epoch, "chr1", one_hot, hic_keys, loaded_tracks)
+                                             True, current_epoch, "chr1", one_hot, hic_keys, loaded_tracks)
         with open(p.model_name + "_history.csv", "a+") as myfile:
             myfile.write(f"{training_spearman},{test_spearman}")
             myfile.write("\n")
@@ -496,7 +499,7 @@ if __name__ == '__main__':
         # check_perf(mp_q, 0)
         # exit()
         last_proc = run_epoch(last_proc, fit_epochs, head_id)
-        if current_epoch % 20 == 0 and current_epoch >= 20:  # and current_epoch != 0:
+        if current_epoch % 50 == 0 and current_epoch != 0:  # and current_epoch != 0:
             print("Eval epoch")
             print(mp_q.get())
             last_proc.join()

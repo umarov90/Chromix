@@ -196,8 +196,7 @@ os.chdir(folders[0])
 parsed_tracks_folder = folders[1]
 parsed_hic_folder = folders[2]
 model_folder = folders[3]
-model_name = "small.h5"
-
+params = MainParams()
 # tracks = {'DNASE:CD14-positive monocyte female': predictions[:, 41],
 #           'DNASE:keratinocyte female': predictions[:, 42],
 #           'CHIP:H3K27ac:keratinocyte female': predictions[:, 706],
@@ -208,7 +207,7 @@ model_name = "small.h5"
 gene_tss = pd.read_csv("data/enformer/enformer_test_tss_less.bed", sep="\t", index_col=False,
                        names=["chr", "start", "end", "type"])
 
-gene_tss = gene_tss.head(100)
+# gene_tss = gene_tss.head(100)
 # eval_tracks = pd.read_csv("data/eval_tracks.tsv", sep=",", header=None)[0].tolist()
 enf_tracks = df_targets[df_targets['description'].str.contains("CAGE")]['identifier'].tolist()
 # extract from enformer targets identifier where row contains cage
@@ -246,44 +245,44 @@ for j, track in enumerate(eval_tracks):
 # ENFORMER #####################################################################################################
 #################################################################################################################
 
-# pred_matrix = joblib.load("/media/user/EE3C38483C380DD9/temp/pred_matrix.p")
-pred_matrix = np.zeros((len(eval_tracks), len(gene_tss)))
-counts = [0, 0, 0]
-batch = []
-print("Predicting")
-gene_index = 0
-for index, row in gene_tss.iterrows():
-    if index % 100 == 0:
-        gc.collect()
-        print(index, end=" ")
-    target_interval = kipoiseq.Interval(row["chr"], row["start"] - 63, row["start"] - 63 + 1)
-    sequence_one_hot = one_hot_encode(fasta_extractor.extract(target_interval.resize(SEQUENCE_LENGTH)))
-    batch.append(sequence_one_hot)
-    if len(batch) > 6 or index == len(gene_tss) - 1:
-        predictions = model.predict_on_batch(batch)['human']
-        for p in predictions:
-            for j, track in enumerate(eval_tracks):
-                t = track_ind[track]
-                bins = [p[447, t], p[448, t], p[449, t]]
-                # bins = [p[448, t]]
-                gene_expression = np.sum(bins)
-                counts[bins.index(max(bins))] += 1
-                # np.asarray(p)[:, 4799]
-                pred_matrix[j, gene_index] = gene_expression
-            gene_index += 1
-        batch = []
-
-print("")
-print(counts)
-joblib.dump(pred_matrix, "/media/user/EE3C38483C380DD9/temp/pred_matrix.p", compress=3)
+pred_matrix = joblib.load("/media/user/EE3C38483C380DD9/temp/pred_matrix.p")
+# pred_matrix = np.zeros((len(eval_tracks), len(gene_tss)))
+# counts = [0, 0, 0]
+# batch = []
+# print("Predicting")
+# gene_index = 0
+# for index, row in gene_tss.iterrows():
+#     if index % 100 == 0:
+#         gc.collect()
+#         print(index, end=" ")
+#     target_interval = kipoiseq.Interval(row["chr"], row["start"] - 63, row["start"] - 63 + 1)
+#     sequence_one_hot = one_hot_encode(fasta_extractor.extract(target_interval.resize(SEQUENCE_LENGTH)))
+#     batch.append(sequence_one_hot)
+#     if len(batch) > 6 or index == len(gene_tss) - 1:
+#         predictions = model.predict_on_batch(batch)['human']
+#         for p in predictions:
+#             for j, track in enumerate(eval_tracks):
+#                 t = track_ind[track]
+#                 bins = [p[447, t], p[448, t], p[449, t]]
+#                 # bins = [p[448, t]]
+#                 gene_expression = np.sum(bins)
+#                 counts[bins.index(max(bins))] += 1
+#                 # np.asarray(p)[:, 4799]
+#                 pred_matrix[j, gene_index] = gene_expression
+#             gene_index += 1
+#         batch = []
+#
+# print("")
+# print(counts)
+# joblib.dump(pred_matrix, "/media/user/EE3C38483C380DD9/temp/pred_matrix.p", compress=3)
 
 # OUR MODEL #####################################################################################################
 #################################################################################################################
 one_hot = joblib.load("pickle/one_hot.gz")
 strategy = tf.distribute.MultiWorkerMirroredStrategy()
 with strategy.scope():
-    our_model = tf.keras.models.load_model(model_folder + model_name)
-    our_model.get_layer("our_head").set_weights(joblib.load(model_folder + model_name + "_head_" + str(head_id)))
+    our_model = tf.keras.models.load_model(model_folder + params.model_name)
+    our_model.get_layer("our_head").set_weights(joblib.load(model_folder + params.model_name + "_head_" + str(head_id)))
 
 pred_matrix_our = np.zeros((len(eval_tracks), len(gene_tss)))
 p = MainParams()
@@ -325,14 +324,17 @@ print(counts)
 
 gt_matrix = np.zeros((len(eval_tracks), len(gene_tss)))
 
+bin = 200 # 128
+half_bin = 100 # 63
+
 # for track in eval_tracks:
 #     gt_vector = np.zeros(len(gene_tss))
 #     bw = pyBigWig.open(tracks_folder + full_name[track])
 #     for index, row in gene_tss.iterrows():
-#         start = row["start"] - 64 - 128
-#         vals = bw.values(row["chr"], start, start + 3 * 128)
+#         start = row["start"] - half_bin - bin
+#         vals = bw.values(row["chr"], start, start + 3 * bin)
 #         vals = np.nan_to_num(vals)
-#         vals = [np.sum(vals[0:128]), np.sum(vals[128:2 * 128]), np.sum(vals[2 * 128:])]
+#         vals = [np.sum(vals[0:bin]), np.sum(vals[bin:2 * bin]), np.sum(vals[2 * bin:])]
 #         gt_count = 0
 #         for v in vals:
 #             if v > 0:
@@ -348,10 +350,10 @@ def load_bw(q, sub_tracks):
         gt_vector = np.zeros(len(gene_tss))
         bw = pyBigWig.open(tracks_folder + full_name[track])
         for index, row in gene_tss.iterrows():
-            start = row["start"] - 63 - 128
-            vals = bw.values(row["chr"], start, start + 3 * 128)
+            start = row["start"] - half_bin - bin
+            vals = bw.values(row["chr"], start, start + 3 * bin)
             vals = np.nan_to_num(vals)
-            vals = np.asarray([np.sum(vals[0:128]), np.sum(vals[128:2 * 128]), np.sum(vals[2 * 128:])])
+            vals = np.asarray([np.sum(vals[0:bin]), np.sum(vals[bin:2 * bin]), np.sum(vals[2 * bin:])])
             gt_vector[index] = np.sum(vals)
 
             # start = row["start"] - 64

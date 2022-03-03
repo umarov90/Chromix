@@ -7,7 +7,7 @@ from tensorflow.keras.models import Model
 import tensorflow as tf
 import numpy as np
 
-dropout_rate = 0.0
+dropout_rate = 0.3
 leaky_alpha = 0.2
 
 

@@ -123,9 +123,9 @@ def draw_regplots(track_names, track_perf, final_pred, eval_gt, fig_path):
     print("Drawing gene regplot")
     for it, track in enumerate(track_names):
         type = track[:track.find(".")]
-        if type != "CAGE":
+        if type not in ["CAGE", "NETCAGE"]:
             continue
-        if track_perf[track] < 0.7:
+        if track_perf[track] < 0.75:
             continue
         a = []
         b = []

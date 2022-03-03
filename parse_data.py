@@ -42,6 +42,8 @@ def parse_hic():
                 fn = os.path.join(directory, filename)
                 t_name = fn.replace("/", "_")
                 print(t_name)
+                if t_name not in ["hic_THP1_10kb_interactions.txt.bz2", "hic_A549_10kb_interactions.txt.bz2", "hic_HepG2_10kb_interactions.txt.bz2"]:
+                    continue
                 hic_keys.append(t_name)
                 if Path("parsed_hic/" + t_name + "chr1").is_file():
                     continue
@@ -61,7 +63,7 @@ def parse_hic():
                 df.drop(df[df['chr1'] != df['chr2']].index, inplace=True)
                 print(len(df))
                 df.drop(['chr2'], axis=1, inplace=True)
-                df.drop(df[df['locus1'] - df['locus2'] > 1000000].index, inplace=True)
+                df.drop(df[df['locus1'] - df['locus2'] > 220000].index, inplace=True)
                 print(len(df))
                 df["pvalue"] = -1 * np.log(df["pvalue"])
                 m = df.loc[df['pvalue'] != np.inf, 'pvalue'].max()

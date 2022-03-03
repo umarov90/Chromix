@@ -253,11 +253,11 @@ def eval_perf(p, our_model, eval_track_names, eval_infos, should_draw, current_e
     print("Saving bed files")
     for track in start_val.keys():
         for start in start_val[track].keys():
-            start_val[track][start] = np.mean(start_val[track][start])  # MAX can be better on the test set!
-        # with open("bed_output/" + chr_name + "_" + track + ".bedGraph", 'w+') as f:
-        #     for start in sorted(start_val[track].keys()):
-        #         f.write(f"{chr_name}\t{start}\t{start+p.bin_size}\t{start_val[track][start]}")
-        #         f.write("\n")
+            start_val[track][start] = np.max(start_val[track][start])  # MAX can be better on the test set!
+        with open("bed_output/" + chr_name + "_" + track + ".bedGraph", 'w+') as f:
+            for start in sorted(start_val[track].keys()):
+                f.write(f"{chr_name}\t{start}\t{start+p.bin_size}\t{start_val[track][start]}")
+                f.write("\n")
 
     print("Across tracks (TSS)")
     corrs_p = {}
@@ -273,7 +273,7 @@ def eval_perf(p, our_model, eval_track_names, eval_infos, should_draw, current_e
         b = np.nan_to_num(b, neginf=0, posinf=0)
         pc = stats.pearsonr(a, b)[0]
         sc = stats.spearmanr(a, b)[0]
-        track_perf[track] = sc
+        track_perf[track] = pc
         if pc is not None and sc is not None:
             corrs_p.setdefault(type, []).append((pc, track))
             corrs_s.setdefault(type, []).append((sc, track))
@@ -298,7 +298,6 @@ def eval_perf(p, our_model, eval_track_names, eval_infos, should_draw, current_e
     corrs_p = {}
     corrs_s = {}
     all_track_spearman = {}
-    track_perf = {}
     for track in start_val.keys():
         type = track[:track.find(".")]
         a = eval_gt_tss[track]
@@ -312,7 +311,6 @@ def eval_perf(p, our_model, eval_track_names, eval_infos, should_draw, current_e
         b = np.nan_to_num(b, neginf=0, posinf=0)
         pc = stats.pearsonr(a, b)[0]
         sc = stats.spearmanr(a, b)[0]
-        track_perf[track] = sc
         if pc is not None and sc is not None:
             corrs_p.setdefault(type, []).append((pc, track))
             corrs_s.setdefault(type, []).append((sc, track))
