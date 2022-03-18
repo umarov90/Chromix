@@ -28,7 +28,7 @@ def draw_tracks(p, track_names, predictions_full, eval_gt_full,
 
     gene_info = pd.read_csv("data/hg38.GENCODEv38.pc_lnc.gene.info.tsv", sep="\t", index_col=False)
     print("Drawing tracks")
-    hic_to_draw = 0 # 1 hic key
+    hic_to_draw = len(hic_keys) - 2 # 1 hic key
     types_to_draw = ["scEnd5", "scATAC"]
     types = []
     for it, track in enumerate(track_names):
@@ -41,7 +41,7 @@ def draw_tracks(p, track_names, predictions_full, eval_gt_full,
             continue
         r = list(range(len(predictions_full)))
         random.shuffle(r)
-        r = r[:10]
+        r = r[:50]
         for i in r:
             fig = plt.figure(tight_layout=True, figsize=(14, 7))
             gs = gridspec.GridSpec(2, 2)
@@ -84,8 +84,8 @@ def draw_tracks(p, track_names, predictions_full, eval_gt_full,
             #####################################################
             # print(f"tss layer {np.sum(tss_layer)}")
             # print(f"tss names {len(tss_names)}")
-            vector1 = np.pad(predictions_full[i][it], (275, 274), 'constant')
-            vector2 = np.pad(eval_gt_full[i][it], (275, 274), 'constant')
+            vector1 = np.pad(predictions_full[i][it], (50, 49), 'constant')
+            vector2 = np.pad(eval_gt_full[i][it], (50, 49), 'constant')
             x = range(len(tss_track))
             d1 = {'bin': x, 'expression': vector1}
             df1 = pd.DataFrame(d1)

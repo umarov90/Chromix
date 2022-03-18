@@ -8,13 +8,8 @@ import visualization as viz
 import model as mo
 import numpy as np
 
-infos = joblib.load("pickle/test_info.gz")[:100]
-hic_keys = ["hic_THP1_10kb_interactions.txt.bz2"]
-eval_track_names = []
-
 eval_gt_full = []
 p = MainParams()
-one_hot = joblib.load("pickle/one_hot.gz")
 w_step = 500
 predict_batch_size = 4
 script_folder = pathlib.Path(__file__).parent.resolve()
@@ -26,6 +21,14 @@ model_folder = folders[3]
 heads = joblib.load("pickle/heads.gz")
 head_id = 0
 head_tracks = heads[head_id]
+p.parsed_hic_folder = folders[2]
+hic_keys = joblib.load("pickle/hic_keys.gz")
+for h in hic_keys:
+    print(h)
+infos = joblib.load("pickle/test_info.gz")[:100]
+one_hot = joblib.load("pickle/one_hot.gz")
+# hic_keys = [hic_keys[0]]
+eval_track_names = []
 
 for track in head_tracks:
     if "scEnd5" in track:
@@ -68,14 +71,14 @@ for hi, key in enumerate(hic_keys):
         hic_mat = np.zeros((p.num_hic_bins, p.num_hic_bins))
         start_hic = int(info[1] - (info[1] % p.bin_size) - p.half_size_hic)
         end_hic = start_hic + 2 * p.half_size_hic
-        start_row = hd['locus1'].searchsorted(start_hic - p.hic_bin_size, side='left')
-        end_row = hd['locus1'].searchsorted(end_hic, side='right')
+        start_row = hd['locus1_start'].searchsorted(start_hic - p.hic_bin_size, side='left')
+        end_row = hd['locus1_start'].searchsorted(end_hic, side='right')
         hd = hd.iloc[start_row:end_row]
         # convert start of the input region to the bin number
         start_hic = int(start_hic / p.hic_bin_size)
         # subtract start bin from the binned entries in the range [start_row : end_row]
-        l1 = (np.floor(hd["locus1"].values / p.hic_bin_size) - start_hic).astype(int)
-        l2 = (np.floor(hd["locus2"].values / p.hic_bin_size) - start_hic).astype(int)
+        l1 = (np.floor(hd["locus1_start"].values / p.hic_bin_size) - start_hic).astype(int)
+        l2 = (np.floor(hd["locus2_start"].values / p.hic_bin_size) - start_hic).astype(int)
         hic_score = hd["score"].values
         # drop contacts with regions outside the [start_row : end_row] range
         lix = (l2 < len(hic_mat)) & (l2 >= 0) & (l1 >= 0)
@@ -128,5 +131,5 @@ draw_arguments = [p, eval_track_names, predictions_full, eval_gt_full,
                   f"{p.figures_folder}/tracks/"]
 
 joblib.dump(draw_arguments, "draw", compress=3)
-
+# draw_arguments = joblib.load("draw")
 viz.draw_tracks(*draw_arguments)

@@ -17,14 +17,14 @@ def hic_model(input_size, num_features, num_regions, cell_num, hic_num, hic_size
     x = inputs
     resnet_output = resnet(x, input_size, 200)
     our_resnet = Model(inputs, resnet_output, name="our_resnet")
-    num_patches = 6563
-    num_filters = 904
+    num_patches = 1100
+    num_filters = 1006
 
     hic_input = Input(shape=(num_patches, num_filters))
-    hx = Conv1D(128, kernel_size=1, strides=1, name="pointwise_hic_1", activation=tf.nn.gelu)(hic_input)
+    hx = Conv1D(128, kernel_size=1, strides=1, name="pointwise_hic_1", activation=LeakyReLU(alpha=leaky_alpha))(hic_input)
 
     hx = tf.transpose(hx, [0, 2, 1])
-    hx = Conv1D(input_size // 1000, kernel_size=1, strides=1, name="pointwise_hic_2", activation=tf.nn.gelu)(hx)
+    hx = Conv1D(input_size // 1000, kernel_size=1, strides=1, name="pointwise_hic_2", activation=LeakyReLU(alpha=leaky_alpha))(hx)
     hx = tf.transpose(hx, [0, 2, 1])
 
     hx = Flatten()(hx)
@@ -38,14 +38,17 @@ def hic_model(input_size, num_features, num_regions, cell_num, hic_num, hic_size
     head_input = Input(shape=(num_patches, num_filters))
     x = head_input
 
-    x = tf.transpose(x, [0, 2, 1])
-    # x = Conv1D(num_regions, kernel_size=1, strides=1, use_bias=False, name="regions_projection")(x)
-    x = Dense(num_regions, activation=tf.nn.gelu, name="regions_projection")(x)
-    x = tf.transpose(x, [0, 2, 1])
+    # x = tf.transpose(x, [0, 2, 1])
+    # # x = Conv1D(num_regions, kernel_size=1, strides=1, use_bias=False, name="regions_projection")(x)
+    # x = Dense(input_size // 100, activation=tf.nn.gelu, name="regions_projection")(x)
+    # x = tf.transpose(x, [0, 2, 1])
+
+    trim = (x.shape[-2] - num_regions) // 2
+    x = x[..., trim + 1:-trim, :]
 
     x = Dropout(dropout_rate, input_shape=(num_regions, num_filters))(x)
 
-    x = Conv1D(2048, kernel_size=1, strides=1, name="pointwise", activation=tf.nn.gelu)(x)
+    x = Conv1D(2048, kernel_size=1, strides=1, name="pointwise", activation=LeakyReLU(alpha=leaky_alpha))(x)
     outputs = Conv1D(cell_num, kernel_size=1, strides=1, name="last_conv1d")(x)
     outputs = tf.transpose(outputs, [0, 2, 1])
     print(outputs)
@@ -138,17 +141,23 @@ def resnet(input_x, input_size, bin_size):
         activation = True
         if block != 0:
             # Downsample
-            y = LeakyReLU(alpha=leaky_alpha, name="dwn_" + str(block))(y)
-            y = tf.transpose(y, [0, 2, 1])
+            strides = 2
             current_len = math.ceil(current_len / 2)
             if block == num_blocks - 1:
                 current_len = input_size // bin_size
-            # Replace by conv maybe
-            y = Dense(current_len, activation=LeakyReLU(alpha=leaky_alpha),
-                      name="regions_projection_" + str(block))(y)
-            y = tf.transpose(y, [0, 2, 1])
-            strides = 2
-            activation = False
+            if block > 3:
+                y = LeakyReLU(alpha=leaky_alpha, name="dwn_" + str(block))(y)
+                y = tf.transpose(y, [0, 2, 1])
+                # Replace by conv maybe
+                y = Dense(current_len, activation=LeakyReLU(alpha=leaky_alpha),
+                          name="regions_projection_" + str(block))(y)
+                y = tf.transpose(y, [0, 2, 1])
+                activation = False
+            else:
+                y = resnet_layer(inputs=y,
+                                 num_filters=num_filters,
+                                 strides=strides,
+                                 name="regions_projection_" + str(block))
 
         # Wide basic block with two CNN layers.
         y = resnet_layer(inputs=y,

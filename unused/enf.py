@@ -14,7 +14,7 @@ enformer = tf.saved_model.load("enformer_1")
 SEQ_LENGTH = 393_216
 
 # Numpy array [batch_size, SEQ_LENGTH, 4] one hot encoded in order 'ACGT'. The
-# `one_hot_encode` function is available in `enformer.py` and outputs can be
+# `one_hot_encode` function is available in `enformer_usage.py` and outputs can be
 # stacked to form a batch.
 inputs = tf.zeros((1, SEQ_LENGTH, 4), dtype=tf.float32)
 predictions = enformer.call(inputs)

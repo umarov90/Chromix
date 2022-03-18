@@ -30,25 +30,40 @@ def create_model(q):
     import model as mo
     strategy = tf.distribute.MultiWorkerMirroredStrategy()
     with strategy.scope():
-        our_model = mo.small_model(p.input_size, p.num_features, p.num_regions, p.out_stack_num)
-        # our_model = mo.hic_model(p.input_size, p.num_features, p.num_regions, p.out_stack_num, hic_num, p.hic_size)
-        # print("loading model")
-        # our_model_old = tf.keras.models.load_model(p.model_folder + "small_full.h5")
-        # print("model loaded")
-        # for layer in our_model_old.get_layer("our_resnet").layers:
-        #     layer_name = layer.name
-        #     layer_weights = layer.weights
-        #     try:
-        #         our_model.get_layer("our_resnet").get_layer(layer_name).set_weights(layer_weights)
-        #     except:
-        #         print(layer_name)
-        #
-        # for layer in our_model_old.get_layer("our_head").layers:
-        #     layer_name = layer.name
-        #     if "input" in layer_name:
-        #         continue
-        #     layer_weights = layer.weights
-        #     our_model.get_layer("our_head").get_layer(layer_name).set_weights(layer_weights)
+        # our_model = mo.small_model(p.input_size, p.num_features, p.num_regions, p.out_stack_num)
+        our_model = mo.hic_model(p.input_size, p.num_features, p.num_regions, p.out_stack_num, hic_num, p.hic_size)
+        print("loading model")
+        our_model_old = tf.keras.models.load_model(p.model_folder + "small_full_regul.h5")
+        print("model loaded")
+        for layer in our_model_old.get_layer("our_resnet").layers:
+            try:
+                layer_name = layer.name
+                if "transpose" in layer_name or "dwn" in layer_name:
+                    continue
+                try:
+                    new_shape = our_model.get_layer("our_resnet").get_layer(layer_name)
+                except:
+                    layer_name = layer_name + "conv1d"
+                layer_weights = layer.weights
+                new_weights_list = []
+                for li in range(len(layer.weights)):
+                    new_shape = our_model.get_layer("our_resnet").get_layer(layer_name).weights[li].shape
+                    new_weights_list.append(np.resize(layer.weights[li], new_shape))
+
+                our_model.get_layer("our_resnet").get_layer(layer_name).set_weights(new_weights_list)
+            except:
+                print(layer_name)
+
+        for layer in our_model_old.get_layer("our_head").layers:
+            layer_name = layer.name
+            if "input" in layer_name or "transpose" in layer_name or "dwn" in layer_name:
+                continue
+            new_weights_list = []
+            for li in range(len(layer.weights)):
+                new_shape = our_model.get_layer("our_head").get_layer(layer_name).weights[li].shape
+                new_weights_list.append(np.resize(layer.weights[li], new_shape))
+
+            our_model.get_layer("our_head").get_layer(layer_name).set_weights(new_weights_list)
 
         # for layer in our_model_old.get_layer("our_hic").layers:
         #     layer_name = layer.name
@@ -57,13 +72,13 @@ def create_model(q):
         #     layer_weights = layer.weights
         #     our_model.get_layer("our_hic").get_layer(layer_name).set_weights(layer_weights)
 
-        our_model.set_weights(joblib.load(p.model_folder + "small_full.h5" + "_w"))
+        # our_model.set_weights(joblib.load(p.model_folder + "small_full.h5" + "_w"))
 
         our_model.save(p.model_path, include_optimizer=False)
         print("Model saved " + p.model_path)
-        # for head_id in range(len(heads)):
-        #     joblib.dump(our_model.get_layer("our_head").get_weights(),
-        #                 p.model_path + "_head_" + str(head_id), compress=3)
+        for head_id in range(len(heads)):
+            joblib.dump(our_model.get_layer("our_head").get_weights(),
+                        p.model_path + "_head_" + str(head_id), compress=3)
     q.put(None)
 
 
@@ -82,6 +97,8 @@ def run_epoch(last_proc, fit_epochs, head_id):
             print(i, end=" ")
             gc.collect()
         try:
+            if info[0] in ["chrY"]:
+                continue
             shift_bins = random.randint(-int(current_epoch / p.shift_speed) - p.initial_shift,
                                         int(current_epoch / p.shift_speed) + p.initial_shift)
             start = info[1] - (info[1] % p.bin_size) - p.half_size + shift_bins * p.bin_size
@@ -155,14 +172,14 @@ def run_epoch(last_proc, fit_epochs, head_id):
             hic_mat = np.zeros((p.num_hic_bins, p.num_hic_bins))
             start_hic = int(info[1] - (info[1] % p.bin_size) - p.half_size_hic + shifts[i] * p.bin_size)
             end_hic = start_hic + 2 * p.half_size_hic
-            start_row = hd['locus1'].searchsorted(start_hic - p.hic_bin_size, side='left')
-            end_row = hd['locus1'].searchsorted(end_hic, side='right')
+            start_row = hd['locus1_start'].searchsorted(start_hic - p.hic_bin_size, side='left')
+            end_row = hd['locus1_start'].searchsorted(end_hic, side='right')
             hd = hd.iloc[start_row:end_row]
             # convert start of the input region to the bin number
             start_hic = int(start_hic / p.hic_bin_size)
             # subtract start bin from the binned entries in the range [start_row : end_row]
-            l1 = (np.floor(hd["locus1"].values / p.hic_bin_size) - start_hic).astype(int)
-            l2 = (np.floor(hd["locus2"].values / p.hic_bin_size) - start_hic).astype(int)
+            l1 = (np.floor(hd["locus1_start"].values / p.hic_bin_size) - start_hic).astype(int)
+            l2 = (np.floor(hd["locus2_start"].values / p.hic_bin_size) - start_hic).astype(int)
             hic_score = hd["score"].values
             # drop contacts with regions outside the [start_row : end_row] range
             lix = (l2 < len(hic_mat)) & (l2 >= 0) & (l1 >= 0)
@@ -174,11 +191,11 @@ def run_epoch(last_proc, fit_epochs, head_id):
             # hic_mat = gaussian_filter(hic_mat, sigma=1)
             if ni < half:
                 hic_mat = np.rot90(hic_mat, k=2)
-            if i == 0:
-                print(f"original {hic_mat.shape}")
+            # if i == 0:
+            #     print(f"original {hic_mat.shape}")
             hic_mat = hic_mat[np.triu_indices_from(hic_mat, k=1)]
-            if i == 0:
-                print(f"triu {hic_mat.shape}")
+            # if i == 0:
+            #     print(f"triu {hic_mat.shape}")
             # for hs in range(hic_track_size):
             #     hic_slice = hic_mat[hs * num_regions: (hs + 1) * num_regions].copy()
             # if len(hic_slice) != num_regions:
@@ -268,9 +285,9 @@ def train_step(input_sequences, output_scores, output_hic, fit_epochs, head_id):
             our_model.get_layer("our_head").set_weights(joblib.load(p.model_path + "_head_" + str(head_id)))
             print(f"=== Training with head {head_id} ===")
             hic_lr = 0.0001
-            head_lr = 0.001
-            resnet_lr = 0.0001
-            resnet_wd = 0.00001
+            head_lr = 0.0001
+            resnet_lr = 0.00001
+            resnet_wd = 0.000001
             # cap_e = min(current_epoch, 40)
             # transformer_lr = 0.0000005 + cap_e * 0.0000025
             # tfa.optimizers.AdamW
@@ -304,7 +321,7 @@ def train_step(input_sequences, output_scores, output_hic, fit_epochs, head_id):
             #     our_model.get_layer("our_resnet").trainable = False
 
             if hic_num > 0:
-                loss_weights = {"our_head": 1.0, "our_hic": 0.05}
+                loss_weights = {"our_head": 1.0, "our_hic": 0.1}
                 losses = {
                     "our_head": "mse",
                     "our_hic": "mse",
@@ -456,10 +473,10 @@ if __name__ == '__main__':
 
     for head in heads:
         print(len(head))
-    # hic_keys = parser.parse_hic()
+    hic_keys = parser.parse_hic(p.parsed_hic_folder)
     # hic_keys = ["hic_THP1_10kb_interactions.txt.bz2", "hic_A549_10kb_interactions.txt.bz2",
     #             "hic_HepG2_10kb_interactions.txt.bz2"]
-    hic_keys = []
+    # hic_keys = []
     hic_num = len(hic_keys)
     print(f"hic {hic_num}")
 
@@ -499,7 +516,7 @@ if __name__ == '__main__':
         # check_perf(mp_q, 0)
         # exit()
         last_proc = run_epoch(last_proc, fit_epochs, head_id)
-        if current_epoch % 50 == 0 and current_epoch != 0:  # and current_epoch != 0:
+        if current_epoch % 1000 == 0 and current_epoch != 0:  # and current_epoch != 0:
             print("Eval epoch")
             print(mp_q.get())
             last_proc.join()

@@ -4,18 +4,18 @@ from pathlib import Path
 
 class MainParams:
     def __init__(self):
-        self.input_size = 50001  # 210001 # 50001
+        self.input_size = 220001  # 210001 # 50001
         self.half_size = int(self.input_size / 2)
         self.bin_size = 200
         self.hic_bin_size = 10000
         self.num_hic_bins = 20
         self.half_size_hic = 100000
-        self.num_regions = 201  # 1001
+        self.num_regions = 1001  # 1001
         self.half_num_regions = int(self.num_regions / 2)
         self.mid_bin = math.floor(self.num_regions / 2)
-        self.BATCH_SIZE = 10  # 1
+        self.BATCH_SIZE = 2  # 1
         self.GLOBAL_BATCH_SIZE = 4 * self.BATCH_SIZE
-        self.STEPS_PER_EPOCH = 45
+        self.STEPS_PER_EPOCH = 40
         self.num_epochs = 2000
         self.hic_track_size = 1
         self.out_stack_num = 11529 #11529
@@ -24,7 +24,7 @@ class MainParams:
         self.initial_shift = 300
         self.hic_size = 190
         self.model_folder = "/home/user/data/models/"
-        self.model_name = "small_full_regul.h5"
+        self.model_name = "hic_model.h5"
         self.model_path = self.model_folder + self.model_name
         self.figures_folder = "figures_1"
         self.tracks_folder = "/media/user/passport1/variants_100/tracks/"

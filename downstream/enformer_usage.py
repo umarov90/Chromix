@@ -206,7 +206,8 @@ params = MainParams()
 # enformer_test_tss TRY !!!!!!!!!!!!!!!!!!!!!
 gene_tss = pd.read_csv("data/enformer/enformer_test_tss_less.bed", sep="\t", index_col=False,
                        names=["chr", "start", "end", "type"])
-
+# gene_tss = gene_tss.loc[gene_tss['chr'] == "chr1"]
+# gene_tss.index = range(len(gene_tss.index))
 # gene_tss = gene_tss.head(100)
 # eval_tracks = pd.read_csv("data/eval_tracks.tsv", sep=",", header=None)[0].tolist()
 enf_tracks = df_targets[df_targets['description'].str.contains("CAGE")]['identifier'].tolist()
@@ -324,8 +325,8 @@ print(counts)
 
 gt_matrix = np.zeros((len(eval_tracks), len(gene_tss)))
 
-bin = 200 # 128
-half_bin = 100 # 63
+bin = 128 # 128
+half_bin = 63 # 63
 
 # for track in eval_tracks:
 #     gt_vector = np.zeros(len(gene_tss))
@@ -403,7 +404,7 @@ for i in range(len(eval_tracks)):
     corr = stats.spearmanr(a, b)[0]
     corrs.append(corr)
 
-print(f"Across tracks {np.mean(np.nan_to_num(corrs))}")
+print(f"Across tracks {np.median(np.nan_to_num(corrs))}")
 
 corrs = []
 for i in range(len(gene_tss)):
@@ -412,7 +413,7 @@ for i in range(len(gene_tss)):
     corr = stats.spearmanr(a, b)[0]
     corrs.append(corr)
 
-print(f"Across genes {np.mean(np.nan_to_num(corrs))}")
+print(f"Across genes {np.median(np.nan_to_num(corrs))}")
 
 print("OUR =================================================")
 corrs = []
@@ -422,7 +423,7 @@ for i in range(len(eval_tracks)):
     corr = stats.spearmanr(a, b)[0]
     corrs.append(corr)
 
-print(f"Across tracks {np.mean(np.nan_to_num(corrs))}")
+print(f"Across tracks {np.median(np.nan_to_num(corrs))}")
 
 corrs = []
 for i in range(len(gene_tss)):
@@ -431,6 +432,6 @@ for i in range(len(gene_tss)):
     corr = stats.spearmanr(a, b)[0]
     corrs.append(corr)
 
-print(f"Across genes {np.mean(np.nan_to_num(corrs))}")
+print(f"Across genes {np.median(np.nan_to_num(corrs))}")
 
 

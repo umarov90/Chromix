@@ -22,7 +22,7 @@ from sklearn.cluster import KMeans
 def valid(chunks):
     for chunk in chunks:
         print("1")
-        mask = chunk['chr1'] == chunk['chr2']
+        mask = chunk['locus1_chrom'] == chunk['locus2_chrom']
         if mask.all():
             yield chunk
         else:
@@ -30,7 +30,7 @@ def valid(chunks):
             break
 
 
-def parse_hic():
+def parse_hic(folder):
     if Path("pickle/hic_keys.gz").is_file():
         return joblib.load("pickle/hic_keys.gz")
     else:
@@ -38,49 +38,48 @@ def parse_hic():
         directory = "hic"
 
         for filename in os.listdir(directory):
-            if filename.endswith(".bz2"):
-                fn = os.path.join(directory, filename)
-                t_name = fn.replace("/", "_")
-                print(t_name)
-                if t_name not in ["hic_THP1_10kb_interactions.txt.bz2", "hic_A549_10kb_interactions.txt.bz2", "hic_HepG2_10kb_interactions.txt.bz2"]:
-                    continue
-                hic_keys.append(t_name)
-                if Path("parsed_hic/" + t_name + "chr1").is_file():
-                    continue
-                with open("hic.txt", "a+") as myfile:
-                    myfile.write(t_name)
-                fields = ["chr1", "chr2", "locus1", "locus2", "pvalue"]
-                dtypes = {"chr1": str, "chr2": str, "locus1": int, "locus2": int, "pvalue": str}
-                chunksize = 10 ** 8
-                chunks = pd.read_csv(fn, sep="\t", index_col=False, usecols=fields,
-                                     dtype=dtypes, chunksize=chunksize, low_memory=True)
-                df = pd.concat(valid(chunks))
-                # df = pd.read_csv(fn, sep="\t", index_col=False, usecols=fields, dtype=dtypes, low_memory=True)
-                df['pvalue'] = pd.to_numeric(df['pvalue'], errors='coerce')
-                df['pvalue'].fillna(0, inplace=True)
-                print(len(df))
-                # No inter-chromosome connections are considered
-                df.drop(df[df['chr1'] != df['chr2']].index, inplace=True)
-                print(len(df))
-                df.drop(['chr2'], axis=1, inplace=True)
-                df.drop(df[df['locus1'] - df['locus2'] > 220000].index, inplace=True)
-                print(len(df))
-                df["pvalue"] = -1 * np.log(df["pvalue"])
-                m = df.loc[df['pvalue'] != np.inf, 'pvalue'].max()
-                print("P Max is: " + str(m))
-                df['pvalue'].replace(np.inf, m, inplace=True)
-                df['pvalue'].clip(upper=100, inplace=True)
-                df["score"] = df["pvalue"] / df["pvalue"].max()
-                df.drop(["pvalue"], axis=1, inplace=True)
-                chrd = list(df["chr1"].unique())
-                for chr in chrd:
-                    joblib.dump(df.loc[df['chr1'] == chr].sort_values(by=['locus1']),
-                                "parsed_hic/" + t_name + chr, compress=3)
-                print(t_name)
-                with open("hic.txt", "a+") as myfile:
-                    myfile.write(t_name)
-                del df
-                gc.collect()
+            fn = os.path.join(directory, filename)
+            t_name = fn.replace("/", "_")
+            print(t_name)
+            # if t_name not in ["hic_THP1_10kb_interactions.txt.bz2", "hic_A549_10kb_interactions.txt.bz2", "hic_HepG2_10kb_interactions.txt.bz2"]:
+            #     continue
+            hic_keys.append(t_name)
+            if Path(folder + t_name + "chr1").is_file():
+                continue
+            with open("hic.txt", "a+") as myfile:
+                myfile.write(t_name)
+            fields = ["locus1_chrom", "locus2_chrom", "locus1_start", "locus2_start", "pvalue"]
+            dtypes = {"locus1_chrom": str, "locus2_chrom": str, "locus1_start": int, "locus2_start": int, "pvalue": str}
+            chunksize = 10 ** 8
+            chunks = pd.read_csv(fn, sep="\t", index_col=False, usecols=fields,
+                                 dtype=dtypes, chunksize=chunksize, low_memory=True)
+            df = pd.concat(valid(chunks))
+            # df = pd.read_csv(fn, sep="\t", index_col=False, usecols=fields, dtype=dtypes, low_memory=True)
+            df['pvalue'] = pd.to_numeric(df['pvalue'], errors='coerce')
+            df['pvalue'].fillna(0, inplace=True)
+            print(len(df))
+            # No inter-chromosome connections are considered
+            df.drop(df[df['locus1_chrom'] != df['locus2_chrom']].index, inplace=True)
+            print(len(df))
+            df.drop(['locus2_chrom'], axis=1, inplace=True)
+            df.drop(df[df['locus1_start'] - df['locus2_start'] > 220000].index, inplace=True)
+            print(len(df))
+            df["pvalue"] = -1 * np.log(df["pvalue"])
+            m = df.loc[df['pvalue'] != np.inf, 'pvalue'].max()
+            print("P Max is: " + str(m))
+            df['pvalue'].replace(np.inf, m, inplace=True)
+            df['pvalue'].clip(upper=100, inplace=True)
+            df["score"] = df["pvalue"] / df["pvalue"].max()
+            df.drop(["pvalue"], axis=1, inplace=True)
+            chrd = list(df["locus1_chrom"].unique())
+            for chr in chrd:
+                joblib.dump(df.loc[df['locus1_chrom'] == chr].sort_values(by=['locus1_start']),
+                            folder + t_name + chr, compress=3)
+            print(t_name)
+            with open("hic.txt", "a+") as myfile:
+                myfile.write(t_name)
+            del df
+            gc.collect()
 
         joblib.dump(hic_keys, "pickle/hic_keys.gz", compress=3)
         chromosomes = ["chrX", "chrY"]
@@ -90,8 +89,11 @@ def parse_hic():
             print(key)
             hdf = {}
             for chr in chromosomes:
-                hdf[chr] = joblib.load("parsed_hic/" + key + chr)
-            joblib.dump(hdf, "parsed_hic/" + key, compress=3)
+                try:
+                    hdf[chr] = joblib.load(folder + key + chr)
+                except:
+                    pass
+            joblib.dump(hdf, folder + key, compress=3)
             print(key)
         return hic_keys
 
