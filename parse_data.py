@@ -47,12 +47,14 @@ def parse_hic(folder):
                               "hic_SkMC.10kb.intra_chromosomal.interaction_table.tsv"]:
                 continue
             hic_keys.append(t_name)
-            if Path(folder + t_name + "chr1").is_file():
-                continue
+            # if Path(folder + t_name + "chr1").is_file():
+            #     continue
             with open("hic.txt", "a+") as myfile:
                 myfile.write(t_name)
-            fields = ["locus1_chrom", "locus2_chrom", "locus1_start", "locus2_start", "pvalue"]
-            dtypes = {"locus1_chrom": str, "locus2_chrom": str, "locus1_start": int, "locus2_start": int, "pvalue": str}
+            fields = ["locus1_chrom", "locus2_chrom", "locus1_start", "locus2_start",
+                      "pvalue", "logObservedOverExpected"]
+            dtypes = {"locus1_chrom": str, "locus2_chrom": str, "locus1_start": int, "locus2_start": int,
+                      "pvalue": str, "logObservedOverExpected": float}
             chunksize = 10 ** 8
             chunks = pd.read_csv(fn, sep="\t", index_col=False, usecols=fields,
                                  dtype=dtypes, chunksize=chunksize, low_memory=True)
@@ -68,13 +70,13 @@ def parse_hic(folder):
             df.drop(df[df['locus1_start'] - df['locus2_start'] > 420000].index, inplace=True)
             print(len(df))
 
-            # df["pvalue"] = -1 * np.log(df["pvalue"])
-            # m = df.loc[df['pvalue'] != np.inf, 'pvalue'].max()
-            # print("P Max is: " + str(m))
-            # df['pvalue'].replace(np.inf, m, inplace=True)
-            # df['pvalue'].clip(upper=100, inplace=True)
-            # df["score"] = df["pvalue"] / df["pvalue"].max()
-            df["score"] = df["logObservedOverExpected"] / df["logObservedOverExpected"].max()
+            df["pvalue"] = -1 * np.log(df["pvalue"])
+            m = df.loc[df['pvalue'] != np.inf, 'pvalue'].max()
+            print("P Max is: " + str(m))
+            df['pvalue'].replace(np.inf, m, inplace=True)
+            df['pvalue'].clip(upper=100, inplace=True)
+            df["score"] = df["pvalue"] / df["pvalue"].max()
+            # df["score"] = df["logObservedOverExpected"] / df["logObservedOverExpected"].max()
 
             df.drop(["pvalue"], axis=1, inplace=True)
             chrd = list(df["locus1_chrom"].unique())

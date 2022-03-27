@@ -59,7 +59,7 @@ for k in hic_keys:
 # hic_keys = hn
 # joblib.dump(hic_keys, "pickle/hic_keys.gz", compress=3)
 
-infos = joblib.load("pickle/test_info.gz")[100:110]
+infos = joblib.load("pickle/test_info.gz")[100:200]
 one_hot = joblib.load("pickle/one_hot.gz")
 # hic_keys = [hic_keys[0]]
 
