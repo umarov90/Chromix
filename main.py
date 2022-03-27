@@ -19,6 +19,7 @@ import pickle
 import evaluation
 from main_params import MainParams
 import tensorflow_addons as tfa
+from scipy.ndimage.filters import gaussian_filter
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 logging.getLogger("tensorflow").setLevel(logging.ERROR)
@@ -32,38 +33,38 @@ def create_model(q):
     with strategy.scope():
         # our_model = mo.small_model(p.input_size, p.num_features, p.num_regions, p.out_stack_num)
         our_model = mo.hic_model(p.input_size, p.num_features, p.num_regions, p.out_stack_num, hic_num, p.hic_size)
-        print("loading model")
-        our_model_old = tf.keras.models.load_model(p.model_folder + "small_full_regul.h5")
-        print("model loaded")
-        for layer in our_model_old.get_layer("our_resnet").layers:
-            try:
-                layer_name = layer.name
-                if "transpose" in layer_name or "dwn" in layer_name:
-                    continue
-                try:
-                    new_shape = our_model.get_layer("our_resnet").get_layer(layer_name)
-                except:
-                    layer_name = layer_name + "conv1d"
-                layer_weights = layer.weights
-                new_weights_list = []
-                for li in range(len(layer.weights)):
-                    new_shape = our_model.get_layer("our_resnet").get_layer(layer_name).weights[li].shape
-                    new_weights_list.append(np.resize(layer.weights[li], new_shape))
-
-                our_model.get_layer("our_resnet").get_layer(layer_name).set_weights(new_weights_list)
-            except:
-                print(layer_name)
-
-        for layer in our_model_old.get_layer("our_head").layers:
-            layer_name = layer.name
-            if "input" in layer_name or "transpose" in layer_name or "dwn" in layer_name:
-                continue
-            new_weights_list = []
-            for li in range(len(layer.weights)):
-                new_shape = our_model.get_layer("our_head").get_layer(layer_name).weights[li].shape
-                new_weights_list.append(np.resize(layer.weights[li], new_shape))
-
-            our_model.get_layer("our_head").get_layer(layer_name).set_weights(new_weights_list)
+        # print("loading model")
+        # our_model_old = tf.keras.models.load_model(p.model_folder + "small_full_regul.h5")
+        # print("model loaded")
+        # for layer in our_model_old.get_layer("our_resnet").layers:
+        #     try:
+        #         layer_name = layer.name
+        #         if "transpose" in layer_name or "dwn" in layer_name:
+        #             continue
+        #         try:
+        #             new_shape = our_model.get_layer("our_resnet").get_layer(layer_name)
+        #         except:
+        #             layer_name = layer_name + "conv1d"
+        #         layer_weights = layer.weights
+        #         new_weights_list = []
+        #         for li in range(len(layer.weights)):
+        #             new_shape = our_model.get_layer("our_resnet").get_layer(layer_name).weights[li].shape
+        #             new_weights_list.append(np.resize(layer.weights[li], new_shape))
+        #
+        #         our_model.get_layer("our_resnet").get_layer(layer_name).set_weights(new_weights_list)
+        #     except:
+        #         print(layer_name)
+        #
+        # for layer in our_model_old.get_layer("our_head").layers:
+        #     layer_name = layer.name
+        #     if "input" in layer_name or "transpose" in layer_name or "dwn" in layer_name:
+        #         continue
+        #     new_weights_list = []
+        #     for li in range(len(layer.weights)):
+        #         new_shape = our_model.get_layer("our_head").get_layer(layer_name).weights[li].shape
+        #         new_weights_list.append(np.resize(layer.weights[li], new_shape))
+        #
+        #     our_model.get_layer("our_head").get_layer(layer_name).set_weights(new_weights_list)
 
         # for layer in our_model_old.get_layer("our_hic").layers:
         #     layer_name = layer.name
@@ -188,7 +189,7 @@ def run_epoch(last_proc, fit_epochs, head_id):
             hic_score = hic_score[lix]
             hic_mat[l1, l2] += hic_score
             hic_mat = hic_mat + hic_mat.T - np.diag(np.diag(hic_mat))
-            # hic_mat = gaussian_filter(hic_mat, sigma=1)
+            hic_mat = gaussian_filter(hic_mat, sigma=0.5)
             if ni < half:
                 hic_mat = np.rot90(hic_mat, k=2)
             # if i == 0:
@@ -256,10 +257,10 @@ def safe_save(thing, place):
 def train_step(input_sequences, output_scores, output_hic, fit_epochs, head_id):
     try:
         import tensorflow as tf
-        physical_devices = tf.config.experimental.list_physical_devices('GPU')
-        assert len(physical_devices) > 0, "Not enough GPU hardware devices available"
-        for device in physical_devices:
-            tf.config.experimental.set_memory_growth(device, True)
+        # physical_devices = tf.config.experimental.list_physical_devices('GPU')
+        # assert len(physical_devices) > 0, "Not enough GPU hardware devices available"
+        # for device in physical_devices:
+        #     tf.config.experimental.set_memory_growth(device, True)
 
         import model as mo
         if len(output_hic) > 0:
@@ -436,7 +437,7 @@ last_proc = None
 p = MainParams()
 if __name__ == '__main__':
     # import model as mo
-    # our_model = mo.small_model(p.input_size, p.num_features, p.num_regions, p.out_stack_num)
+    # our_model = mo.hic_model(p.input_size, p.num_features, p.num_regions, p.out_stack_num,  17, 190)
     script_folder = pathlib.Path(__file__).parent.resolve()
     folders = open(str(script_folder) + "/data_dirs").read().strip().split("\n")
     os.chdir(folders[0])
@@ -468,7 +469,7 @@ if __name__ == '__main__':
         joblib.dump(heads, "pickle/heads.gz", compress=3)
 
     # random.shuffle(track_names)
-    # heads = [track_names]
+    # heads = [track_names[:500]]
     # joblib.dump(heads, "pickle/heads.gz", compress=3)
 
     for head in heads:

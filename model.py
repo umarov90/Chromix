@@ -17,11 +17,11 @@ def hic_model(input_size, num_features, num_regions, cell_num, hic_num, hic_size
     x = inputs
     resnet_output = resnet(x, input_size, 200)
     our_resnet = Model(inputs, resnet_output, name="our_resnet")
-    num_patches = 1100
-    num_filters = 1006
+    num_patches = 2100
+    num_filters = 899
 
     hic_input = Input(shape=(num_patches, num_filters))
-    hx = Conv1D(128, kernel_size=1, strides=1, name="pointwise_hic_1", activation=LeakyReLU(alpha=leaky_alpha))(hic_input)
+    hx = Conv1D(64, kernel_size=1, strides=1, name="pointwise_hic_1", activation=LeakyReLU(alpha=leaky_alpha))(hic_input)
 
     hx = tf.transpose(hx, [0, 2, 1])
     hx = Conv1D(input_size // 1000, kernel_size=1, strides=1, name="pointwise_hic_2", activation=LeakyReLU(alpha=leaky_alpha))(hx)
@@ -123,15 +123,16 @@ def resnet(input_x, input_size, bin_size):
     num_filters = 512
 
     # First convolutional layer. Since it is first, it is not preceded by activation and batch normalization
+    patchify_val = 5
     x = resnet_layer(inputs=input_x,
                      num_filters=num_filters,
                      activation=False,
-                     strides=3,
+                     strides=patchify_val,
                      kernel_size=15,
                      name="rl_1_")
-    current_len = input_size // 3
+    current_len = input_size // patchify_val
     # Instantiate the stack of residual units
-    num_blocks = 7
+    num_blocks = 6
     for block in range(num_blocks):
         cname = "rl_" + str(block) + "_"
         strides = 1
@@ -145,7 +146,7 @@ def resnet(input_x, input_size, bin_size):
             current_len = math.ceil(current_len / 2)
             if block == num_blocks - 1:
                 current_len = input_size // bin_size
-            if block > 3:
+            if block > 4:
                 y = LeakyReLU(alpha=leaky_alpha, name="dwn_" + str(block))(y)
                 y = tf.transpose(y, [0, 2, 1])
                 # Replace by conv maybe

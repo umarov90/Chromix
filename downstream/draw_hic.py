@@ -7,6 +7,32 @@ from main_params import MainParams
 import visualization as viz
 import model as mo
 import numpy as np
+import seaborn as sns
+import matplotlib.pyplot as plt
+import parse_data as parser
+from scipy.ndimage.filters import gaussian_filter
+import pandas as pd
+from scipy import stats
+import random
+from mpl_toolkits.axisartist.grid_finder import DictFormatter
+from matplotlib.transforms import Affine2D
+import mpl_toolkits.axisartist.floating_axes as floating_axes
+from matplotlib import colors
+import matplotlib
+from matplotlib.colors import LinearSegmentedColormap
+import matplotlib.ticker as ticker
+import matplotlib.gridspec as gridspec
+
+
+def recover_shape(v, size_X):
+    v = np.asarray(v).flatten()
+    end = int((size_X * size_X - size_X) / 2)
+    v = v[:end]
+    X = np.zeros((size_X, size_X))
+    X[np.triu_indices(X.shape[0], k=1)] = v
+    X = X + X.T
+    return X
+
 
 eval_gt_full = []
 p = MainParams()
@@ -22,46 +48,20 @@ heads = joblib.load("pickle/heads.gz")
 head_id = 0
 head_tracks = heads[head_id]
 p.parsed_hic_folder = folders[2]
-hic_keys = joblib.load("pickle/hic_keys.gz")
-for h in hic_keys:
-    print(h)
-infos = joblib.load("pickle/test_info.gz")
+hic_keys = parser.parse_hic(p.parsed_hic_folder)
+for k in hic_keys:
+    print(k, end=", ")
+# hn = []
+# for h in [3, 7, 10, 15]:
+#     print(hic_keys[h])
+#     hn.append(hic_keys[h])
+# hn.append("hic_HeLa.10kb.intra_chromosomal.interaction_table.tsv")
+# hic_keys = hn
+# joblib.dump(hic_keys, "pickle/hic_keys.gz", compress=3)
 
+infos = joblib.load("pickle/test_info.gz")[100:110]
 one_hot = joblib.load("pickle/one_hot.gz")
 # hic_keys = [hic_keys[0]]
-eval_track_names = []
-
-for track in head_tracks:
-    if "scEnd5" in track:
-        eval_track_names.append(track)
-        if len(eval_track_names) > 9:
-            break
-
-strategy = tf.distribute.MultiWorkerMirroredStrategy()
-with strategy.scope():
-    our_model = tf.keras.models.load_model(model_folder + p.model_name)
-    our_model.get_layer("our_head").set_weights(joblib.load(model_folder + p.model_name + "_head_" + str(head_id)))
-
-for i in range(len(infos)):
-    eval_gt_full.append([])
-
-for i, key in enumerate(eval_track_names):
-    if i % 100 == 0:
-        print(i, end=" ")
-        gc.collect()
-    parsed_track = joblib.load(p.parsed_tracks_folder + key)
-    for j, info in enumerate(infos):
-        start_bin = int(info[1] / p.bin_size) - p.half_num_regions
-        extra_bin = start_bin + p.num_regions - len(parsed_track[info[0]])
-        if start_bin < 0:
-            binned_region = parsed_track[info[0]][0: start_bin + p.num_regions]
-            binned_region = np.concatenate((np.zeros(-1 * start_bin), binned_region))
-        elif extra_bin > 0:
-            binned_region = parsed_track[info[0]][start_bin: len(parsed_track[info[0]])]
-            binned_region = np.concatenate((binned_region, np.zeros(extra_bin)))
-        else:
-            binned_region = parsed_track[info[0]][start_bin:start_bin + p.num_regions]
-        eval_gt_full[j].append(binned_region)
 
 hic_output = []
 for hi, key in enumerate(hic_keys):
@@ -115,22 +115,38 @@ for info in infos:
         print(f"Wrong! {ns.shape} {start} {extra} {info[1]}")
     test_seq.append(ns)
 
+strategy = tf.distribute.MultiWorkerMirroredStrategy()
+with strategy.scope():
+    our_model = tf.keras.models.load_model(model_folder + p.model_name)
+    our_model.get_layer("our_head").set_weights(joblib.load(model_folder + p.model_name + "_head_" + str(head_id)))
+
 for w in range(0, len(test_seq), w_step):
     print(w, end=" ")
     p1 = our_model.predict(mo.wrap2(test_seq[w:w + w_step], predict_batch_size))
-    if len(hic_keys) > 0:
-        if w == 0:
-            predictions_full = p1[0]
-            predictions_hic = p1[1]
-        else:
-            predictions_full = np.concatenate((predictions_full, p1[0]))
-            predictions_hic = np.concatenate((predictions_hic, p1[1]))
+    if w == 0:
+        predictions_hic = p1[1]
+    else:
+        predictions_hic = np.concatenate((predictions_hic, p1[1]))
 
-draw_arguments = [p, eval_track_names, predictions_full, eval_gt_full,
-                  test_seq, infos, hic_keys,
-                  predictions_hic, hic_output,
-                  f"{p.figures_folder}/tracks/"]
 
-joblib.dump(draw_arguments, "draw", compress=3)
-# draw_arguments = joblib.load("draw")
-viz.draw_tracks(*draw_arguments)
+for n in range(len(hic_output)):
+    fig, axs = plt.subplots(2, len(hic_keys), figsize=(12, 12))
+    for i in range(len(hic_keys)):
+        mat = recover_shape(hic_output[n][i], p.num_hic_bins)
+        mat = gaussian_filter(mat, sigma=0.5)
+        sns.heatmap(mat, linewidth=0.0, ax=axs[0, i], square=True, cbar=False)
+        axs[0, i].set(xticklabels=[])
+        axs[0, i].set(yticklabels=[])
+
+    for i in range(len(hic_keys)):
+        mat = recover_shape(predictions_hic[n][i], p.num_hic_bins)
+        # mat = gaussian_filter(mat, sigma=0.5)
+        sns.heatmap(mat, linewidth=0.0, ax=axs[1, i], square=True, cbar=False)
+        axs[1, i].set(xticklabels=[])
+        axs[1, i].set(yticklabels=[])
+
+    fig.tight_layout()
+    plt.savefig(f"hic_check/{n}.png")
+    plt.close(fig)
+
+

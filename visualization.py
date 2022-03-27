@@ -84,8 +84,8 @@ def draw_tracks(p, track_names, predictions_full, eval_gt_full,
             #####################################################
             # print(f"tss layer {np.sum(tss_layer)}")
             # print(f"tss names {len(tss_names)}")
-            vector1 = np.pad(predictions_full[i][it], (50, 49), 'constant')
-            vector2 = np.pad(eval_gt_full[i][it], (50, 49), 'constant')
+            vector1 = np.pad(predictions_full[i][it], (550, 549), 'constant')
+            vector2 = np.pad(eval_gt_full[i][it], (550, 549), 'constant')
             x = range(len(tss_track))
             d1 = {'bin': x, 'expression': vector1}
             df1 = pd.DataFrame(d1)

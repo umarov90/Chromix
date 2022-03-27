@@ -41,8 +41,11 @@ def parse_hic(folder):
             fn = os.path.join(directory, filename)
             t_name = fn.replace("/", "_")
             print(t_name)
-            # if t_name not in ["hic_THP1_10kb_interactions.txt.bz2", "hic_A549_10kb_interactions.txt.bz2", "hic_HepG2_10kb_interactions.txt.bz2"]:
-            #     continue
+            if t_name not in ["hic_Ery.10kb.intra_chromosomal.interaction_table.tsv",
+                              "hic_HUVEC.10kb.intra_chromosomal.interaction_table.tsv",
+                              "hic_Islets.10kb.intra_chromosomal.interaction_table.tsv",
+                              "hic_SkMC.10kb.intra_chromosomal.interaction_table.tsv"]:
+                continue
             hic_keys.append(t_name)
             if Path(folder + t_name + "chr1").is_file():
                 continue
@@ -62,14 +65,17 @@ def parse_hic(folder):
             df.drop(df[df['locus1_chrom'] != df['locus2_chrom']].index, inplace=True)
             print(len(df))
             df.drop(['locus2_chrom'], axis=1, inplace=True)
-            df.drop(df[df['locus1_start'] - df['locus2_start'] > 220000].index, inplace=True)
+            df.drop(df[df['locus1_start'] - df['locus2_start'] > 420000].index, inplace=True)
             print(len(df))
-            df["pvalue"] = -1 * np.log(df["pvalue"])
-            m = df.loc[df['pvalue'] != np.inf, 'pvalue'].max()
-            print("P Max is: " + str(m))
-            df['pvalue'].replace(np.inf, m, inplace=True)
-            df['pvalue'].clip(upper=100, inplace=True)
-            df["score"] = df["pvalue"] / df["pvalue"].max()
+
+            # df["pvalue"] = -1 * np.log(df["pvalue"])
+            # m = df.loc[df['pvalue'] != np.inf, 'pvalue'].max()
+            # print("P Max is: " + str(m))
+            # df['pvalue'].replace(np.inf, m, inplace=True)
+            # df['pvalue'].clip(upper=100, inplace=True)
+            # df["score"] = df["pvalue"] / df["pvalue"].max()
+            df["score"] = df["logObservedOverExpected"] / df["logObservedOverExpected"].max()
+
             df.drop(["pvalue"], axis=1, inplace=True)
             chrd = list(df["locus1_chrom"].unique())
             for chr in chrd:
