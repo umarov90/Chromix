@@ -1,5 +1,7 @@
+import os
 import math
 from pathlib import Path
+import pathlib
 
 
 class MainParams:
@@ -23,15 +25,19 @@ class MainParams:
         self.shift_speed = 2000000
         self.initial_shift = 300
         self.hic_size = 780
-        self.model_folder = "/home/user/data/models/"
+
+        script_folder = pathlib.Path(__file__).parent.resolve()
+        folders = open(str(script_folder) + "/data_dirs").read().strip().split("\n")
+        os.chdir(folders[0])
+        self.parsed_tracks_folder = folders[1]
+        self.parsed_hic_folder = folders[2]
+        self.model_folder = folders[3]
+
         self.model_name = "hic_model.h5"
         self.model_path = self.model_folder + self.model_name
         self.figures_folder = "figures_1"
         self.tracks_folder = "/media/user/passport1/variants_100/tracks/"
         self.temp_folder = "/home/user/data/temp/"
-        self.parsed_blocks_folder = "/media/user/30D4BACAD4BA9218/parsed_blocks/"
-        self.parsed_tracks_folder = "/home/user/data/parsed_tracks/"
-        # parsed_tracks_folder = "/media/user/30D4BACAD4BA9218/parsed_tracks/"
         self.chromosomes = ["chrX"]  # "chrY"
         for i in range(1, 23):
             self.chromosomes.append("chr" + str(i))

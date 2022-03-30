@@ -14,7 +14,6 @@ import parse_data as parser
 from datetime import datetime
 import traceback
 import multiprocessing as mp
-import pathlib
 import pickle
 import evaluation
 from main_params import MainParams
@@ -438,12 +437,6 @@ p = MainParams()
 if __name__ == '__main__':
     # import model as mo
     # our_model = mo.hic_model(p.input_size, p.num_features, p.num_regions, p.out_stack_num,  17, 190)
-    script_folder = pathlib.Path(__file__).parent.resolve()
-    folders = open(str(script_folder) + "/data_dirs").read().strip().split("\n")
-    os.chdir(folders[0])
-    p.parsed_tracks_folder = folders[1]
-    p.parsed_hic_folder = folders[2]
-    p.model_folder = folders[3]
 
     # draw = joblib.load("draw")
     # viz.draw_tracks(*draw)
