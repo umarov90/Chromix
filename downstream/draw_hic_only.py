@@ -59,7 +59,7 @@ for k in hic_keys:
 # hic_keys = hn
 # joblib.dump(hic_keys, "pickle/hic_keys.gz", compress=3)
 
-infos = joblib.load("pickle/test_info.gz")[100:500]
+infos = joblib.load("pickle/test_info.gz")[100:600]
 infos = infos[::5]
 print(f"Number of positions: {len(infos)}")
 one_hot = joblib.load("pickle/one_hot.gz")
@@ -98,54 +98,17 @@ for hi, key in enumerate(hic_keys):
     del hdf
     gc.collect()
 
-test_seq = []
-for info in infos:
-    start = int(info[1] - (info[1] % p.bin_size) - p.half_size)
-    # if start in starts:
-    #     continue
-    # starts.append(start)
-    extra = start + p.input_size - len(one_hot[info[0]])
-    if start < 0:
-        ns = one_hot[info[0]][0:start + p.input_size]
-        ns = np.concatenate((np.zeros((-1 * start, p.num_features)), ns))
-    elif extra > 0:
-        ns = one_hot[info[0]][start: len(one_hot[info[0]])]
-        ns = np.concatenate((ns, np.zeros((extra, p.num_features))))
-    else:
-        ns = one_hot[info[0]][start:start + p.input_size]
-    if len(ns) != p.input_size:
-        print(f"Wrong! {ns.shape} {start} {extra} {info[1]}")
-    test_seq.append(ns)
-
-strategy = tf.distribute.MultiWorkerMirroredStrategy()
-with strategy.scope():
-    our_model = tf.keras.models.load_model(model_folder + p.model_name)
-    # our_model.get_layer("our_head").set_weights(joblib.load(model_folder + p.model_name + "_head_" + str(head_id)))
-
-for w in range(0, len(test_seq), w_step):
-    print(w, end=" ")
-    p1 = our_model.predict(mo.wrap2(test_seq[w:w + w_step], predict_batch_size))
-    if w == 0:
-        predictions_hic = p1[1]
-    else:
-        predictions_hic = np.concatenate((predictions_hic, p1[1]))
-
 
 for n in range(len(hic_output)):
-    fig, axs = plt.subplots(2, len(hic_keys), figsize=(12, 12))
+    fig, axs = plt.subplots(3, int(len(hic_keys) / 3), figsize=(12, 12))
+    axs = axs.flatten()
     for i in range(len(hic_keys)):
         mat = recover_shape(hic_output[n][i], p.num_hic_bins)
         mat = gaussian_filter(mat, sigma=0.5)
-        sns.heatmap(mat, linewidth=0.0, ax=axs[0, i], square=True, cbar=False)
-        axs[0, i].set(xticklabels=[])
-        axs[0, i].set(yticklabels=[])
-
-    for i in range(len(hic_keys)):
-        mat = recover_shape(predictions_hic[n][i], p.num_hic_bins)
-        # mat = gaussian_filter(mat, sigma=0.5)
-        sns.heatmap(mat, linewidth=0.0, ax=axs[1, i], square=True, cbar=False)
-        axs[1, i].set(xticklabels=[])
-        axs[1, i].set(yticklabels=[])
+        sns.heatmap(mat, linewidth=0.0, ax=axs[i], square=True, cbar=False)
+        axs[i].set(xticklabels=[])
+        axs[i].set(yticklabels=[])
+        axs[i].set_title(hic_keys[i][:hic_keys[i].find(".")])
 
     fig.tight_layout()
     plt.savefig(f"hic_check/{n}.png")

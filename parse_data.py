@@ -41,11 +41,11 @@ def parse_hic(folder):
             fn = os.path.join(directory, filename)
             t_name = fn.replace("/", "_")
             print(t_name)
-            if t_name not in ["hic_Ery.10kb.intra_chromosomal.interaction_table.tsv",
-                              "hic_HUVEC.10kb.intra_chromosomal.interaction_table.tsv",
-                              "hic_Islets.10kb.intra_chromosomal.interaction_table.tsv",
-                              "hic_SkMC.10kb.intra_chromosomal.interaction_table.tsv"]:
-                continue
+            # if t_name not in ["hic_Ery.10kb.intra_chromosomal.interaction_table.tsv",
+            #                   "hic_HUVEC.10kb.intra_chromosomal.interaction_table.tsv",
+            #                   "hic_Islets.10kb.intra_chromosomal.interaction_table.tsv",
+            #                   "hic_SkMC.10kb.intra_chromosomal.interaction_table.tsv"]:
+            #     continue
             hic_keys.append(t_name)
             # if Path(folder + t_name + "chr1").is_file():
             #     continue
@@ -60,8 +60,8 @@ def parse_hic(folder):
                                  dtype=dtypes, chunksize=chunksize, low_memory=True)
             df = pd.concat(valid(chunks))
             # df = pd.read_csv(fn, sep="\t", index_col=False, usecols=fields, dtype=dtypes, low_memory=True)
-            df['pvalue'] = pd.to_numeric(df['pvalue'], errors='coerce')
-            df['pvalue'].fillna(0, inplace=True)
+            df['pvalue'] = pd.to_numeric(df['pvalue'], errors='raise')
+            # df['pvalue'].fillna(0, inplace=True)
             print(len(df))
             # No inter-chromosome connections are considered
             df.drop(df[df['locus1_chrom'] != df['locus2_chrom']].index, inplace=True)
