@@ -25,7 +25,7 @@ logging.getLogger("tensorflow").setLevel(logging.ERROR)
 matplotlib.use("agg")
 
 
-def create_model(q):
+def create_model(heads, hic_num, q):
     import tensorflow as tf
     import model as mo
     strategy = tf.distribute.MultiWorkerMirroredStrategy()
@@ -106,6 +106,7 @@ def run_epoch(last_proc, fit_epochs, head_id):
             if start < 0 or extra > 0:
                 shifts.append(None)
                 continue
+            big_bed_list.append(f"{info[0]}\t{start}\t{start + p.input_size}\ttrain")
             shifts.append(shift_bins)
             if start < 0:
                 ns = one_hot[info[0]][0:start + p.input_size]
@@ -241,7 +242,7 @@ def run_epoch(last_proc, fit_epochs, head_id):
     # joblib.dump([input_sequences, output_scores, output_hic], "pickle/run.gz", compress=3)
     # argss = joblib.load("pickle/run.gz")
     # p = mp.Process(target=train_step, args=(argss[0][:400], argss[1][:400], argss[2][:400], fit_epochs, head_id,))
-    proc = mp.Process(target=train_step, args=(input_sequences, output_scores, output_hic, fit_epochs, head_id,))
+    proc = mp.Process(target=train_step, args=(input_sequences, output_scores, output_hic, fit_epochs, head_id, hic_num, mp_q,))
     proc.start()
     return proc
 
@@ -253,7 +254,7 @@ def safe_save(thing, place):
     os.rename(place + "_temp", place)
 
 
-def train_step(input_sequences, output_scores, output_hic, fit_epochs, head_id):
+def train_step(input_sequences, output_scores, output_hic, fit_epochs, head_id, hic_num, mp_q):
     try:
         import tensorflow as tf
         # physical_devices = tf.config.experimental.list_physical_devices('GPU')
@@ -434,6 +435,7 @@ def change_seq(x):
 
 last_proc = None
 p = MainParams()
+big_bed_list = []
 if __name__ == '__main__':
     # import model as mo
     # our_model = mo.hic_model(p.input_size, p.num_features, p.num_regions, p.out_stack_num,  17, 190)
@@ -462,14 +464,14 @@ if __name__ == '__main__':
         joblib.dump(heads, "pickle/heads.gz", compress=3)
 
     # random.shuffle(track_names)
-    # heads = [track_names[:500]]
+    heads = [track_names[:100]]
     # joblib.dump(heads, "pickle/heads.gz", compress=3)
 
     for head in heads:
         print(len(head))
-    hic_keys = parser.parse_hic(p.parsed_hic_folder)
-    # hic_keys = ["hic_THP1_10kb_interactions.txt.bz2", "hic_A549_10kb_interactions.txt.bz2",
-    #             "hic_HepG2_10kb_interactions.txt.bz2"]
+    # hic_keys = parser.parse_hic(p.parsed_hic_folder)
+    hic_keys = ["hic_Ery.10kb.intra_chromosomal.interaction_table.tsv", "hic_HUVEC.10kb.intra_chromosomal.interaction_table.tsv",
+                "hic_Islets.10kb.intra_chromosomal.interaction_table.tsv", "hic_SkMC.10kb.intra_chromosomal.interaction_table.tsv"]
     # hic_keys = []
     hic_num = len(hic_keys)
     print(f"hic {hic_num}")
@@ -477,7 +479,7 @@ if __name__ == '__main__':
     mp_q = mp.Queue()
 
     if not Path(p.model_folder + p.model_name).is_file():
-        proc = mp.Process(target=create_model, args=(mp_q,))
+        proc = mp.Process(target=create_model, args=(heads, hic_num, mp_q,))
         proc.start()
         print(mp_q.get())
         proc.join()
@@ -498,24 +500,29 @@ if __name__ == '__main__':
     print("Training starting")
     start_epoch = 0
     fit_epochs = 2
-    for current_epoch in range(start_epoch, p.num_epochs, 1):
-        head_id = current_epoch % len(heads)
-        # if current_epoch < 10:
-        #     fit_epochs = 1
-        # elif current_epoch < 40:
-        #     fit_epochs = 2
-        # else:
-        #     fit_epochs = 3
+    try:
+        for current_epoch in range(start_epoch, p.num_epochs, 1):
+            head_id = current_epoch % len(heads)
+            # if current_epoch < 10:
+            #     fit_epochs = 1
+            # elif current_epoch < 40:
+            #     fit_epochs = 2
+            # else:
+            #     fit_epochs = 3
 
-        # check_perf(mp_q, 0)
-        # exit()
-        last_proc = run_epoch(last_proc, fit_epochs, head_id)
-        if current_epoch % 1000 == 0 and current_epoch != 0:  # and current_epoch != 0:
-            print("Eval epoch")
-            print(mp_q.get())
-            last_proc.join()
-            last_proc = None
-            proc = mp.Process(target=check_perf, args=(mp_q, 0,))
-            proc.start()
-            print(mp_q.get())
-            proc.join()
+            # check_perf(mp_q, 0)
+            # exit()
+            last_proc = run_epoch(last_proc, fit_epochs, head_id)
+            if current_epoch % 1000 == 0 and current_epoch != 0:  # and current_epoch != 0:
+                print("Eval epoch")
+                print(mp_q.get())
+                last_proc.join()
+                last_proc = None
+                proc = mp.Process(target=check_perf, args=(mp_q, 0,))
+                proc.start()
+                print(mp_q.get())
+                proc.join()
+    except Exception as e:
+        traceback.print_exc()
+        with open("/Users/ramzan/Desktop/dry_test.bed", "w") as text_file:
+            text_file.write("\n".join(big_bed_list))

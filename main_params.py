@@ -11,19 +11,19 @@ class MainParams:
         self.bin_size = 200
         self.hic_bin_size = 10000
         self.num_hic_bins = 40
-        self.half_size_hic = 500000
+        self.half_size_hic = 200000
         self.num_regions = 1001  # 1001
         self.half_num_regions = int(self.num_regions / 2)
         self.mid_bin = math.floor(self.num_regions / 2)
-        self.BATCH_SIZE = 2  # 1
+        self.BATCH_SIZE = 1  # 1
         self.GLOBAL_BATCH_SIZE = 4 * self.BATCH_SIZE
         self.STEPS_PER_EPOCH = 100
-        self.num_epochs = 2000
+        self.num_epochs = 1000
         self.hic_track_size = 1
         self.out_stack_num = 11529 #11529
         self.num_features = 5
         self.shift_speed = 2000000
-        self.initial_shift = 300
+        self.initial_shift = 250 # +- 50k
         self.hic_size = 780
 
         script_folder = pathlib.Path(__file__).parent.resolve()
