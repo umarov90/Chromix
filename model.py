@@ -9,6 +9,8 @@ import numpy as np
 
 dropout_rate = 0.3
 leaky_alpha = 0.2
+num_patches = 2100
+num_filters = 1026
 
 
 def hic_model(input_size, num_features, num_regions, cell_num, hic_num, hic_size):
@@ -17,8 +19,6 @@ def hic_model(input_size, num_features, num_regions, cell_num, hic_num, hic_size
     x = inputs
     resnet_output = resnet(x, input_size, 200)
     our_resnet = Model(inputs, resnet_output, name="our_resnet")
-    num_patches = 2100
-    num_filters = 1026
 
     hic_input = Input(shape=(num_patches, num_filters))
     hx = Conv1D(64, kernel_size=1, strides=1, name="pointwise_hic_1", activation=LeakyReLU(alpha=leaky_alpha))(hic_input)
@@ -32,7 +32,7 @@ def hic_model(input_size, num_features, num_regions, cell_num, hic_num, hic_size
     for h in range(hic_num):
         h_layers.append(Dense(hic_size)(hx))
     hic_output = tf.stack(h_layers, axis=1)
-    print(hic_output)
+    # print(hic_output)
     our_hic = Model(hic_input, hic_output, name="our_hic")
 
     head_input = Input(shape=(num_patches, num_filters))
@@ -51,15 +51,15 @@ def hic_model(input_size, num_features, num_regions, cell_num, hic_num, hic_size
     x = Conv1D(2048, kernel_size=1, strides=1, name="pointwise", activation=LeakyReLU(alpha=leaky_alpha))(x)
     outputs = Conv1D(cell_num, kernel_size=1, strides=1, name="last_conv1d")(x)
     outputs = tf.transpose(outputs, [0, 2, 1])
-    print(outputs)
+    # print(outputs)
     head_output = outputs
     our_head = Model(head_input, head_output, name="our_head")
-    print(our_head)
+    # print(our_head)
 
     our_model = Model(inputs, [our_head(our_resnet(inputs)),
                                our_hic(our_resnet(inputs))], name="our_model")
-    print("\nModel constructed")
-    print(our_model.summary())
+    # print("\nModel constructed")
+    # print(our_model.summary())
     return our_model
 
 
@@ -69,8 +69,6 @@ def small_model(input_size, num_features, num_regions, cell_num):
     x = inputs
     resnet_output = resnet(x, input_size, 200)
     our_resnet = Model(inputs, resnet_output, name="our_resnet")
-    num_patches = 250
-    num_filters = 1006
 
     head_input = Input(shape=(num_patches, num_filters))
     x = head_input
@@ -88,14 +86,14 @@ def small_model(input_size, num_features, num_regions, cell_num):
     x = Conv1D(2048, kernel_size=1, strides=1, name="pointwise", activation=LeakyReLU(alpha=leaky_alpha))(x)
     outputs = Conv1D(cell_num, kernel_size=1, strides=1, name="last_conv1d")(x)
     outputs = tf.transpose(outputs, [0, 2, 1])
-    print(outputs)
+    # print(outputs)
     head_output = outputs
     our_head = Model(head_input, head_output, name="our_head")
-    print(our_head)
+    # print(our_head)
 
     our_model = Model(inputs, our_head(our_resnet(inputs)), name="our_model")
-    print("\nModel constructed")
-    print(our_model.summary())
+    # print("\nModel constructed")
+    # print(our_model.summary())
     return our_model
 
 

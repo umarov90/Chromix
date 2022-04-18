@@ -18,78 +18,22 @@ import pickle
 import evaluation
 from main_params import MainParams
 import tensorflow_addons as tfa
-from scipy.ndimage.filters import gaussian_filter
+from scipy.ndimage import gaussian_filter
+import re
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 logging.getLogger("tensorflow").setLevel(logging.ERROR)
 matplotlib.use("agg")
 
 
-def create_model(heads, hic_num, q):
-    import tensorflow as tf
-    import model as mo
-    strategy = tf.distribute.MultiWorkerMirroredStrategy()
-    with strategy.scope():
-        # our_model = mo.small_model(p.input_size, p.num_features, p.num_regions, p.out_stack_num)
-        our_model = mo.hic_model(p.input_size, p.num_features, p.num_regions, p.out_stack_num, hic_num, p.hic_size)
-        # print("loading model")
-        # our_model_old = tf.keras.models.load_model(p.model_folder + "small_full_regul.h5")
-        # print("model loaded")
-        # for layer in our_model_old.get_layer("our_resnet").layers:
-        #     try:
-        #         layer_name = layer.name
-        #         if "transpose" in layer_name or "dwn" in layer_name:
-        #             continue
-        #         try:
-        #             new_shape = our_model.get_layer("our_resnet").get_layer(layer_name)
-        #         except:
-        #             layer_name = layer_name + "conv1d"
-        #         layer_weights = layer.weights
-        #         new_weights_list = []
-        #         for li in range(len(layer.weights)):
-        #             new_shape = our_model.get_layer("our_resnet").get_layer(layer_name).weights[li].shape
-        #             new_weights_list.append(np.resize(layer.weights[li], new_shape))
-        #
-        #         our_model.get_layer("our_resnet").get_layer(layer_name).set_weights(new_weights_list)
-        #     except:
-        #         print(layer_name)
-        #
-        # for layer in our_model_old.get_layer("our_head").layers:
-        #     layer_name = layer.name
-        #     if "input" in layer_name or "transpose" in layer_name or "dwn" in layer_name:
-        #         continue
-        #     new_weights_list = []
-        #     for li in range(len(layer.weights)):
-        #         new_shape = our_model.get_layer("our_head").get_layer(layer_name).weights[li].shape
-        #         new_weights_list.append(np.resize(layer.weights[li], new_shape))
-        #
-        #     our_model.get_layer("our_head").get_layer(layer_name).set_weights(new_weights_list)
-
-        # for layer in our_model_old.get_layer("our_hic").layers:
-        #     layer_name = layer.name
-        #     if "input" in layer_name:
-        #         continue
-        #     layer_weights = layer.weights
-        #     our_model.get_layer("our_hic").get_layer(layer_name).set_weights(layer_weights)
-
-        # our_model.set_weights(joblib.load(p.model_folder + "small_full.h5" + "_w"))
-
-        our_model.save(p.model_path, include_optimizer=False)
-        print("Model saved " + p.model_path)
-        for head_id in range(len(heads)):
-            joblib.dump(our_model.get_layer("our_head").get_weights(),
-                        p.model_path + "_head_" + str(head_id), compress=3)
-    q.put(None)
-
-
 def run_epoch(last_proc, fit_epochs, head_id):
-    # print(datetime.now().strftime('[%H:%M:%S] ') + "Epoch " + str(current_epoch))
-    shuffled_info = random.sample(train_info, len(train_info))
+    print(datetime.now().strftime('[%H:%M:%S] ') + "Epoch " + str(current_epoch))
+    shuffled_info = random.sample(training_regions[head_id], len(training_regions[head_id]))
     input_sequences = []
     output_scores = []
     shifts = []
     # print(datetime.now().strftime('[%H:%M:%S] ') + "Preparing sequences")
-    err = 0
+    # pick training regions
     for i, info in enumerate(shuffled_info):
         if len(input_sequences) >= p.GLOBAL_BATCH_SIZE * p.STEPS_PER_EPOCH:
             break
@@ -97,25 +41,32 @@ def run_epoch(last_proc, fit_epochs, head_id):
             print(i, end=" ")
             gc.collect()
         try:
-            if info[0] in ["chrY"]:
+            if not re.match("chr([0-9]*|X)$", info[0]):
+                shifts.append(None)
                 continue
             shift_bins = random.randint(-int(current_epoch / p.shift_speed) - p.initial_shift,
                                         int(current_epoch / p.shift_speed) + p.initial_shift)
             start = info[1] - (info[1] % p.bin_size) - p.half_size + shift_bins * p.bin_size
-            extra = start + p.input_size - len(one_hot[info[0]])
+            extra = start + p.input_size - len(one_hots[head_id][info[0]])
             if start < 0 or extra > 0:
                 shifts.append(None)
                 continue
-            big_bed_list.append(f"{info[0]}\t{start}\t{start + p.input_size}\ttrain")
+            ns = one_hots[head_id][info[0]][start:start + p.input_size]
+            if np.any(ns[:, -1]):
+                shifts.append(None)
+                continue
+
+            if head_id == 0:
+                big_bed_list.append(f"{info[0]}\t{start}\t{start + p.input_size}\ttrain")
             shifts.append(shift_bins)
-            if start < 0:
-                ns = one_hot[info[0]][0:start + p.input_size]
-                ns = np.concatenate((np.zeros((-1 * start, p.num_features)), ns))
-            elif extra > 0:
-                ns = one_hot[info[0]][start: len(one_hot[info[0]])]
-                ns = np.concatenate((ns, np.zeros((extra, p.num_features))))
-            else:
-                ns = one_hot[info[0]][start:start + p.input_size]
+            # if start < 0:
+            #     ns = one_hots[head_id][info[0]][0:start + p.input_size]
+            #     ns = np.concatenate((np.zeros((-1 * start, p.num_features)), ns))
+            # elif extra > 0:
+            #     ns = one_hots[head_id][info[0]][start: len(one_hots[head_id][info[0]])]
+            #     ns = np.concatenate((ns, np.zeros((extra, p.num_features))))
+            # else:
+
             start_bin = int(info[1] / p.bin_size) - p.half_num_regions + shift_bins
             scores = []
             for key in heads[head_id]:
@@ -125,7 +76,6 @@ def run_epoch(last_proc, fit_epochs, head_id):
             output_scores.append(scores)
         except Exception as e:
             print(e)
-            err += 1
     # print("")
     print(datetime.now().strftime('[%H:%M:%S] ') + "Loading parsed tracks")
 
@@ -160,54 +110,55 @@ def run_epoch(last_proc, fit_epochs, head_id):
     output_hic = []
     # print(f"Shifts {len(shifts)}")
     # print(datetime.now().strftime('[%H:%M:%S] ') + "Hi-C")
-    for hi, key in enumerate(hic_keys):
-        print(key, end=" ")
-        hdf = joblib.load(p.parsed_hic_folder + key)
-        ni = 0
-        for i, info in enumerate(shuffled_info):
-            if i >= len(shifts):
-                break
-            if shifts[i] is None:
-                continue
-            hd = hdf[info[0]]
-            hic_mat = np.zeros((p.num_hic_bins, p.num_hic_bins))
-            start_hic = int(info[1] - (info[1] % p.bin_size) - p.half_size_hic + shifts[i] * p.bin_size)
-            end_hic = start_hic + 2 * p.half_size_hic
-            start_row = hd['locus1_start'].searchsorted(start_hic - p.hic_bin_size, side='left')
-            end_row = hd['locus1_start'].searchsorted(end_hic, side='right')
-            hd = hd.iloc[start_row:end_row]
-            # convert start of the input region to the bin number
-            start_hic = int(start_hic / p.hic_bin_size)
-            # subtract start bin from the binned entries in the range [start_row : end_row]
-            l1 = (np.floor(hd["locus1_start"].values / p.hic_bin_size) - start_hic).astype(int)
-            l2 = (np.floor(hd["locus2_start"].values / p.hic_bin_size) - start_hic).astype(int)
-            hic_score = hd["score"].values
-            # drop contacts with regions outside the [start_row : end_row] range
-            lix = (l2 < len(hic_mat)) & (l2 >= 0) & (l1 >= 0)
-            l1 = l1[lix]
-            l2 = l2[lix]
-            hic_score = hic_score[lix]
-            hic_mat[l1, l2] += hic_score
-            hic_mat = hic_mat + hic_mat.T - np.diag(np.diag(hic_mat))
-            hic_mat = gaussian_filter(hic_mat, sigma=0.5)
-            if ni < half:
-                hic_mat = np.rot90(hic_mat, k=2)
-            # if i == 0:
-            #     print(f"original {hic_mat.shape}")
-            hic_mat = hic_mat[np.triu_indices_from(hic_mat, k=1)]
-            # if i == 0:
-            #     print(f"triu {hic_mat.shape}")
-            # for hs in range(hic_track_size):
-            #     hic_slice = hic_mat[hs * num_regions: (hs + 1) * num_regions].copy()
-            # if len(hic_slice) != num_regions:
-            # hic_mat.resize(num_regions, refcheck=False)
-            if hi == 0:
-                output_hic.append([])
-            output_hic[ni].append(hic_mat)
-            ni += 1
-        del hd
-        del hdf
-        gc.collect()
+    if head_id == 0:
+        for hi, key in enumerate(hic_keys):
+            print(key, end=" ")
+            hdf = joblib.load(p.parsed_hic_folder + key)
+            ni = 0
+            for i, info in enumerate(shuffled_info):
+                if i >= len(shifts):
+                    break
+                if shifts[i] is None:
+                    continue
+                hd = hdf[info[0]]
+                hic_mat = np.zeros((p.num_hic_bins, p.num_hic_bins))
+                start_hic = int(info[1] - (info[1] % p.bin_size) - p.half_size_hic + shifts[i] * p.bin_size)
+                end_hic = start_hic + 2 * p.half_size_hic
+                start_row = hd['locus1_start'].searchsorted(start_hic - p.hic_bin_size, side='left')
+                end_row = hd['locus1_start'].searchsorted(end_hic, side='right')
+                hd = hd.iloc[start_row:end_row]
+                # convert start of the input region to the bin number
+                start_hic = int(start_hic / p.hic_bin_size)
+                # subtract start bin from the binned entries in the range [start_row : end_row]
+                l1 = (np.floor(hd["locus1_start"].values / p.hic_bin_size) - start_hic).astype(int)
+                l2 = (np.floor(hd["locus2_start"].values / p.hic_bin_size) - start_hic).astype(int)
+                hic_score = hd["score"].values
+                # drop contacts with regions outside the [start_row : end_row] range
+                lix = (l2 < len(hic_mat)) & (l2 >= 0) & (l1 >= 0)
+                l1 = l1[lix]
+                l2 = l2[lix]
+                hic_score = hic_score[lix]
+                hic_mat[l1, l2] += hic_score
+                hic_mat = hic_mat + hic_mat.T - np.diag(np.diag(hic_mat))
+                hic_mat = gaussian_filter(hic_mat, sigma=0.5)
+                if ni < half:
+                    hic_mat = np.rot90(hic_mat, k=2)
+                # if i == 0:
+                #     print(f"original {hic_mat.shape}")
+                hic_mat = hic_mat[np.triu_indices_from(hic_mat, k=1)]
+                # if i == 0:
+                #     print(f"triu {hic_mat.shape}")
+                # for hs in range(hic_track_size):
+                #     hic_slice = hic_mat[hs * num_regions: (hs + 1) * num_regions].copy()
+                # if len(hic_slice) != num_regions:
+                # hic_mat.resize(num_regions, refcheck=False)
+                if hi == 0:
+                    output_hic.append([])
+                output_hic[ni].append(hic_mat)
+                ni += 1
+            del hd
+            del hdf
+            gc.collect()
     output_hic = np.asarray(output_hic)
     # print("")
     # print(datetime.now().strftime('[%H:%M:%S] ') + "Problems: " + str(err))
@@ -226,6 +177,10 @@ def run_epoch(last_proc, fit_epochs, head_id):
     for i in range(half):
         output_scores[i] = np.flip(output_scores[i], axis=1)
 
+    # Cut off the test TSS layer
+    input_sequences = input_sequences[:, :, :-1]
+    print(input_sequences.shape)
+
     gc.collect()
     print_memory()
     for name, size in sorted(((name, sys.getsizeof(value)) for name, value in locals().items()),
@@ -242,7 +197,7 @@ def run_epoch(last_proc, fit_epochs, head_id):
     # joblib.dump([input_sequences, output_scores, output_hic], "pickle/run.gz", compress=3)
     # argss = joblib.load("pickle/run.gz")
     # p = mp.Process(target=train_step, args=(argss[0][:400], argss[1][:400], argss[2][:400], fit_epochs, head_id,))
-    proc = mp.Process(target=train_step, args=(input_sequences, output_scores, output_hic, fit_epochs, head_id, hic_num, mp_q,))
+    proc = mp.Process(target=train_step, args=(heads, input_sequences, output_scores, output_hic, fit_epochs, head_id, hic_num, mp_q,))
     proc.start()
     return proc
 
@@ -254,7 +209,10 @@ def safe_save(thing, place):
     os.rename(place + "_temp", place)
 
 
-def train_step(input_sequences, output_scores, output_hic, fit_epochs, head_id, hic_num, mp_q):
+def train_step(heads, input_sequences, output_scores, output_hic, fit_epochs, head_id, hic_num, mp_q):
+    hic_step = True
+    if head_id != 0 or hic_num == 0:
+        hic_step = False
     try:
         import tensorflow as tf
         # physical_devices = tf.config.experimental.list_physical_devices('GPU')
@@ -263,7 +221,7 @@ def train_step(input_sequences, output_scores, output_hic, fit_epochs, head_id, 
         #     tf.config.experimental.set_memory_growth(device, True)
 
         import model as mo
-        if len(output_hic) > 0:
+        if hic_step:
             train_data = mo.wrap_with_hic(input_sequences, [output_scores, output_hic], p.GLOBAL_BATCH_SIZE)
             zero_fit_1 = np.zeros_like(input_sequences[0])
             zero_fit_2 = np.zeros_like(output_scores[0])
@@ -282,8 +240,12 @@ def train_step(input_sequences, output_scores, output_hic, fit_epochs, head_id, 
         strategy = tf.distribute.MultiWorkerMirroredStrategy()
         # print(datetime.now().strftime('[%H:%M:%S] ') + "Loading the model")
         with strategy.scope():
-            our_model = tf.keras.models.load_model(p.model_path)
-            our_model.get_layer("our_head").set_weights(joblib.load(p.model_path + "_head_" + str(head_id)))
+            if hic_step:
+                our_model = mo.hic_model(p.input_size, p.num_features, p.num_regions,
+                                         len(heads[head_id]), hic_num, p.hic_size)
+            else:
+                our_model = mo.small_model(p.input_size, p.num_features, p.num_regions,
+                                         len(heads[head_id]))
             print(f"=== Training with head {head_id} ===")
             hic_lr = 0.0001
             head_lr = 0.0001
@@ -303,7 +265,7 @@ def train_step(input_sequences, output_scores, output_hic, fit_epochs, head_id, 
             optimizers_and_layers = [(optimizers["our_resnet"], our_model.get_layer("our_resnet")),
                                      (optimizers["our_head"], our_model.get_layer("our_head"))
                                      ]
-            if hic_num > 0:
+            if hic_step:
                 optimizers["our_hic"] = tf.keras.optimizers.Adam(learning_rate=hic_lr)
                 optimizers_and_layers.append((optimizers["our_hic"], our_model.get_layer("our_hic")))
 
@@ -321,7 +283,7 @@ def train_step(input_sequences, output_scores, output_hic, fit_epochs, head_id, 
             # else:
             #     our_model.get_layer("our_resnet").trainable = False
 
-            if hic_num > 0:
+            if hic_step:
                 loss_weights = {"our_head": 1.0, "our_hic": 0.1}
                 losses = {
                     "our_head": "mse",
@@ -333,8 +295,12 @@ def train_step(input_sequences, output_scores, output_hic, fit_epochs, head_id, 
 
             our_model.fit(zero_data, steps_per_epoch=1, epochs=1)
 
-            if os.path.exists(p.model_path + "_w"):
-                our_model.set_weights(joblib.load(p.model_path + "_w"))
+            if os.path.exists(p.model_path + "_res"):
+                our_model.get_layer("our_resnet").set_weights(joblib.load(p.model_path + "_res"))
+            if os.path.exists(p.model_path + "_head_" + str(head_id)):
+                our_model.get_layer("our_head").set_weights(joblib.load(p.model_path + "_head_" + str(head_id)))
+            if hic_step and os.path.exists(p.model_path + "_hic"):
+                our_model.get_layer("our_hic").set_weights(joblib.load(p.model_path + "_hic"))
 
             if os.path.exists(p.model_path + "_opt_resnet"):
                 print("loading resnet optimizer")
@@ -344,23 +310,23 @@ def train_step(input_sequences, output_scores, output_hic, fit_epochs, head_id, 
                 print("loading head optimizer")
                 optimizers["our_head"].set_weights(joblib.load(p.model_path + "_opt_head_" + str(head_id)))
 
-            if hic_num > 0 and os.path.exists(p.model_path + "_opt_hic"):
+            if hic_step and os.path.exists(p.model_path + "_opt_hic"):
                 print("loading hic optimizer")
                 optimizers["our_hic"].set_weights(joblib.load(p.model_path + "_opt_hic"))
 
             optimizers["our_resnet"].learning_rate = resnet_lr
             optimizers["our_resnet"].weight_decay = resnet_wd
             optimizers["our_head"].learning_rate = head_lr
-            if hic_num > 0:
+            if hic_step:
                 optimizers["our_hic"].learning_rate = hic_lr
 
-        print(len(our_model.trainable_weights))
-        print(len(our_model.get_layer("our_resnet").trainable_weights))
-        print(len(our_model.get_layer("our_head").trainable_weights))
-        if hic_num > 0:
-            print(len(our_model.get_layer("our_hic").trainable_weights))
+            print(len(our_model.trainable_weights))
+            print(len(our_model.get_layer("our_resnet").trainable_weights))
+            print(len(our_model.get_layer("our_head").trainable_weights))
+            if hic_step:
+                print(len(our_model.get_layer("our_hic").trainable_weights))
     except Exception as e:
-        print(e)
+        traceback.print_exc()
         print(datetime.now().strftime('[%H:%M:%S] ') + "Error while compiling.")
         mp_q.put(None)
         return None
@@ -368,23 +334,24 @@ def train_step(input_sequences, output_scores, output_hic, fit_epochs, head_id, 
     try:
         our_model.fit(train_data, epochs=fit_epochs)
         # print(datetime.now().strftime('[%H:%M:%S] ') + "Saving " + str(current_epoch) + " model. ")
-        our_model.save(p.model_path + "_temp.h5", include_optimizer=False)
-        if os.path.exists(p.model_path):
-            os.remove(p.model_path)
-        os.rename(p.model_path + "_temp.h5", p.model_path)
+        # our_model.save(p.model_path + "_temp.h5", include_optimizer=False)
+        # if os.path.exists(p.model_path):
+        #     os.remove(p.model_path)
+        # os.rename(p.model_path + "_temp.h5", p.model_path)
+        safe_save(our_model.get_layer("our_resnet").get_weights(), p.model_path + "_res")
         safe_save(our_model.get_layer("our_head").get_weights(), p.model_path + "_head_" + str(head_id))
         safe_save(optimizers["our_resnet"].get_weights(), p.model_path + "_opt_resnet")
         safe_save(optimizers["our_head"].get_weights(), p.model_path + "_opt_head_" + str(head_id))
-        if hic_num > 1:
+        if hic_step:
             safe_save(optimizers["our_hic"].get_weights(), p.model_path + "_opt_hic")
-        joblib.dump(our_model.get_weights(), p.model_path + "_w", compress=3)
+            safe_save(our_model.get_layer("our_hic").get_weights(), p.model_path + "_hic")
     except Exception as e:
         print(e)
         print(datetime.now().strftime('[%H:%M:%S] ') + "Error while training.")
         mp_q.put(None)
         return None
 
-    print(datetime.now().strftime('[%H:%M:%S] ') + "Epoch " + str(current_epoch) + " finished. ")
+    print(datetime.now().strftime('[%H:%M:%S] ') + "Epoch finished. ")
     mp_q.put(None)
 
 
@@ -398,22 +365,20 @@ def check_perf(mp_q, head_id):
             our_model = tf.keras.models.load_model(p.model_path)
             our_model.get_layer("our_head").set_weights(
                 joblib.load(p.model_path + "_head_" + str(head_id)))
-        train_eval_chr = "chr2"
+        train_eval_chr = "chr1"
         train_eval_chr_info = []
-        train_info_eval = joblib.load("pickle/train_info_eval.gz")
-        for info in train_info_eval:
+        for info in train_info:
             if info[0] == train_eval_chr:
                 train_eval_chr_info.append(info)
         train_eval_chr_info.sort(key=lambda x: x[1])
         print(f"Training set {len(train_eval_chr_info)}")
         training_spearman = evaluation.eval_perf(p, our_model, heads[head_id], train_eval_chr_info,
-                                                 False, current_epoch, train_eval_chr, one_hot, hic_keys, loaded_tracks)
+                                                 False, current_epoch, train_eval_chr, one_hots[head_id], hic_keys, loaded_tracks)
         # training_spearman = 0
-        test_info_eval = joblib.load("pickle/test_info_eval.gz")
-        print(f"Test set {len(test_info_eval)}")
-        test_info_eval.sort(key=lambda x: x[1])
-        test_spearman = evaluation.eval_perf(p, our_model, heads[head_id], test_info_eval,
-                                             True, current_epoch, "chr1", one_hot, hic_keys, loaded_tracks)
+        print(f"Test set {len(test_info)}")
+        test_info.sort(key=lambda x: x[1])
+        test_spearman = evaluation.eval_perf(p, our_model, heads[head_id], test_info,
+                                             True, current_epoch, "chr1", one_hots[head_id], hic_keys, loaded_tracks)
         with open(p.model_name + "_history.csv", "a+") as myfile:
             myfile.write(f"{training_spearman},{test_spearman}")
             myfile.write("\n")
@@ -439,33 +404,22 @@ big_bed_list = []
 if __name__ == '__main__':
     # import model as mo
     # our_model = mo.hic_model(p.input_size, p.num_features, p.num_regions, p.out_stack_num,  17, 190)
-
-    # draw = joblib.load("draw")
-    # viz.draw_tracks(*draw)
-
-    ga, one_hot, train_info, test_info, tss_loc, protein_coding = parser.get_sequences(p.bin_size, p.chromosomes)
-    parser.parse_eval_data(p.chromosomes)
-    if Path("pickle/track_names.gz").is_file():
-        track_names = joblib.load("pickle/track_names.gz")
+    gas, one_hots, train_info, test_info, tss_loc, protein_coding, training_regions = parser.get_sequences(p.bin_size)
+    if Path("pickle/track_names_col.gz").is_file():
+        track_names_col = joblib.load("pickle/track_names_col.gz")
     else:
-        track_names = parser.parse_tracks(ga, p.bin_size, tss_loc, p.chromosomes, p.tracks_folder)
-    print("Number of tracks: " + str(len(track_names)))
+        track_names_col = parser.parse_tracks(gas, p.bin_size, p.chromosomes, p.tracks_folders)
+
+    for i in range(len(track_names_col)):
+        print(f"Number of tracks in {i + 1}: {len(track_names_col[i])}")
 
     if Path("pickle/heads.gz").is_file():
         heads = joblib.load("pickle/heads.gz")
     else:
         heads = []
-        random.shuffle(track_names)
-        heads.append(track_names[:4000])
-        heads.append(track_names[4000:8000])
-        heads.append(track_names[8000:])
-        random.shuffle(track_names)
-        heads[-1].extend(track_names[:4000 - len(heads[-1])])
+        for i in range(len(track_names_col)):
+            heads.append(random.sample(track_names_col[i], len(track_names_col[i])))
         joblib.dump(heads, "pickle/heads.gz", compress=3)
-
-    # random.shuffle(track_names)
-    heads = [track_names[:100]]
-    # joblib.dump(heads, "pickle/heads.gz", compress=3)
 
     for head in heads:
         print(len(head))
@@ -477,15 +431,6 @@ if __name__ == '__main__':
     print(f"hic {hic_num}")
 
     mp_q = mp.Queue()
-
-    if not Path(p.model_folder + p.model_name).is_file():
-        proc = mp.Process(target=create_model, args=(heads, hic_num, mp_q,))
-        proc.start()
-        print(mp_q.get())
-        proc.join()
-    else:
-        print("Model exists")
-
     loaded_tracks = {}
     # for i, key in enumerate(track_names):
     #     if i % 100 == 0:

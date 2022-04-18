@@ -16,12 +16,11 @@ class MainParams:
         self.half_num_regions = int(self.num_regions / 2)
         self.mid_bin = math.floor(self.num_regions / 2)
         self.BATCH_SIZE = 1  # 1
-        self.GLOBAL_BATCH_SIZE = 4 * self.BATCH_SIZE
-        self.STEPS_PER_EPOCH = 100
+        self.GLOBAL_BATCH_SIZE = 1 # 4 * self.BATCH_SIZE
+        self.STEPS_PER_EPOCH = 20
         self.num_epochs = 1000
         self.hic_track_size = 1
-        self.out_stack_num = 11529 #11529
-        self.num_features = 5
+        self.num_features = 4
         self.shift_speed = 2000000
         self.initial_shift = 250 # +- 50k
         self.hic_size = 780
@@ -36,7 +35,8 @@ class MainParams:
         self.model_name = "hic_model.h5"
         self.model_path = self.model_folder + self.model_name
         self.figures_folder = "figures_1"
-        self.tracks_folder = "/media/user/passport1/variants_100/tracks/"
+        self.tracks_folders = ["/Users/ramzan/variants_100/human_tracks/",
+                               "/Users/ramzan/variants_100/mouse_tracks/"]
         self.temp_folder = "/home/user/data/temp/"
         self.chromosomes = ["chrX"]  # "chrY"
         for i in range(1, 23):

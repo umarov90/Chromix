@@ -15,7 +15,7 @@ import itertools as it
 import traceback
 from multiprocessing import Pool, Manager
 import multiprocessing as mp
-from scipy.ndimage.filters import gaussian_filter
+from scipy.ndimage import gaussian_filter
 from sklearn.cluster import KMeans
 
 
@@ -106,44 +106,50 @@ def parse_hic(folder):
         return hic_keys
 
 
-def parse_tracks(ga, bin_size, tss_loc, chromosomes, tracks_folder):
-    track_names = []
-    for filename in os.listdir(tracks_folder):
-        if filename.endswith(".gz"):
-            track = filename[:-len(".100nt.bed.gz")]
-            fn = tracks_folder + f"{track}.100nt.bed.gz"
-            size = os.path.getsize(fn)
-            if size > 2 * 512000 or track.startswith("sc"):
-                track_names.append(track)
+def parse_tracks(gas, bin_size, chromosomes, tracks_folders):
+    track_names_col = []
+    for i in range(len(tracks_folders)):
+        ga = gas[i]
+        tracks_folder = tracks_folders[i]
+        track_names = []
+        for filename in os.listdir(tracks_folder):
+            if filename.endswith(".gz"):
+                track = filename[:-len(".100nt.bed.gz")]
+                fn = tracks_folder + f"{track}.100nt.bed.gz"
+                size = os.path.getsize(fn)
+                if size > 2 * 512000 or track.startswith("sc"):
+                    track_names.append(track)
 
-    print(f"gas {len(track_names)}")
+        print(f"gas {len(track_names)}")
 
-    step_size = 50
-    q = mp.Queue()
-    ps = []
-    start = 0
-    nproc = 28
-    end = len(track_names)
-    for t in range(start, end, step_size):
-        t_end = min(t+step_size, end)
-        sub_tracks = track_names[t:t_end]
-        p = mp.Process(target=parse_some_tracks,
-                       args=(q, sub_tracks, ga, bin_size, chromosomes,tracks_folder,))
-        p.start()
-        ps.append(p)
-        if len(ps) >= nproc:
+        step_size = 50
+        q = mp.Queue()
+        ps = []
+        start = 0
+        nproc = 28
+        end = len(track_names)
+        for t in range(start, end, step_size):
+            t_end = min(t+step_size, end)
+            sub_tracks = track_names[t:t_end]
+            p = mp.Process(target=parse_some_tracks,
+                           args=(q, sub_tracks, ga, bin_size, chromosomes, tracks_folder,))
+            p.start()
+            ps.append(p)
+            if len(ps) >= nproc:
+                for p in ps:
+                    p.join()
+                print(q.get())
+                ps = []
+
+        if len(ps) > 0:
             for p in ps:
                 p.join()
             print(q.get())
-            ps = []
 
-    if len(ps) > 0:
-        for p in ps:
-            p.join()
-        print(q.get())
+        track_names_col.append(track_names)
 
-    joblib.dump(track_names, "pickle/track_names.gz", compress=3)
-    return track_names
+    joblib.dump(track_names_col, "pickle/track_names_col.gz", compress=3)
+    return track_names_col
 
 
 def parse_some_tracks(q, some_tracks, ga, bin_size, chromosomes, tracks_folder):
@@ -204,40 +210,37 @@ def parse_some_tracks(q, some_tracks, ga, bin_size, chromosomes, tracks_folder):
     q.put(None)
 
 
-def get_sequences(bin_size, chromosomes):
-    if Path("pickle/genome.gz").is_file():
-        genome = joblib.load("pickle/genome.gz")
-        ga = joblib.load("pickle/ga.gz")
+def get_sequences(bin_size):
+    if Path("pickle/mouse_ga.gz").is_file():
+        human_genome = joblib.load("pickle/human_genome.gz")
+        human_ga = joblib.load("pickle/human_ga.gz")
+        mouse_genome = joblib.load("pickle/mouse_genome.gz")
+        mouse_ga = joblib.load("pickle/mouse_ga.gz")
     else:
-        genome, ga = cm.parse_genome("data/hg38.fa", bin_size)
-        joblib.dump(genome, "pickle/genome.gz", compress=3)
-        joblib.dump(ga, "pickle/ga.gz", compress=3)
+        human_genome, human_ga = cm.parse_genome("data/hg38.fa", bin_size)
+        mouse_genome, mouse_ga = cm.parse_genome("data/mm10.fa", bin_size)
+        joblib.dump(human_genome, "pickle/genome.gz", compress=3)
+        joblib.dump(human_ga, "pickle/ga.gz", compress=3)
+
+    gas = [human_ga, mouse_ga]
 
     if Path("pickle/train_info.gz").is_file():
         test_info = joblib.load("pickle/test_info.gz")
         train_info = joblib.load("pickle/train_info.gz")
-        tss_loc = joblib.load("pickle/tss_loc.gz")
+        human_exclude_dict = joblib.load("pickle/tss_loc.gz")
         protein_coding = joblib.load("pickle/protein_coding.gz")
+        one_hot_human = joblib.load("pickle/one_hot_human.gz")
+        one_hot_mouse = joblib.load("pickle/one_hot_mouse.gz")
+        mouse_regions = joblib.load("pickle/mouse_regions.gz")
+        human_regions = joblib.load("pickle/human_regions.gz")
     else:
-        # gene_tss = pd.read_csv("data/old_TSS_flank_0.bed",
-        #                     sep="\t", index_col=False, names=["chrom", "start", "end", "geneID", "score", "strand"])
-        # gene_info = pd.read_csv("data/old_gene.info.tsv", sep="\t", index_col=False)
-
-        gene_tss = pd.read_csv("data/hg38.GENCODEv38.pc_lnc.TSS.bed", sep="\t", index_col=False,
-                               names=["chrom", "start", "end", "geneID", "score", "strand"])
         gene_info = pd.read_csv("data/hg38.GENCODEv38.pc_lnc.gene.info.tsv", sep="\t", index_col=False)
+        train_tss = pd.read_csv("data/final_train_tss.bed", sep="\t", index_col=False, names=["chrom", "start", "end", "geneID", "score", "strand"])
+        test_tss = pd.read_csv("data/final_test_tss.bed", sep="\t", index_col=False, names=["chrom", "start", "end", "geneID", "score", "strand"])
         protein_coding = []
-        # prom_info = pd.read_csv("data/hg38.gencode_v32.promoter.window.info.tsv", sep="\t", index_col=False)
         test_info = []
-        tss_loc = {}
-        # test_genes = prom_info.loc[(prom_info['chrom'] == "chr1") & (prom_info['max_overall_rank'] == 1)]
-        # for index, row in test_genes.iterrows():
-        #     vals = row["TSS_str"].split(";")
-        #     pos = int(vals[int(len(vals) / 2)].split(",")[1])
-        #     strand = vals[int(len(vals) / 2)].split(",")[2]
-        #     test_info.append([row["chrom"], pos, row["geneID_str"], row["geneType_str"], strand])
-        test_genes = gene_tss.loc[gene_tss['chrom'] == "chr1"]
-        for index, row in test_genes.iterrows():
+        human_exclude_dict = {}
+        for index, row in test_tss.iterrows():
             pos = int(row["start"])
             gene_type = gene_info[gene_info['geneID'] == row["geneID"]]['geneType'].values[0]
             gene_name = gene_info[gene_info['geneID'] == row["geneID"]]['geneName'].values[0]
@@ -245,14 +248,13 @@ def get_sequences(bin_size, chromosomes):
                 protein_coding.append(row["geneID"])
             # if gene_type != "protein_coding":
             #     continue
-            tss_loc.setdefault(row["chrom"], []).append(pos)
+            human_exclude_dict.setdefault(row["chrom"], []).append(pos)
             test_info.append([row["chrom"], pos, row["geneID"], gene_type,
                               row["strand"], gene_type != "protein_coding", gene_name])
 
         print(f"Test set complete {len(test_info)}")
         train_info = []
-        train_genes = gene_tss.loc[gene_tss['chrom'] != "chr1"]
-        for index, row in train_genes.iterrows():
+        for index, row in train_tss.iterrows():
             pos = int(row["start"])
             gene_type = gene_info[gene_info['geneID'] == row["geneID"]]['geneType'].values[0]
             gene_name = gene_info[gene_info['geneID'] == row["geneID"]]['geneName'].values[0]
@@ -260,71 +262,70 @@ def get_sequences(bin_size, chromosomes):
                 protein_coding.append(row["geneID"])
             # if gene_type != "protein_coding":
             #     continue
-            tss_loc.setdefault(row["chrom"], []).append(pos)
-            if row["chrom"] not in chromosomes:
-                continue
             train_info.append([row["chrom"], pos, row["geneID"], gene_type, row["strand"],
                                gene_type != "protein_coding", gene_name])
 
         print(f"Training set complete {len(train_info)}")
 
-        one_hot = {}
-        for chromosome in chromosomes:
+        human_regions = pd.read_csv("data/human.genome.windows.bed", sep="\t",
+                                    index_col=False, names=["chrom", "start", "end"])
+        human_regions["mid"] = (human_regions["start"] + (human_regions["end"] - human_regions["start"]) / 2)
+        human_chromosomes = human_regions['chrom'].unique().tolist()
+        human_regions = human_regions.astype({"mid": int})
+        human_regions = human_regions[['chrom', 'mid']].values.tolist()
+
+        one_hot_human = {}
+        for chromosome in human_chromosomes:
             print(chromosome)
-            one_hot[chromosome] = cm.encode_seq(genome[chromosome])
-            ######################################################################
-            tss_layer = np.zeros((len(one_hot[chromosome]), 1)).astype(bool)  #
-            print(len(one_hot[chromosome]))  #
-            for tss in tss_loc[chromosome]:  #
-                tss_layer[tss, 0] = True  #
-            print(f"{chromosome}: {np.sum(tss_layer)}")  #
-            one_hot[chromosome] = np.hstack([one_hot[chromosome], tss_layer])  #
-            ######################################################################
+            one_hot_human[chromosome] = cm.encode_seq(human_genome[chromosome])
+            tss_layer = np.zeros((len(one_hot_human[chromosome]), 1)).astype(bool)
+            print(len(one_hot_human[chromosome]))
+            if chromosome in human_exclude_dict.keys():
+                for tss in human_exclude_dict[chromosome]:
+                    tss_layer[tss, 0] = True
+            print(f"{chromosome}: {np.sum(tss_layer)}")
+            one_hot_human[chromosome] = np.hstack([one_hot_human[chromosome], tss_layer])
 
-        joblib.dump(one_hot, "pickle/one_hot.gz", compress=3)
+        mouse_regions = pd.read_csv("data/mouse.genome.windows.bed", sep="\t",
+                                    index_col=False, names=["chrom", "start", "end"])
+        mouse_regions["mid"] = (mouse_regions["start"] + (mouse_regions["end"] - mouse_regions["start"]) / 2)
+        mouse_regions = mouse_regions.astype({"mid": int})
+        mouse_chromosomes = mouse_regions['chrom'].unique().tolist()
+        mouse_regions = mouse_regions[['chrom', 'mid']].values.tolist()
 
+        mouse_exclude = pd.read_csv("data/mouse_exclude.bed", sep="\t", index_col=False,
+                               names=["chrom", "start", "end", "geneID", "score", "strand"])
+        mouse_exclude_dict = {}
+        for index, row in mouse_exclude.iterrows():
+            pos = int(row["start"])
+            mouse_exclude_dict.setdefault(row["chrom"], []).append(pos)
+
+        one_hot_mouse = {}
+        for chromosome in mouse_chromosomes:
+            print(chromosome)
+            one_hot_mouse[chromosome] = cm.encode_seq(mouse_genome[chromosome])
+            tss_layer = np.zeros((len(one_hot_mouse[chromosome]), 1)).astype(bool)
+            print(len(one_hot_mouse[chromosome]))
+            if chromosome in mouse_exclude_dict.keys():
+                for tss in mouse_exclude_dict[chromosome]:
+                    tss_layer[tss, 0] = True
+            print(f"{chromosome}: {np.sum(tss_layer)}")
+            one_hot_mouse[chromosome] = np.hstack([one_hot_mouse[chromosome], tss_layer])
+
+        joblib.dump(one_hot_mouse, "pickle/one_hot_mouse.gz", compress=3)
+        joblib.dump(one_hot_human, "pickle/one_hot_human.gz", compress=3)
+        joblib.dump(mouse_regions, "pickle/mouse_regions.gz", compress=3)
+        joblib.dump(human_regions, "pickle/human_regions.gz", compress=3)
         joblib.dump(test_info, "pickle/test_info.gz", compress=3)
         joblib.dump(train_info, "pickle/train_info.gz", compress=3)
-        joblib.dump(tss_loc, "pickle/tss_loc.gz", compress=3)
+        joblib.dump(human_exclude_dict, "pickle/tss_loc.gz", compress=3)
         joblib.dump(protein_coding, "pickle/protein_coding.gz", compress=3)
         gc.collect()
-    one_hot = joblib.load("pickle/one_hot.gz")
-    return ga, one_hot, train_info, test_info, tss_loc, protein_coding
 
+    one_hots = [one_hot_human, one_hot_mouse]
+    training_regions = [human_regions, mouse_regions]
 
-def parse_eval_data(chromosomes):
-    if not Path("pickle/train_info_eval.gz").is_file():
-        # gene_tss = pd.read_csv("data/old_TSS_flank_0.bed",
-        #                     sep="\t", index_col=False, names=["chrom", "start", "end", "geneID", "score", "strand"])
-        # gene_info = pd.read_csv("data/old_gene.info.tsv", sep="\t", index_col=False)
-        gene_tss = pd.read_csv("data/hg38.GENCODEv38.pc_lnc.TSS.bed", sep="\t", index_col=False,
-                               names=["chrom", "start", "end", "geneID", "score", "strand"])
-        gene_info = pd.read_csv("data/hg38.GENCODEv38.pc_lnc.gene.info.tsv", sep="\t", index_col=False)
-        test_info = []
-        test_genes = gene_tss.loc[gene_tss['chrom'] == "chr1"]
-        for index, row in test_genes.iterrows():
-            pos = int(row["start"]) - 1
-            gene_type = gene_info[gene_info['geneID'] == row["geneID"]]['geneType'].values[0]
-            gene_name = gene_info[gene_info['geneID'] == row["geneID"]]['geneName'].values[0]
-            test_info.append([row["chrom"], pos, row["geneID"], gene_type,
-                              row["strand"], gene_type != "protein_coding", gene_name])
-
-        print(f"Test set complete {len(test_info)}")
-        train_info = []
-        train_genes = gene_tss.loc[gene_tss['chrom'] != "chr1"]
-        for index, row in train_genes.iterrows():
-            pos = int(row["start"]) - 1
-            gene_type = gene_info[gene_info['geneID'] == row["geneID"]]['geneType'].values[0]
-            gene_name = gene_info[gene_info['geneID'] == row["geneID"]]['geneName'].values[0]
-            if row["chrom"] not in chromosomes:
-                continue
-            train_info.append([row["chrom"], pos, row["geneID"], gene_type, row["strand"],
-                               gene_type != "protein_coding", gene_name])
-
-        print(f"Training set complete {len(train_info)}")
-
-        joblib.dump(test_info, "pickle/test_info_eval.gz", compress=3)
-        joblib.dump(train_info, "pickle/train_info_eval.gz", compress=3)
+    return gas, one_hots, train_info, test_info, human_exclude_dict, protein_coding, training_regions
 
 
 def parse_one_track(ga, bin_size, fn):
