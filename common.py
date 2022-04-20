@@ -58,7 +58,7 @@ def parse_genome(g, bin, chr1=False):
                     seq = clean_seq(seq)
                     fasta[chrn] = seq
                     ga[chrn] = np.zeros(int(len(seq)/bin) + 1, dtype=np.float32)
-                    # print(chrn + " - " + str(len(seq)))
+                    print(chrn + " - " + str(len(seq)))
                     if chr1:
                         return fasta
                 chrn = line.strip()[1:]

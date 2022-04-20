@@ -8,7 +8,7 @@ class MainParams:
     def __init__(self):
         self.input_size = 420000  # 210001 # 50001
         self.half_size = int(self.input_size / 2)
-        self.bin_size = 200
+        self.bin_size = 100
         self.hic_bin_size = 10000
         self.num_hic_bins = 40
         self.half_size_hic = 200000
