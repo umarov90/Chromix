@@ -28,6 +28,8 @@ matplotlib.use("agg")
 
 def run_epoch(last_proc, fit_epochs, head_id):
     print(datetime.now().strftime('[%H:%M:%S] ') + "Epoch " + str(current_epoch))
+    training_regions = joblib.load(f"pickle/{p.species[head_id]}_regions.gz")
+    one_hot = joblib.load(f"pickle/{p.species[head_id]}_one_hot.gz")
     shuffled_info = random.sample(training_regions[head_id], len(training_regions[head_id]))
     input_sequences = []
     output_scores = []
@@ -47,11 +49,11 @@ def run_epoch(last_proc, fit_epochs, head_id):
             shift_bins = random.randint(-int(current_epoch / p.shift_speed) - p.initial_shift,
                                         int(current_epoch / p.shift_speed) + p.initial_shift)
             start = info[1] - (info[1] % p.bin_size) - p.half_size + shift_bins * p.bin_size
-            extra = start + p.input_size - len(one_hots[head_id][info[0]])
+            extra = start + p.input_size - len(one_hot[info[0]])
             if start < 0 or extra > 0:
                 shifts.append(None)
                 continue
-            ns = one_hots[head_id][info[0]][start:start + p.input_size]
+            ns = one_hot[info[0]][start:start + p.input_size]
             if np.any(ns[:, -1]):
                 shifts.append(None)
                 continue
@@ -358,7 +360,7 @@ def train_step(heads, input_sequences, output_scores, output_hic, fit_epochs, he
 def check_perf(mp_q, head_id):
     print(datetime.now().strftime('[%H:%M:%S] ') + "Evaluating")
     import tensorflow as tf
-    import model as mo
+    one_hot = joblib.load(f"pickle/{p.species[head_id]}_one_hot.gz")
     try:
         strategy = tf.distribute.MultiWorkerMirroredStrategy()
         with strategy.scope():
@@ -373,12 +375,12 @@ def check_perf(mp_q, head_id):
         train_eval_chr_info.sort(key=lambda x: x[1])
         print(f"Training set {len(train_eval_chr_info)}")
         training_spearman = evaluation.eval_perf(p, our_model, heads[head_id], train_eval_chr_info,
-                                                 False, current_epoch, train_eval_chr, one_hots[head_id], hic_keys, loaded_tracks)
+                                                 False, current_epoch, train_eval_chr, one_hot, hic_keys, loaded_tracks)
         # training_spearman = 0
         print(f"Test set {len(test_info)}")
         test_info.sort(key=lambda x: x[1])
         test_spearman = evaluation.eval_perf(p, our_model, heads[head_id], test_info,
-                                             True, current_epoch, "chr1", one_hots[head_id], hic_keys, loaded_tracks)
+                                             True, current_epoch, "chr1", one_hot, hic_keys, loaded_tracks)
         with open(p.model_name + "_history.csv", "a+") as myfile:
             myfile.write(f"{training_spearman},{test_spearman}")
             myfile.write("\n")
@@ -404,11 +406,11 @@ big_bed_list = []
 if __name__ == '__main__':
     # import model as mo
     # our_model = mo.hic_model(p.input_size, p.num_features, p.num_regions, p.out_stack_num,  17, 190)
-    gas, one_hots, train_info, test_info, tss_loc, protein_coding, training_regions = parser.get_sequences(p.bin_size)
+    species, train_info, test_info, protein_coding = parser.get_sequences(p.species, p.bin_size)
     if Path("pickle/track_names_col.gz").is_file():
         track_names_col = joblib.load("pickle/track_names_col.gz")
     else:
-        track_names_col = parser.parse_tracks(gas, p.bin_size, p.chromosomes, p.tracks_folders)
+        track_names_col = parser.parse_tracks(p.species, p.bin_size, p.chromosomes, p.tracks_folder)
 
     for i in range(len(track_names_col)):
         print(f"Number of tracks in {i + 1}: {len(track_names_col[i])}")
@@ -426,7 +428,7 @@ if __name__ == '__main__':
     # hic_keys = parser.parse_hic(p.parsed_hic_folder)
     hic_keys = ["hic_Ery.10kb.intra_chromosomal.interaction_table.tsv", "hic_HUVEC.10kb.intra_chromosomal.interaction_table.tsv",
                 "hic_Islets.10kb.intra_chromosomal.interaction_table.tsv", "hic_SkMC.10kb.intra_chromosomal.interaction_table.tsv"]
-    # hic_keys = []
+    hic_keys = []
     hic_num = len(hic_keys)
     print(f"hic {hic_num}")
 

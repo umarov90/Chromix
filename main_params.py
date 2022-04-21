@@ -24,19 +24,17 @@ class MainParams:
         self.shift_speed = 2000000
         self.initial_shift = 250 # +- 50k
         self.hic_size = 780
-
+        self.species = ["human", "mouse", "macFas", "calJac", "rheMac", "dog", "sheep", "rat"]
         script_folder = pathlib.Path(__file__).parent.resolve()
         folders = open(str(script_folder) + "/data_dirs").read().strip().split("\n")
         os.chdir(folders[0])
         self.parsed_tracks_folder = folders[1]
         self.parsed_hic_folder = folders[2]
         self.model_folder = folders[3]
-
         self.model_name = "hic_model.h5"
         self.model_path = self.model_folder + self.model_name
         self.figures_folder = "figures_1"
-        self.tracks_folders = ["/Users/ramzan/variants_100/human_tracks/",
-                               "/Users/ramzan/variants_100/mouse_tracks/"]
+        self.tracks_folder = "/Users/ramzan/variants_100/tracks/"
         self.temp_folder = "/home/user/data/temp/"
         self.chromosomes = ["chrX"]  # "chrY"
         for i in range(1, 23):

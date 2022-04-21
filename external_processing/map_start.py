@@ -3,9 +3,12 @@ from pathlib import Path
 import pandas as pd
 import sys
 
-meta = pd.read_csv(sys.argv[1], sep="\t")
+meta = pd.read_csv(sys.argv[1], sep="\t", dtype=str)
 meta = meta[meta["library_selection"] == "CAGE"]
+meta.replace(r'^\s*$', "no_value", regex=True, inplace=True)
+meta.fillna("no_value", inplace=True)
 wd = os.path.dirname(os.path.abspath(sys.argv[1]))
+sd = os.path.dirname(os.path.realpath(__file__))
 jobs_num = 15
 size = int(len(meta) / jobs_num)
 
@@ -25,5 +28,5 @@ for i, df in enumerate(list_of_dfs):
         f.write(f"#SBATCH --output={wd}/temp/job{i}.out\n")
         f.write(f"#SBATCH --error={wd}/temp/job{i}.err\n")
         f.write(f"#SBATCH --partition=batch\n")
-        f.write(f"python3 map.py {wd}/temp/{i}")
+        f.write(f"python3 {sd}/map.py {wd}/temp/{i}")
     os.system(f"sbatch {wd}/temp/job{i}")

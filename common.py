@@ -3,12 +3,13 @@ import math
 import re
 
 
-def find_nearest(array,value):
+def find_nearest(array, value):
     idx = np.searchsorted(array, value, side="left")
-    if idx > 0 and (idx == len(array) or math.fabs(value - array[idx-1]) < math.fabs(value - array[idx])):
-        return array[idx-1]
+    if idx > 0 and (idx == len(array) or math.fabs(value - array[idx - 1]) < math.fabs(value - array[idx])):
+        return array[idx - 1]
     else:
         return array[idx]
+
 
 enc_mat = np.append(np.eye(4),
                     [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [1, 0, 0, 0],
@@ -57,7 +58,7 @@ def parse_genome(g, bin, chr1=False):
                 if len(seq) != 0:
                     seq = clean_seq(seq)
                     fasta[chrn] = seq
-                    ga[chrn] = np.zeros(int(len(seq)/bin) + 1, dtype=np.float32)
+                    ga[chrn] = np.zeros(int(len(seq) / bin) + 1, dtype=np.float32)
                     print(chrn + " - " + str(len(seq)))
                     if chr1:
                         return fasta
@@ -72,7 +73,7 @@ def parse_genome(g, bin, chr1=False):
         if len(seq) != 0:
             seq = clean_seq(seq)
             fasta[chrn] = seq
-            ga[chrn] = np.zeros(int(len(seq)/bin) + 1, dtype=np.float32)
+            ga[chrn] = np.zeros(int(len(seq) / bin) + 1, dtype=np.float32)
             # print(chrn + " - " + str(len(seq)))
     return fasta, ga
 
@@ -118,17 +119,26 @@ def nuc_to_ind(nuc):
 
 
 def get_human_readable(size, precision=2):
-    suffixes=['B','KB','MB','GB','TB']
+    suffixes = ['B', 'KB', 'MB', 'GB', 'TB']
     suffixIndex = 0
     while size > 1024 and suffixIndex < 4:
-        suffixIndex += 1 #increment the index of the suffix
-        size = size/1024.0 #apply the division
-    return "%.*f%s"%(precision,size,suffixes[suffixIndex])
+        suffixIndex += 1  # increment the index of the suffix
+        size = size / 1024.0  # apply the division
+    return "%.*f%s" % (precision, size, suffixes[suffixIndex])
 
 
 def find_nth(haystack, needle, n):
     start = haystack.find(needle)
     while start >= 0 and n > 1:
-        start = haystack.find(needle, start+len(needle))
+        start = haystack.find(needle, start + len(needle))
         n -= 1
     return start
+
+
+def find_between(s, first, last):
+    try:
+        start = s.index(first) + len(first)
+        end = s.index(last, start)
+        return s[start:end]
+    except ValueError:
+        return ""

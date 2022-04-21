@@ -1,9 +1,7 @@
 import os
-from pathlib import Path
 import pandas as pd
 import sys
-from subprocess import PIPE, Popen
-import logging
+from subprocess import Popen
 from time import time
 now = time()
 
@@ -30,8 +28,8 @@ for index, row in meta.iterrows():
             f"{hisat2} -p 20 genome/index -U {file_loc} | samtools sort - -o {wd}/bam/{row['run_accession']}.bam",
         )
     else:
-        file_loc1 = "fastq" + files[0][files[0].rfind('/'):]
-        file_loc2 = "fastq" + files[1][files[1].rfind('/'):]
+        file_loc1 = f"{wd}/fastq" + files[0][files[0].rfind('/'):]
+        file_loc2 = f"{wd}/fastq" + files[1][files[1].rfind('/'):]
         # hisat2 mapping
         run_proc(
             f"{hisat2} -p 20 genome/index -1 {file_loc1} -2 {file_loc2} | samtools sort - -o {wd}/bam/{row['run_accession']}.bam",
@@ -43,7 +41,7 @@ for index, row in meta.iterrows():
     )
     # make 100nt window signal
     run_proc(
-        f"gzip -dc {wd}/bam_to_ctss/{row['run_accession']}/bed/{row['run_accession']}.short.ctss.bed.gz | cut -f 1,2,3,5 | sort -k1,1 -k2,2n | bedtools map -c 4 -o sum -a {wd}/genome/windows.bed -b stdin | awk '$4 != \".\" {{print}}' | gzip -c >{wd}/bed/CAGE.RNA.ctss.{row['run_accession']}.{name}.100nt.bed.gz;",
+        f"gzip -dc {wd}/bam_to_ctss/{row['run_accession']}/bed/{row['run_accession']}.short.ctss.bed.gz | cut -f 1,2,3,5 | sort -k1,1 -k2,2n | bedtools map -c 4 -o sum -a {wd}/genome/windows.100nt.bed -b stdin | awk '$4 != \".\" {{print}}' | gzip -c >{wd}/bed/CAGE.RNA.ctss.{row['run_accession']}.{name}.100nt.bed.gz;",
              )
 
 
