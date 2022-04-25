@@ -6,15 +6,15 @@ import pathlib
 
 class MainParams:
     def __init__(self):
-        self.input_size = 420000  # 210001 # 50001
+        self.input_size = 420100
         self.half_size = int(self.input_size / 2)
         self.bin_size = 100
         self.hic_bin_size = 10000
         self.num_hic_bins = 40
         self.half_size_hic = 200000
-        self.num_regions = 1001  # 1001
-        self.half_num_regions = int(self.num_regions / 2)
-        self.mid_bin = math.floor(self.num_regions / 2)
+        self.num_bins = 1001
+        self.half_num_regions = int(self.num_bins / 2)
+        self.mid_bin = math.floor(self.num_bins / 2)
         self.BATCH_SIZE = 1  # 1
         self.GLOBAL_BATCH_SIZE = 1 # 4 * self.BATCH_SIZE
         self.STEPS_PER_EPOCH = 20
@@ -24,7 +24,7 @@ class MainParams:
         self.shift_speed = 2000000
         self.initial_shift = 250 # +- 50k
         self.hic_size = 780
-        self.species = ["human", "mouse", "macFas", "calJac", "rheMac", "dog", "sheep", "rat"]
+        self.species = ["mm10", "macFas5", "calJac4", "rheMac8", "canFam3", "oviAri4", "rn6"]
         script_folder = pathlib.Path(__file__).parent.resolve()
         folders = open(str(script_folder) + "/data_dirs").read().strip().split("\n")
         os.chdir(folders[0])
@@ -36,10 +36,6 @@ class MainParams:
         self.figures_folder = "figures_1"
         self.tracks_folder = "/Users/ramzan/variants_100/tracks/"
         self.temp_folder = "/home/user/data/temp/"
-        self.chromosomes = ["chrX"]  # "chrY"
-        for i in range(1, 23):
-            self.chromosomes.append("chr" + str(i))
-
         Path(self.model_folder).mkdir(parents=True, exist_ok=True)
         Path(self.figures_folder + "/" + "attribution").mkdir(parents=True, exist_ok=True)
         Path(self.figures_folder + "/" + "tracks").mkdir(parents=True, exist_ok=True)

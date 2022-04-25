@@ -55,7 +55,7 @@ def parse_genome(g, bin, chr1=False):
     with open(g) as f:
         for line in f:
             if line.startswith(">"):
-                if len(seq) != 0:
+                if len(seq) != 0 and re.match("chr([0-9]*|X)$", chrn):
                     seq = clean_seq(seq)
                     fasta[chrn] = seq
                     ga[chrn] = np.zeros(int(len(seq) / bin) + 1, dtype=np.float32)
@@ -70,11 +70,11 @@ def parse_genome(g, bin, chr1=False):
                 seq = ""
             else:
                 seq += line
-        if len(seq) != 0:
+        if len(seq) != 0 and re.match("chr([0-9]*|X)$", chrn):
             seq = clean_seq(seq)
             fasta[chrn] = seq
             ga[chrn] = np.zeros(int(len(seq) / bin) + 1, dtype=np.float32)
-            # print(chrn + " - " + str(len(seq)))
+            print(chrn + " - " + str(len(seq)))
     return fasta, ga
 
 

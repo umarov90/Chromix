@@ -52,15 +52,15 @@ for i, key in enumerate(eval_track_names):
     parsed_track = joblib.load(p.parsed_tracks_folder + key)
     for j, info in enumerate(infos):
         start_bin = int(info[1] / p.bin_size) - p.half_num_regions
-        extra_bin = start_bin + p.num_regions - len(parsed_track[info[0]])
+        extra_bin = start_bin + p.num_bins - len(parsed_track[info[0]])
         if start_bin < 0:
-            binned_region = parsed_track[info[0]][0: start_bin + p.num_regions]
+            binned_region = parsed_track[info[0]][0: start_bin + p.num_bins]
             binned_region = np.concatenate((np.zeros(-1 * start_bin), binned_region))
         elif extra_bin > 0:
             binned_region = parsed_track[info[0]][start_bin: len(parsed_track[info[0]])]
             binned_region = np.concatenate((binned_region, np.zeros(extra_bin)))
         else:
-            binned_region = parsed_track[info[0]][start_bin:start_bin + p.num_regions]
+            binned_region = parsed_track[info[0]][start_bin:start_bin + p.num_bins]
         eval_gt_full[j].append(binned_region)
 
 hic_output = []

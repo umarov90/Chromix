@@ -145,7 +145,7 @@ def eval_perf(p, our_model, eval_track_names, eval_infos, should_draw, current_e
         for c, locus in enumerate(predictions_for_bed):
             ind = w + c
             mid = eval_infos[ind][1] - p.half_num_regions * p.bin_size - (eval_infos[ind][1] % p.bin_size)
-            for b in range(p.num_regions):
+            for b in range(p.num_bins):
                 start = mid + b * p.bin_size
                 for t in track_inds_bed:
                     track = eval_track_names[t]
@@ -156,11 +156,11 @@ def eval_perf(p, our_model, eval_track_names, eval_infos, should_draw, current_e
         predictions_for_bed = None
         gc.collect()
 
-    p_gene_set = []
+    protein_gene_set = []
     final_pred_tss = {}
     for i in range(len(eval_infos)):
         if not eval_infos[i][5]:
-            p_gene_set.append(eval_infos[i][2])
+            protein_gene_set.append(eval_infos[i][2])
         for it, track in enumerate(eval_track_names):
             final_pred[eval_infos[i][2]].setdefault(track, []).append(predictions[i][it])
             final_pred_tss.setdefault(track, []).append(predictions[i][it])
@@ -208,7 +208,7 @@ def eval_perf(p, our_model, eval_track_names, eval_infos, should_draw, current_e
         type = track[:track.find(".")]
         a = []
         b = []
-        for gene in p_gene_set:
+        for gene in protein_gene_set:
             a.append(final_pred[gene][track])
             b.append(eval_gt[gene][track])
         a = np.nan_to_num(a, neginf=0, posinf=0)

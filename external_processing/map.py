@@ -2,8 +2,7 @@ import os
 import pandas as pd
 import sys
 from subprocess import Popen
-from time import time
-now = time()
+import re
 
 
 def run_proc(command):
@@ -20,7 +19,10 @@ wd = os.path.dirname(os.path.abspath(sys.argv[1])) + "/.."
 for index, row in meta.iterrows():
     files = row["fastq_ftp"].split(";")
     name = row["sample_title"]
-    name = name[:name.find(" ")]
+    end = name.find(" ")
+    if end != -1:
+        name = name[:end]
+    name = re.sub('[^0-9a-zA-Z]+', '', name)
     if len(files) == 1:
         file_loc = "fastq" + files[0][files[0].rfind('/'):]
         # hisat2 mapping

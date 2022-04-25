@@ -114,15 +114,15 @@ class FastaStringExtractor:
         # Truncate interval if it extends beyond the chromosome lengths.
         chromosome_length = self._chromosome_sizes[interval.chrom]
         trimmed_interval = Interval(interval.chrom,
-                                    max(interval.start, 0),
+                                    max(interval.start2, 0),
                                     min(interval.end, chromosome_length),
                                     )
         # pyfaidx wants a 1-based interval
         sequence = str(self.fasta.get_seq(trimmed_interval.chrom,
-                                          trimmed_interval.start + 1,
+                                          trimmed_interval.start2 + 1,
                                           trimmed_interval.stop).seq).upper()
         # Fill truncated values with N's.
-        pad_upstream = 'N' * max(-interval.start, 0)
+        pad_upstream = 'N' * max(-interval.start2, 0)
         pad_downstream = 'N' * max(interval.end - chromosome_length, 0)
         return pad_upstream + sequence + pad_downstream
 
@@ -160,7 +160,7 @@ def variant_centered_sequences(vcf_file, sequence_length, gzipped=False,
         interval = Interval(chr_prefix + variant.chrom,
                             variant.pos, variant.pos)
         interval = interval.resize(sequence_length)
-        center = interval.center() - interval.start
+        center = interval.center() - interval.start2
 
         reference = seq_extractor.extract(interval, [], anchor=center)
         alternate = seq_extractor.extract(interval, [variant], anchor=center)
@@ -177,7 +177,7 @@ def variant_centered_sequences(vcf_file, sequence_length, gzipped=False,
 def plot_tracks(tracks, interval, height=1.5):
     fig, axes = plt.subplots(len(tracks), 1, figsize=(20, height * len(tracks)), sharex=True)
     for ax, (title, y) in zip(axes, tracks.items()):
-        ax.fill_between(np.linspace(interval.start, interval.end, num=len(y)), y)
+        ax.fill_between(np.linspace(interval.start2, interval.end, num=len(y)), y)
         ax.set_title(title)
         sns.despine(top=True, right=True, bottom=True)
     ax.set_xlabel(str(interval))

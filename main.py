@@ -1,3 +1,4 @@
+import math
 import os
 import logging
 import joblib
@@ -14,12 +15,10 @@ import parse_data as parser
 from datetime import datetime
 import traceback
 import multiprocessing as mp
-import pickle
 import evaluation
 from main_params import MainParams
 import tensorflow_addons as tfa
 from scipy.ndimage import gaussian_filter
-import re
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 logging.getLogger("tensorflow").setLevel(logging.ERROR)
@@ -27,10 +26,10 @@ matplotlib.use("agg")
 
 
 def run_epoch(last_proc, fit_epochs, head_id):
-    print(datetime.now().strftime('[%H:%M:%S] ') + "Epoch " + str(current_epoch))
+    print(datetime.now().strftime('[%H:%M:%S] ') + "Epoch " + str(current_epoch) + " " + p.species[head_id])
     training_regions = joblib.load(f"pickle/{p.species[head_id]}_regions.gz")
     one_hot = joblib.load(f"pickle/{p.species[head_id]}_one_hot.gz")
-    shuffled_info = random.sample(training_regions[head_id], len(training_regions[head_id]))
+    shuffled_info = random.sample(training_regions, len(training_regions))
     input_sequences = []
     output_scores = []
     shifts = []
@@ -42,42 +41,36 @@ def run_epoch(last_proc, fit_epochs, head_id):
         if i % 500 == 0:
             print(i, end=" ")
             gc.collect()
-        try:
-            if not re.match("chr([0-9]*|X)$", info[0]):
-                shifts.append(None)
-                continue
-            shift_bins = random.randint(-int(current_epoch / p.shift_speed) - p.initial_shift,
-                                        int(current_epoch / p.shift_speed) + p.initial_shift)
-            start = info[1] - (info[1] % p.bin_size) - p.half_size + shift_bins * p.bin_size
-            extra = start + p.input_size - len(one_hot[info[0]])
-            if start < 0 or extra > 0:
-                shifts.append(None)
-                continue
-            ns = one_hot[info[0]][start:start + p.input_size]
-            if np.any(ns[:, -1]):
-                shifts.append(None)
-                continue
+        shift_bins = random.randint(-int(current_epoch / p.shift_speed) - p.initial_shift,
+                                    int(current_epoch / p.shift_speed) + p.initial_shift)
+        start = info[1] - (info[1] % p.bin_size) - p.half_size + shift_bins * p.bin_size
+        extra = start + p.input_size - len(one_hot[info[0]])
+        if start < 0 or extra > 0:
+            shifts.append(None)
+            continue
+        ns = one_hot[info[0]][start:start + p.input_size]
+        if np.any(ns[:, -1]):
+            shifts.append(None)
+            continue
 
-            if head_id == 0:
-                big_bed_list.append(f"{info[0]}\t{start}\t{start + p.input_size}\ttrain")
-            shifts.append(shift_bins)
-            # if start < 0:
-            #     ns = one_hots[head_id][info[0]][0:start + p.input_size]
-            #     ns = np.concatenate((np.zeros((-1 * start, p.num_features)), ns))
-            # elif extra > 0:
-            #     ns = one_hots[head_id][info[0]][start: len(one_hots[head_id][info[0]])]
-            #     ns = np.concatenate((ns, np.zeros((extra, p.num_features))))
-            # else:
+        if head_id == 0:
+            big_bed_list.append(f"{info[0]}\t{start}\t{start + p.input_size}\ttrain")
+        shifts.append(shift_bins)
+        # if start < 0:
+        #     ns = one_hots[head_id][info[0]][0:start + p.input_size]
+        #     ns = np.concatenate((np.zeros((-1 * start, p.num_features)), ns))
+        # elif extra > 0:
+        #     ns = one_hots[head_id][info[0]][start: len(one_hots[head_id][info[0]])]
+        #     ns = np.concatenate((ns, np.zeros((extra, p.num_features))))
+        # else:
 
-            start_bin = int(info[1] / p.bin_size) - p.half_num_regions + shift_bins
-            scores = []
-            for key in heads[head_id]:
-                scores.append([info[0], start_bin, start_bin + p.num_regions])
-                # scores.append(gas[key][info[0]][start_bin: start_bin + num_regions])
-            input_sequences.append(ns)
-            output_scores.append(scores)
-        except Exception as e:
-            print(e)
+        start_bin = int(info[1] / p.bin_size) - p.half_num_regions + shift_bins
+        scores = []
+        for key in heads[head_id]:
+            scores.append([info[0], start_bin, start_bin + p.num_bins])
+            # scores.append(gas[key][info[0]][start_bin: start_bin + num_regions])
+        input_sequences.append(ns)
+        output_scores.append(scores)
     # print("")
     print(datetime.now().strftime('[%H:%M:%S] ') + "Loading parsed tracks")
 
@@ -199,7 +192,8 @@ def run_epoch(last_proc, fit_epochs, head_id):
     # joblib.dump([input_sequences, output_scores, output_hic], "pickle/run.gz", compress=3)
     # argss = joblib.load("pickle/run.gz")
     # p = mp.Process(target=train_step, args=(argss[0][:400], argss[1][:400], argss[2][:400], fit_epochs, head_id,))
-    proc = mp.Process(target=train_step, args=(heads, input_sequences, output_scores, output_hic, fit_epochs, head_id, hic_num, mp_q,))
+    proc = mp.Process(target=train_step, args=(
+    heads[head_id], p.species[head_id], input_sequences, output_scores, output_hic, fit_epochs, hic_num, mp_q,))
     proc.start()
     return proc
 
@@ -211,9 +205,9 @@ def safe_save(thing, place):
     os.rename(place + "_temp", place)
 
 
-def train_step(heads, input_sequences, output_scores, output_hic, fit_epochs, head_id, hic_num, mp_q):
+def train_step(head, head_name, input_sequences, output_scores, output_hic, fit_epochs, hic_num, mp_q):
     hic_step = True
-    if head_id != 0 or hic_num == 0:
+    if head_name != "human" or hic_num == 0:
         hic_step = False
     try:
         import tensorflow as tf
@@ -243,12 +237,10 @@ def train_step(heads, input_sequences, output_scores, output_hic, fit_epochs, he
         # print(datetime.now().strftime('[%H:%M:%S] ') + "Loading the model")
         with strategy.scope():
             if hic_step:
-                our_model = mo.hic_model(p.input_size, p.num_features, p.num_regions,
-                                         len(heads[head_id]), hic_num, p.hic_size)
+                our_model = mo.hic_model(p.input_size, p.num_features, p.num_bins, len(head), hic_num, p.hic_size, p.bin_size)
             else:
-                our_model = mo.small_model(p.input_size, p.num_features, p.num_regions,
-                                         len(heads[head_id]))
-            print(f"=== Training with head {head_id} ===")
+                our_model = mo.small_model(p.input_size, p.num_features, p.num_bins, len(head), p.bin_size)
+            print(f"=== Training with head {head_name} ===")
             hic_lr = 0.0001
             head_lr = 0.0001
             resnet_lr = 0.00001
@@ -273,17 +265,7 @@ def train_step(heads, input_sequences, output_scores, output_hic, fit_epochs, he
 
             optimizer = tfa.optimizers.MultiOptimizer(optimizers_and_layers)
 
-            # if current_epoch >= 20:
             our_model.get_layer("our_resnet").trainable = True
-            #     if current_epoch == 20:
-            #         os.remove(p.model_path + "_opt_resnet")
-            # # for layer in our_model.get_layer("our_resnet").layers:
-            # #     if "regions_projection" in layer.name or "bn" in layer.name:
-            # #         layer.trainable = True
-            # #     else:
-            # #         layer.trainable = False
-            # else:
-            #     our_model.get_layer("our_resnet").trainable = False
 
             if hic_step:
                 loss_weights = {"our_head": 1.0, "our_hic": 0.1}
@@ -299,8 +281,8 @@ def train_step(heads, input_sequences, output_scores, output_hic, fit_epochs, he
 
             if os.path.exists(p.model_path + "_res"):
                 our_model.get_layer("our_resnet").set_weights(joblib.load(p.model_path + "_res"))
-            if os.path.exists(p.model_path + "_head_" + str(head_id)):
-                our_model.get_layer("our_head").set_weights(joblib.load(p.model_path + "_head_" + str(head_id)))
+            if os.path.exists(p.model_path + "_head_" + head_name):
+                our_model.get_layer("our_head").set_weights(joblib.load(p.model_path + "_head_" + head_name))
             if hic_step and os.path.exists(p.model_path + "_hic"):
                 our_model.get_layer("our_hic").set_weights(joblib.load(p.model_path + "_hic"))
 
@@ -308,9 +290,9 @@ def train_step(heads, input_sequences, output_scores, output_hic, fit_epochs, he
                 print("loading resnet optimizer")
                 optimizers["our_resnet"].set_weights(joblib.load(p.model_path + "_opt_resnet"))
 
-            if os.path.exists(p.model_path + "_opt_head_" + str(head_id)):
+            if os.path.exists(p.model_path + "_opt_head_" + head_name):
                 print("loading head optimizer")
-                optimizers["our_head"].set_weights(joblib.load(p.model_path + "_opt_head_" + str(head_id)))
+                optimizers["our_head"].set_weights(joblib.load(p.model_path + "_opt_head_" + head_name))
 
             if hic_step and os.path.exists(p.model_path + "_opt_hic"):
                 print("loading hic optimizer")
@@ -341,9 +323,9 @@ def train_step(heads, input_sequences, output_scores, output_hic, fit_epochs, he
         #     os.remove(p.model_path)
         # os.rename(p.model_path + "_temp.h5", p.model_path)
         safe_save(our_model.get_layer("our_resnet").get_weights(), p.model_path + "_res")
-        safe_save(our_model.get_layer("our_head").get_weights(), p.model_path + "_head_" + str(head_id))
+        safe_save(our_model.get_layer("our_head").get_weights(), p.model_path + "_head_" + head_name)
         safe_save(optimizers["our_resnet"].get_weights(), p.model_path + "_opt_resnet")
-        safe_save(optimizers["our_head"].get_weights(), p.model_path + "_opt_head_" + str(head_id))
+        safe_save(optimizers["our_head"].get_weights(), p.model_path + "_opt_head_" + head_name)
         if hic_step:
             safe_save(optimizers["our_hic"].get_weights(), p.model_path + "_opt_hic")
             safe_save(our_model.get_layer("our_hic").get_weights(), p.model_path + "_hic")
@@ -405,15 +387,15 @@ p = MainParams()
 big_bed_list = []
 if __name__ == '__main__':
     # import model as mo
-    # our_model = mo.hic_model(p.input_size, p.num_features, p.num_regions, p.out_stack_num,  17, 190)
-    species, train_info, test_info, protein_coding = parser.get_sequences(p.species, p.bin_size)
+    # our_model = mo.hic_model(p.input_size, p.num_features, p.num_bins, 50,  17, 190, 100)
+    train_info, test_info, protein_coding = parser.parse_sequences(p.species, p.bin_size)
     if Path("pickle/track_names_col.gz").is_file():
         track_names_col = joblib.load("pickle/track_names_col.gz")
     else:
-        track_names_col = parser.parse_tracks(p.species, p.bin_size, p.chromosomes, p.tracks_folder)
+        track_names_col = parser.parse_tracks(p.species, p.bin_size, p.tracks_folder)
 
     for i in range(len(track_names_col)):
-        print(f"Number of tracks in {i + 1}: {len(track_names_col[i])}")
+        print(f"Number of tracks in {p.species[i]}: {len(track_names_col[i])}")
 
     if Path("pickle/heads.gz").is_file():
         heads = joblib.load("pickle/heads.gz")
@@ -423,11 +405,11 @@ if __name__ == '__main__':
             heads.append(random.sample(track_names_col[i], len(track_names_col[i])))
         joblib.dump(heads, "pickle/heads.gz", compress=3)
 
-    for head in heads:
-        print(len(head))
     # hic_keys = parser.parse_hic(p.parsed_hic_folder)
-    hic_keys = ["hic_Ery.10kb.intra_chromosomal.interaction_table.tsv", "hic_HUVEC.10kb.intra_chromosomal.interaction_table.tsv",
-                "hic_Islets.10kb.intra_chromosomal.interaction_table.tsv", "hic_SkMC.10kb.intra_chromosomal.interaction_table.tsv"]
+    hic_keys = ["hic_Ery.10kb.intra_chromosomal.interaction_table.tsv",
+                "hic_HUVEC.10kb.intra_chromosomal.interaction_table.tsv",
+                "hic_Islets.10kb.intra_chromosomal.interaction_table.tsv",
+                "hic_SkMC.10kb.intra_chromosomal.interaction_table.tsv"]
     hic_keys = []
     hic_num = len(hic_keys)
     print(f"hic {hic_num}")
@@ -449,7 +431,10 @@ if __name__ == '__main__':
     fit_epochs = 2
     try:
         for current_epoch in range(start_epoch, p.num_epochs, 1):
-            head_id = current_epoch % len(heads)
+            if current_epoch % 2 == 0:
+                head_id = 0
+            else:
+                head_id = 1 + (current_epoch - math.ceil(current_epoch / 2)) % (len(heads) - 1)
             # if current_epoch < 10:
             #     fit_epochs = 1
             # elif current_epoch < 40:

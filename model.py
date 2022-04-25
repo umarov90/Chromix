@@ -9,15 +9,15 @@ import numpy as np
 
 dropout_rate = 0.3
 leaky_alpha = 0.2
-num_patches = 2100
+num_patches = 4201
 num_filters = 1026
 
 
-def hic_model(input_size, num_features, num_regions, cell_num, hic_num, hic_size):
+def hic_model(input_size, num_features, num_regions, cell_num, hic_num, hic_size, bin_size):
     input_shape = (input_size, num_features)
     inputs = Input(shape=input_shape, dtype=tf.float32)
     x = inputs
-    resnet_output = resnet(x, input_size, 200)
+    resnet_output = resnet(x, input_size, bin_size)
     our_resnet = Model(inputs, resnet_output, name="our_resnet")
 
     hic_input = Input(shape=(num_patches, num_filters))
@@ -44,7 +44,7 @@ def hic_model(input_size, num_features, num_regions, cell_num, hic_num, hic_size
     # x = tf.transpose(x, [0, 2, 1])
 
     trim = (x.shape[-2] - num_regions) // 2
-    x = x[..., trim + 1:-trim, :]
+    x = x[..., trim:-trim, :]
 
     x = Dropout(dropout_rate, input_shape=(num_regions, num_filters))(x)
 
@@ -63,11 +63,11 @@ def hic_model(input_size, num_features, num_regions, cell_num, hic_num, hic_size
     return our_model
 
 
-def small_model(input_size, num_features, num_regions, cell_num):
+def small_model(input_size, num_features, num_regions, cell_num, bin_size):
     input_shape = (input_size, num_features)
     inputs = Input(shape=input_shape, dtype=tf.float32)
     x = inputs
-    resnet_output = resnet(x, input_size, 200)
+    resnet_output = resnet(x, input_size, bin_size)
     our_resnet = Model(inputs, resnet_output, name="our_resnet")
 
     head_input = Input(shape=(num_patches, num_filters))
@@ -79,7 +79,7 @@ def small_model(input_size, num_features, num_regions, cell_num):
     # x = tf.transpose(x, [0, 2, 1])
 
     trim = (x.shape[-2] - num_regions) // 2
-    x = x[..., trim + 1:-trim, :]
+    x = x[..., trim:-trim, :]
 
     x = Dropout(dropout_rate, input_shape=(num_regions, num_filters))(x)
 
