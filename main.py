@@ -53,8 +53,7 @@ def run_epoch(last_proc, fit_epochs, head_id):
             shifts.append(None)
             continue
 
-        if head_id == 0:
-            big_bed_list.append(f"{info[0]}\t{start}\t{start + p.input_size}\ttrain")
+        picked_training_regions.setdefault(p.species[head_id], []).append(f"{info[0]}\t{start}\t{start + p.input_size}\ttrain")
         shifts.append(shift_bins)
         # if start < 0:
         #     ns = one_hots[head_id][info[0]][0:start + p.input_size]
@@ -384,7 +383,7 @@ def change_seq(x):
 
 last_proc = None
 p = MainParams()
-big_bed_list = []
+picked_training_regions = {}
 if __name__ == '__main__':
     # import model as mo
     # our_model = mo.hic_model(p.input_size, p.num_features, p.num_bins, 50,  17, 190, 100)
@@ -410,7 +409,6 @@ if __name__ == '__main__':
                 "hic_HUVEC.10kb.intra_chromosomal.interaction_table.tsv",
                 "hic_Islets.10kb.intra_chromosomal.interaction_table.tsv",
                 "hic_SkMC.10kb.intra_chromosomal.interaction_table.tsv"]
-    hic_keys = []
     hic_num = len(hic_keys)
     print(f"hic {hic_num}")
 
@@ -435,6 +433,7 @@ if __name__ == '__main__':
                 head_id = 0
             else:
                 head_id = 1 + (current_epoch - math.ceil(current_epoch / 2)) % (len(heads) - 1)
+
             # if current_epoch < 10:
             #     fit_epochs = 1
             # elif current_epoch < 40:
@@ -456,5 +455,7 @@ if __name__ == '__main__':
                 proc.join()
     except Exception as e:
         traceback.print_exc()
-        with open("/Users/ramzan/Desktop/dry_test.bed", "w") as text_file:
-            text_file.write("\n".join(big_bed_list))
+
+for key in picked_training_regions.keys():
+    with open(f"dry/{key}_dry_test.bed", "w") as text_file:
+            text_file.write("\n".join(picked_training_regions[key]))

@@ -15,16 +15,16 @@ class MainParams:
         self.num_bins = 1001
         self.half_num_regions = int(self.num_bins / 2)
         self.mid_bin = math.floor(self.num_bins / 2)
-        self.BATCH_SIZE = 1  # 1
-        self.GLOBAL_BATCH_SIZE = 1 # 4 * self.BATCH_SIZE
-        self.STEPS_PER_EPOCH = 20
+        self.BATCH_SIZE = 2  # 1
+        self.GLOBAL_BATCH_SIZE = 8 * self.BATCH_SIZE
+        self.STEPS_PER_EPOCH = 100
         self.num_epochs = 1000
         self.hic_track_size = 1
         self.num_features = 4
         self.shift_speed = 2000000
         self.initial_shift = 250 # +- 50k
         self.hic_size = 780
-        self.species = ["mm10", "macFas5", "calJac4", "rheMac8", "canFam3", "oviAri4", "rn6"]
+        self.species = ["hg38", "mm10", "macFas5", "calJac4", "rheMac8", "canFam3", "oviAri4", "rn6"]
         script_folder = pathlib.Path(__file__).parent.resolve()
         folders = open(str(script_folder) + "/data_dirs").read().strip().split("\n")
         os.chdir(folders[0])
