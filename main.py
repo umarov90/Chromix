@@ -315,7 +315,7 @@ def train_step(head, head_name, input_sequences, output_scores, output_hic, fit_
         return None
 
     try:
-        our_model.fit(train_data, epochs=fit_epochs)
+        our_model.fit(train_data, epochs=fit_epochs, batch_size=p.GLOBAL_BATCH_SIZE)
         # print(datetime.now().strftime('[%H:%M:%S] ') + "Saving " + str(current_epoch) + " model. ")
         # our_model.save(p.model_path + "_temp.h5", include_optimizer=False)
         # if os.path.exists(p.model_path):
