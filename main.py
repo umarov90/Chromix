@@ -31,7 +31,7 @@ def run_epoch(last_proc, fit_epochs, head_id):
     one_hot = joblib.load(f"pickle/{p.species[head_id]}_one_hot.gz")
     shuffled_info = random.sample(training_regions, len(training_regions))
     input_sequences = []
-    output_scores = []
+    output_scores_info = []
     shifts = []
     # print(datetime.now().strftime('[%H:%M:%S] ') + "Preparing sequences")
     # pick training regions
@@ -53,7 +53,8 @@ def run_epoch(last_proc, fit_epochs, head_id):
             shifts.append(None)
             continue
 
-        picked_training_regions.setdefault(p.species[head_id], []).append(f"{info[0]}\t{start}\t{start + p.input_size}\ttrain")
+        picked_training_regions.setdefault(p.species[head_id], []).append(
+            f"{info[0]}\t{start}\t{start + p.input_size}\ttrain")
         shifts.append(shift_bins)
         # if start < 0:
         #     ns = one_hots[head_id][info[0]][0:start + p.input_size]
@@ -69,35 +70,33 @@ def run_epoch(last_proc, fit_epochs, head_id):
             scores.append([info[0], start_bin, start_bin + p.num_bins])
             # scores.append(gas[key][info[0]][start_bin: start_bin + num_regions])
         input_sequences.append(ns)
-        output_scores.append(scores)
+        output_scores_info.append(scores)
     # print("")
+    output_scores_info = np.asarray(output_scores_info)
     print(datetime.now().strftime('[%H:%M:%S] ') + "Loading parsed tracks")
 
-    gc.disable()
-    start_time = time.time()
-    for i, key in enumerate(heads[head_id]):
-        # if i % 1000 == 0:
-        #     loaded_tracks = joblib.load(parsed_blocks_folder + str(int(i / 1000) + 1))
-        if i % 1000 == 0 and i != 0:
-            end_time = time.time()
-            print(f"{i} ({(end_time - start_time):.2f})", end=" ")
-            start_time = time.time()
-            gc.collect()
-        if key in loaded_tracks.keys():
-            # buf = loaded_tracks[key]
-            # parsed_track = joblib.load(buf)
-            # buf.seek(0)
-            parsed_track = loaded_tracks[key]
-        else:
-            parsed_track = joblib.load(p.parsed_tracks_folder + key)
-            # with open(p.parsed_tracks_folder + key, 'rb') as fp:
-            #     parsed_track = pickle.load(fp)
+    ps = []
+    start = 0
+    nproc = min(mp.cpu_count(), len(heads[head_id]))
+    step_size = len(heads[head_id]) // nproc
+    end = len(heads[head_id])
+    for t in range(start, end, step_size):
+        t_end = min(t + step_size, end)
+        load_proc = mp.Process(target=load_data,
+                               args=(mp_q, p, heads[head_id][t:t_end], output_scores_info[:, t:t_end], t, t_end,))
+        load_proc.start()
+        ps.append(load_proc)
 
-        for s in output_scores:
-            s[i] = parsed_track[s[i][0]][s[i][1]:s[i][2]].copy()
-        # with Pool(4) as p:
-        #     map_arr = p.starmap(load_values, zip(output_scores, repeat( [i, parsed_track] )))
-    gc.enable()
+    for load_proc in ps:
+        load_proc.join()
+    print(mp_q.get())
+
+    output_scores = []
+    for t in range(start, end, step_size):
+        output_scores.append(joblib.load(f"temp/data{t}"))
+    output_scores=np.concatenate(output_scores, axis=1)
+    print(np.asarray(output_scores).shape)
+
     # print("")
     # print(np.asarray(output_scores).shape)
     half = len(input_sequences) // 2
@@ -192,7 +191,7 @@ def run_epoch(last_proc, fit_epochs, head_id):
     # argss = joblib.load("pickle/run.gz")
     # p = mp.Process(target=train_step, args=(argss[0][:400], argss[1][:400], argss[2][:400], fit_epochs, head_id,))
     proc = mp.Process(target=train_step, args=(
-    heads[head_id], p.species[head_id], input_sequences, output_scores, output_hic, fit_epochs, hic_num, mp_q,))
+        heads[head_id], p.species[head_id], input_sequences, output_scores, output_hic, fit_epochs, hic_num, mp_q,))
     proc.start()
     return proc
 
@@ -206,7 +205,7 @@ def safe_save(thing, place):
 
 def train_step(head, head_name, input_sequences, output_scores, output_hic, fit_epochs, hic_num, mp_q):
     hic_step = True
-    if head_name != "human" or hic_num == 0:
+    if head_name != "hg38" or hic_num == 0:
         hic_step = False
     try:
         import tensorflow as tf
@@ -236,7 +235,8 @@ def train_step(head, head_name, input_sequences, output_scores, output_hic, fit_
         # print(datetime.now().strftime('[%H:%M:%S] ') + "Loading the model")
         with strategy.scope():
             if hic_step:
-                our_model = mo.hic_model(p.input_size, p.num_features, p.num_bins, len(head), hic_num, p.hic_size, p.bin_size)
+                our_model = mo.hic_model(p.input_size, p.num_features, p.num_bins, len(head), hic_num, p.hic_size,
+                                         p.bin_size)
             else:
                 our_model = mo.small_model(p.input_size, p.num_features, p.num_bins, len(head), p.bin_size)
             print(f"=== Training with head {head_name} ===")
@@ -381,6 +381,16 @@ def change_seq(x):
     return cm.rev_comp(x)
 
 
+def load_data(mp_q, p, tracks, scores, t, t_end):
+    scores_after_loading = np.zeros((len(scores), t_end-t, p.num_bins))
+    for i, track_name in enumerate(tracks):
+        parsed_track = joblib.load(p.parsed_tracks_folder + track_name)
+        for j in range(len(scores)):
+            scores_after_loading[j, i] = parsed_track[scores[j, i, 0]][int(scores[j, i, 1]):int(scores[j, i, 2])].copy()
+    joblib.dump(scores_after_loading, f"temp/data{t}", compress="lz4")
+    mp_q.put(None)
+
+
 last_proc = None
 p = MainParams()
 picked_training_regions = {}
@@ -402,7 +412,7 @@ if __name__ == '__main__':
         heads = []
         for i in range(len(track_names_col)):
             heads.append(random.sample(track_names_col[i], len(track_names_col[i])))
-        joblib.dump(heads, "pickle/heads.gz", compress=3)
+        joblib.dump(heads, "pickle/heads.gz", compress="lz4")
 
     # hic_keys = parser.parse_hic(p.parsed_hic_folder)
     hic_keys = ["hic_Ery.10kb.intra_chromosomal.interaction_table.tsv",
@@ -458,4 +468,4 @@ if __name__ == '__main__':
 
 for key in picked_training_regions.keys():
     with open(f"dry/{key}_dry_test.bed", "w") as text_file:
-            text_file.write("\n".join(picked_training_regions[key]))
+        text_file.write("\n".join(picked_training_regions[key]))

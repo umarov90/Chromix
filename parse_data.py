@@ -82,14 +82,14 @@ def parse_hic(folder):
             chrd = list(df["locus1_chrom"].unique())
             for chr in chrd:
                 joblib.dump(df.loc[df['locus1_chrom'] == chr].sort_values(by=['locus1_start']),
-                            folder + t_name + chr, compress=3)
+                            folder + t_name + chr, compress="lz4")
             print(t_name)
             with open("hic.txt", "a+") as myfile:
                 myfile.write(t_name)
             del df
             gc.collect()
 
-        joblib.dump(hic_keys, "pickle/hic_keys.gz", compress=3)
+        joblib.dump(hic_keys, "pickle/hic_keys.gz", compress="lz4")
         chromosomes = ["chrX", "chrY"]
         for i in range(1, 23):
             chromosomes.append("chr" + str(i))
@@ -101,7 +101,7 @@ def parse_hic(folder):
                     hdf[chr] = joblib.load(folder + key + chr)
                 except:
                     pass
-            joblib.dump(hdf, folder + key, compress=3)
+            joblib.dump(hdf, folder + key, compress="lz4")
             print(key)
         return hic_keys
 
@@ -148,10 +148,10 @@ def parse_tracks(species, bin_size, tracks_folder_parent):
                 for p in ps:
                     p.join()
                 print(q.get())
-            joblib.dump(track_names, f"pickle/track_names_{species[i]}.gz", compress=3)
+            joblib.dump(track_names, f"pickle/track_names_{species[i]}.gz", compress="lz4")
         track_names_col.append(track_names)
 
-    joblib.dump(track_names_col, "pickle/track_names_col.gz", compress=3)
+    joblib.dump(track_names_col, "pickle/track_names_col.gz", compress="lz4")
     return track_names_col
 
 
@@ -249,9 +249,9 @@ def parse_sequences(species, bin_size):
 
         print(f"Training set complete {len(train_info)}")
 
-        joblib.dump(test_info, "pickle/test_info.gz", compress=3)
-        joblib.dump(train_info, "pickle/train_info.gz", compress=3)
-        joblib.dump(protein_coding, "pickle/protein_coding.gz", compress=3)
+        joblib.dump(test_info, "pickle/test_info.gz", compress="lz4")
+        joblib.dump(train_info, "pickle/train_info.gz", compress="lz4")
+        joblib.dump(protein_coding, "pickle/protein_coding.gz", compress="lz4")
 
     for sp in species:
         if Path(f"pickle/{sp}_regions.gz").is_file():
@@ -286,9 +286,9 @@ def parse_sequences(species, bin_size):
             print(f"{chromosome}: {np.sum(tss_layer)}")
             one_hot[chromosome] = np.hstack([one_hot[chromosome], tss_layer])
 
-        joblib.dump(one_hot, f"pickle/{sp}_one_hot.gz", compress=3)
+        joblib.dump(one_hot, f"pickle/{sp}_one_hot.gz", compress="lz4")
         joblib.dump(ga, f"pickle/{sp}_ga.gz", compress=3)
-        joblib.dump(regions, f"pickle/{sp}_regions.gz", compress=3)
+        joblib.dump(regions, f"pickle/{sp}_regions.gz", compress="lz4")
         gc.collect()
 
     return train_info, test_info, protein_coding
