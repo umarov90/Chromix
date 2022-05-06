@@ -72,6 +72,7 @@ def run_epoch(last_proc, fit_epochs, head_id):
         input_sequences.append(ns)
         output_scores_info.append(scores)
     # print("")
+    # return 1
     output_scores_info = np.asarray(output_scores_info)
     print(datetime.now().strftime('[%H:%M:%S] ') + "Loading parsed tracks")
 
@@ -94,11 +95,11 @@ def run_epoch(last_proc, fit_epochs, head_id):
     output_scores = []
     for t in range(start, end, step_size):
         output_scores.append(joblib.load(f"temp/data{t}"))
-    output_scores=np.concatenate(output_scores, axis=1)
-    print(np.asarray(output_scores).shape)
 
-    # print("")
-    # print(np.asarray(output_scores).shape)
+    gc.collect()
+    output_scores = np.concatenate(output_scores, axis=1, dtype=np.float32)
+    gc.collect()
+    print("")
     half = len(input_sequences) // 2
     output_hic = []
     # print(f"Shifts {len(shifts)}")
@@ -157,7 +158,6 @@ def run_epoch(last_proc, fit_epochs, head_id):
     # print(datetime.now().strftime('[%H:%M:%S] ') + "Problems: " + str(err))
     gc.collect()
     print_memory()
-    output_scores = np.asarray(output_scores)
     if np.isnan(output_scores).any() or np.isinf(output_scores).any():
         print("nan in the output")
         exit()

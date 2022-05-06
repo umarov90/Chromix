@@ -15,9 +15,9 @@ class MainParams:
         self.num_bins = 1001
         self.half_num_regions = int(self.num_bins / 2)
         self.mid_bin = math.floor(self.num_bins / 2)
-        self.BATCH_SIZE = 1
-        self.GLOBAL_BATCH_SIZE = 1
-        self.STEPS_PER_EPOCH = 5
+        self.BATCH_SIZE = 2
+        self.GLOBAL_BATCH_SIZE = 8 * self.BATCH_SIZE
+        self.STEPS_PER_EPOCH = 100
         self.num_epochs = 1000
         self.hic_track_size = 1
         self.num_features = 4

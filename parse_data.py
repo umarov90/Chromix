@@ -202,6 +202,7 @@ def parse_some_tracks(q, some_tracks, ga, bin_size, tracks_folder):
             for key in gast.keys():
                 gast[key] = gast[key] / max_val  # np.clip(gast[key], 0, scale_val) / scale_val
                 gast[key] = gaussian_filter(gast[key], sigma=0.5)
+                gast[key] = gast[key].astype('float32')
             joblib.dump(gast, main.p.parsed_tracks_folder + track, compress="lz4")
             # pickle.dump(gast, open(main.p.parsed_tracks_folder + track, "wb"), protocol=pickle.HIGHEST_PROTOCOL)
             print(f"Parsed {track}. Max value: {max_val}.")
