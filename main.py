@@ -382,12 +382,12 @@ def change_seq(x):
 
 
 def load_data(mp_q, p, tracks, scores, t, t_end):
-    scores_after_loading = np.zeros((len(scores), t_end-t, p.num_bins))
+    scores_after_loading = np.zeros((len(scores), t_end-t, p.num_bins), dtype=np.float32)
     for i, track_name in enumerate(tracks):
         parsed_track = joblib.load(p.parsed_tracks_folder + track_name)
         for j in range(len(scores)):
             scores_after_loading[j, i] = parsed_track[scores[j, i, 0]][int(scores[j, i, 1]):int(scores[j, i, 2])].copy()
-    joblib.dump(scores_after_loading.astype(np.float32), f"temp/data{t}", compress="lz4")
+    joblib.dump(scores_after_loading, f"temp/data{t}", compress="lz4")
     mp_q.put(None)
 
 
@@ -415,6 +415,9 @@ if __name__ == '__main__':
             new_head = [x for x in new_head if not x.startswith("sc")]
             heads.append(new_head)
         joblib.dump(heads, "pickle/heads.gz", compress="lz4")
+
+    for i in range(len(heads)):
+        print(f"Number of tracks in head {p.species[i]}: {len(heads[i])}")
 
     # hic_keys = parser.parse_hic(p.parsed_hic_folder)
     hic_keys = ["hic_Ery.10kb.intra_chromosomal.interaction_table.tsv",
@@ -468,6 +471,6 @@ if __name__ == '__main__':
     except Exception as e:
         traceback.print_exc()
 
-for key in picked_training_regions.keys():
-    with open(f"dry/{key}_dry_test.bed", "w") as text_file:
-        text_file.write("\n".join(picked_training_regions[key]))
+# for key in picked_training_regions.keys():
+#     with open(f"dry/{key}_dry_test.bed", "w") as text_file:
+#         text_file.write("\n".join(picked_training_regions[key]))
