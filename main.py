@@ -387,7 +387,7 @@ def load_data(mp_q, p, tracks, scores, t, t_end):
         parsed_track = joblib.load(p.parsed_tracks_folder + track_name)
         for j in range(len(scores)):
             scores_after_loading[j, i] = parsed_track[scores[j, i, 0]][int(scores[j, i, 1]):int(scores[j, i, 2])].copy()
-    joblib.dump(scores_after_loading, f"temp/data{t}", compress="lz4")
+    joblib.dump(scores_after_loading.astype(np.float32), f"temp/data{t}", compress="lz4")
     mp_q.put(None)
 
 
@@ -411,7 +411,9 @@ if __name__ == '__main__':
     else:
         heads = []
         for i in range(len(track_names_col)):
-            heads.append(random.sample(track_names_col[i], len(track_names_col[i])))
+            new_head = random.sample(track_names_col[i], len(track_names_col[i]))
+            new_head = [x for x in new_head if not x.startswith("sc")]
+            heads.append(new_head)
         joblib.dump(heads, "pickle/heads.gz", compress="lz4")
 
     # hic_keys = parser.parse_hic(p.parsed_hic_folder)
