@@ -341,27 +341,27 @@ def train_step(head, head_name, input_sequences, output_scores, output_hic, fit_
 def check_perf(mp_q, head_id):
     print(datetime.now().strftime('[%H:%M:%S] ') + "Evaluating")
     import tensorflow as tf
+    import model as mo
     one_hot = joblib.load(f"pickle/{p.species[head_id]}_one_hot.gz")
     try:
         strategy = tf.distribute.MultiWorkerMirroredStrategy()
         with strategy.scope():
-            our_model = tf.keras.models.load_model(p.model_path)
-            our_model.get_layer("our_head").set_weights(
-                joblib.load(p.model_path + "_head_" + str(head_id)))
+            our_model = mo.small_model(p.input_size, p.num_features, p.num_bins, len(heads[head_id]),
+                                       p.bin_size)
+            our_model.get_layer("our_resnet").set_weights(joblib.load(p.model_path + "_res"))
+            our_model.get_layer("our_head").set_weights(joblib.load(p.model_path + "_head_hg38"))
         train_eval_chr = "chr1"
         train_eval_chr_info = []
         for info in train_info:
             if info[0] == train_eval_chr:
                 train_eval_chr_info.append(info)
-        train_eval_chr_info.sort(key=lambda x: x[1])
         print(f"Training set {len(train_eval_chr_info)}")
         training_spearman = evaluation.eval_perf(p, our_model, heads[head_id], train_eval_chr_info,
-                                                 False, current_epoch, train_eval_chr, one_hot, hic_keys, loaded_tracks)
+                                                 False, current_epoch, "train", one_hot, loaded_tracks)
         # training_spearman = 0
         print(f"Test set {len(test_info)}")
-        test_info.sort(key=lambda x: x[1])
         test_spearman = evaluation.eval_perf(p, our_model, heads[head_id], test_info,
-                                             True, current_epoch, "chr1", one_hot, hic_keys, loaded_tracks)
+                                             True, current_epoch, "test", one_hot, loaded_tracks)
         with open(p.model_name + "_history.csv", "a+") as myfile:
             myfile.write(f"{training_spearman},{test_spearman}")
             myfile.write("\n")
@@ -459,7 +459,7 @@ if __name__ == '__main__':
             # check_perf(mp_q, 0)
             # exit()
             last_proc = run_epoch(last_proc, fit_epochs, head_id)
-            if current_epoch % 1000 == 0 and current_epoch != 0:  # and current_epoch != 0:
+            if current_epoch % 100 == 0 and current_epoch != 0:  # and current_epoch != 0:
                 print("Eval epoch")
                 print(mp_q.get())
                 last_proc.join()

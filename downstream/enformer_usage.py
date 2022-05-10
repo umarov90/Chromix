@@ -23,7 +23,7 @@ from main_params import MainParams
 
 transform_path = 'gs://dm-enformer/models/enformer.finetuned.SAD.robustscaler-PCA500-robustscaler.transform.pkl'
 model_path = 'https://tfhub.dev/deepmind/enformer/1'
-fasta_file = '/media/user/passport1/variants_100/data/hg38.fa'
+fasta_file = '/Users/ramzan/variants_100/data/species/hg38/genome.fa'
 clinvar_vcf = '/root/data/clinvar.vcf.gz'
 
 # Download targets from Basenji2 dataset
@@ -203,18 +203,18 @@ params = MainParams()
 #           'CAGE:Keratinocyte - epidermal': np.log10(1 + predictions[:, 4799])}
 # plot_tracks(tracks, target_interval)
 
-# enformer_test_tss TRY !!!!!!!!!!!!!!!!!!!!!
 gene_tss = pd.read_csv("data/enformer/enformer_test_tss_less.bed", sep="\t", index_col=False,
                        names=["chr", "start", "end", "type"])
 # gene_tss = gene_tss.loc[gene_tss['chr'] == "chr1"]
 # gene_tss.index = range(len(gene_tss.index))
-# gene_tss = gene_tss.head(100)
+gene_tss = gene_tss.head(5)
 # eval_tracks = pd.read_csv("data/eval_tracks.tsv", sep=",", header=None)[0].tolist()
 enf_tracks = df_targets[df_targets['description'].str.contains("CAGE")]['identifier'].tolist()
 # extract from enformer targets identifier where row contains cage
 # full_name = pickle.load(open(f"pickle/full_name.p", "rb"))
 heads = joblib.load("pickle/heads.gz")
 head_id = 0
+head_name = "hg38"
 head_tracks = heads[head_id]
 track_ind_our = {}
 eval_tracks = []
@@ -226,7 +226,7 @@ for track in enf_tracks:
             break
 
 full_name = {}
-tracks_folder = "/media/user/EE3C38483C380DD9/bw/"
+tracks_folder = "/Volumes/passport1/bw/"
 for filename in os.listdir(tracks_folder):
     for track in eval_tracks:
         if track in filename:
@@ -246,45 +246,45 @@ for j, track in enumerate(eval_tracks):
 # ENFORMER #####################################################################################################
 #################################################################################################################
 
-pred_matrix = joblib.load("/media/user/EE3C38483C380DD9/temp/pred_matrix.p")
-# pred_matrix = np.zeros((len(eval_tracks), len(gene_tss)))
-# counts = [0, 0, 0]
-# batch = []
-# print("Predicting")
-# gene_index = 0
-# for index, row in gene_tss.iterrows():
-#     if index % 100 == 0:
-#         gc.collect()
-#         print(index, end=" ")
-#     target_interval = kipoiseq.Interval(row["chr"], row["start"] - 63, row["start"] - 63 + 1)
-#     sequence_one_hot = one_hot_encode(fasta_extractor.extract(target_interval.resize(SEQUENCE_LENGTH)))
-#     batch.append(sequence_one_hot)
-#     if len(batch) > 6 or index == len(gene_tss) - 1:
-#         predictions = model.predict_on_batch(batch)['human']
-#         for p in predictions:
-#             for j, track in enumerate(eval_tracks):
-#                 t = track_ind[track]
-#                 bins = [p[447, t], p[448, t], p[449, t]]
-#                 # bins = [p[448, t]]
-#                 gene_expression = np.sum(bins)
-#                 counts[bins.index(max(bins))] += 1
-#                 # np.asarray(p)[:, 4799]
-#                 pred_matrix[j, gene_index] = gene_expression
-#             gene_index += 1
-#         batch = []
-#
-# print("")
-# print(counts)
-# joblib.dump(pred_matrix, "/media/user/EE3C38483C380DD9/temp/pred_matrix.p", compress=3)
+# pred_matrix = joblib.load("/media/user/EE3C38483C380DD9/temp/pred_matrix.p")
+pred_matrix = np.zeros((len(eval_tracks), len(gene_tss)))
+counts = [0, 0, 0]
+batch = []
+print("Predicting")
+gene_index = 0
+for index, row in gene_tss.iterrows():
+    if index % 100 == 0:
+        gc.collect()
+        print(index, end=" ")
+    target_interval = kipoiseq.Interval(row["chr"], row["start"] - 63, row["start"] - 63 + 1)
+    sequence_one_hot = one_hot_encode(fasta_extractor.extract(target_interval.resize(SEQUENCE_LENGTH)))
+    batch.append(sequence_one_hot)
+    if len(batch) > 6 or index == len(gene_tss) - 1:
+        predictions = model.predict_on_batch(batch)['human']
+        for p in predictions:
+            for j, track in enumerate(eval_tracks):
+                t = track_ind[track]
+                bins = [p[447, t], p[448, t], p[449, t]]
+                # bins = [p[448, t]]
+                gene_expression = np.sum(bins)
+                counts[bins.index(max(bins))] += 1
+                # np.asarray(p)[:, 4799]
+                pred_matrix[j, gene_index] = gene_expression
+            gene_index += 1
+        batch = []
+
+print("")
+print(counts)
+joblib.dump(pred_matrix, "/media/user/EE3C38483C380DD9/temp/pred_matrix.p", compress=3)
 
 # OUR MODEL #####################################################################################################
 #################################################################################################################
 one_hot = joblib.load("pickle/one_hot.gz")
 strategy = tf.distribute.MultiWorkerMirroredStrategy()
 with strategy.scope():
-    our_model = tf.keras.models.load_model(model_folder + params.model_name)
-    our_model.get_layer("our_head").set_weights(joblib.load(model_folder + params.model_name + "_head_" + str(head_id)))
-
+    our_model = mo.small_model(p.input_size, p.num_features, p.num_bins, len(head_tracks), p.bin_size)
+    our_model.get_layer("our_resnet").set_weights(joblib.load(p.model_path + "_res"))
+    our_model.get_layer("our_head").set_weights(joblib.load(p.model_path + "_head_" + head_name))
 pred_matrix_our = np.zeros((len(eval_tracks), len(gene_tss)))
 p = MainParams()
 test_seq = []

@@ -26,7 +26,7 @@ class MainParams:
         self.hic_size = 780
         self.species = ["hg38", "mm10", "macFas5", "calJac4", "rheMac8", "canFam3", "oviAri4", "rn6"]
         script_folder = pathlib.Path(__file__).parent.resolve()
-        folders = open(str(script_folder) + "/data_dirs").read().strip().split("\n")
+        folders = open(str(script_folder) + "/../data_dirs").read().strip().split("\n")
         os.chdir(folders[0])
         self.parsed_tracks_folder = folders[1]
         self.parsed_hic_folder = folders[2]

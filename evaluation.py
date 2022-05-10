@@ -10,21 +10,21 @@ import visualization as viz
 import common as cm
 
 
-def eval_perf(p, our_model, eval_track_names, eval_infos, should_draw, current_epoch, chr_name, one_hot, hic_keys,
+def eval_perf(p, our_model, eval_track_names, eval_infos, should_draw, current_epoch, label, one_hot,
               loaded_tracks):
     import model as mo
     print("Model loaded")
-    predict_batch_size = p.GLOBAL_BATCH_SIZE
-    w_step = 500
+    predict_batch_size = 2
+    w_step = 4
 
-    if Path(f"pickle/{chr_name}_seq.gz").is_file():
+    if Path(f"pickle/{label}_seq.gz").is_file():
         print(datetime.now().strftime('[%H:%M:%S] ') + "Loading sequences. ")
-        test_seq = joblib.load(f"pickle/{chr_name}_seq.gz")
+        test_seq = joblib.load(f"pickle/{label}_seq.gz")
         print(datetime.now().strftime('[%H:%M:%S] ') + "Loading gt 1. ")
         # eval_gt = joblib.load(f"pickle/{chr_name}_eval_gt.gz")
-        eval_gt = pickle.load(open(f"pickle/{chr_name}_eval_gt.gz", "rb"))
+        eval_gt = pickle.load(open(f"pickle/{label}_eval_gt.gz", "rb"))
         print(datetime.now().strftime('[%H:%M:%S] ') + "Loading gt 2. ")
-        eval_gt_tss = joblib.load(f"pickle/{chr_name}_eval_gt_tss.gz")
+        eval_gt_tss = joblib.load(f"pickle/{label}_eval_gt_tss.gz")
         # eval_gt_tss = pickle.load(open(f"pickle/{chr_name}_eval_gt_tss.gz", "rb"))
         print(datetime.now().strftime('[%H:%M:%S] ') + "Finished loading. ")
     else:
@@ -84,37 +84,23 @@ def eval_perf(p, our_model, eval_track_names, eval_infos, should_draw, current_e
                 ns = one_hot[info[0]][start:start + p.input_size]
             if len(ns) != p.input_size:
                 print(f"Wrong! {ns.shape} {start} {extra} {info[1]}")
-            test_seq.append(ns)
+            test_seq.append(ns[:, :-1])
         print(f"Skipped: {len(eval_infos) - len(starts)}")
         test_seq = np.asarray(test_seq, dtype=bool)
         print(f"Lengths: {len(test_seq)} {len(eval_gt)}")
         gc.collect()
-        joblib.dump(test_seq, f"pickle/{chr_name}_seq.gz", compress="lz4")
+        joblib.dump(test_seq, f"pickle/{label}_seq.gz", compress="lz4")
         # pickle.dump(test_seq, open(f"pickle/{chr_name}_seq.gz", "wb"), protocol=pickle.HIGHEST_PROTOCOL)
         del test_seq
         gc.collect()
         # joblib.dump(eval_gt, f"pickle/{chr_name}_eval_gt.gz", compress="lz4")
-        pickle.dump(eval_gt, open(f"pickle/{chr_name}_eval_gt.gz", "wb"), protocol=pickle.HIGHEST_PROTOCOL)
+        pickle.dump(eval_gt, open(f"pickle/{label}_eval_gt.gz", "wb"), protocol=pickle.HIGHEST_PROTOCOL)
         del eval_gt
         gc.collect()
-        joblib.dump(eval_gt_tss, f"pickle/{chr_name}_eval_gt_tss.gz", compress="lz4")
+        joblib.dump(eval_gt_tss, f"pickle/{label}_eval_gt_tss.gz", compress="lz4")
         # pickle.dump(eval_gt_tss, open(f"pickle/{chr_name}_eval_gt_tss.gz", "wb"), protocol=pickle.HIGHEST_PROTOCOL)
-        test_seq = joblib.load(f"pickle/{chr_name}_seq.gz")
-        eval_gt = joblib.load(f"pickle/{chr_name}_eval_gt.gz")
-
-    start_val = {}
-    tracks_for_bed = {"scEnd5": []}  # {"CAGE":[], "scEnd5":[], "scATAC":[]}
-    bed_num = 5
-    track_inds_bed = []
-    for t, track in enumerate(eval_track_names):
-        type = track[:track.find(".")]
-        if type not in tracks_for_bed.keys():
-            continue
-        if len(tracks_for_bed[type]) < bed_num:
-            track_inds_bed.append(t)
-            tracks_for_bed[type].append(track)
-        else:
-            continue
+        test_seq = joblib.load(f"pickle/{label}_seq.gz")
+        eval_gt = joblib.load(f"pickle/{label}_eval_gt.gz")
 
     final_pred = {}
     for i in range(len(eval_infos)):
@@ -123,37 +109,11 @@ def eval_perf(p, our_model, eval_track_names, eval_infos, should_draw, current_e
     for w in range(0, len(test_seq), w_step):
         print(w, end=" ")
         p1 = our_model.predict(mo.wrap2(test_seq[w:w + w_step], predict_batch_size))
-        if len(hic_keys) > 0:
-            p2 = p1[0][:, :, p.mid_bin - 1] + p1[0][:, :, p.mid_bin] + p1[0][:, :, p.mid_bin + 1]
-            if w == 0:
-                predictions = p2
-            else:
-                predictions = np.concatenate((predictions, p2), dtype=np.float32)
+        p2 = p1[:, :, p.mid_bin - 1] + p1[:, :, p.mid_bin] + p1[:, :, p.mid_bin + 1] + p1[:, :, p.mid_bin + 2] + p1[:, :, p.mid_bin - 2]
+        if w == 0:
+            predictions = p2
         else:
-            p2 = p1[:, :, p.mid_bin - 1] + p1[:, :, p.mid_bin] + p1[:, :, p.mid_bin + 1] + p1[:, :, p.mid_bin + 2] + p1[:, :, p.mid_bin - 2]
-            if w == 0:
-                predictions = p2
-            else:
-                predictions = np.concatenate((predictions, p2), dtype=np.float32)
-
-        if len(hic_keys) > 0:
-            predictions_for_bed = p1[0]
-        else:
-            predictions_for_bed = p1
-
-        print(" -bed ", end="")
-        for c, locus in enumerate(predictions_for_bed):
-            ind = w + c
-            mid = eval_infos[ind][1] - p.half_num_regions * p.bin_size - (eval_infos[ind][1] % p.bin_size)
-            for b in range(p.num_bins):
-                start = mid + b * p.bin_size
-                for t in track_inds_bed:
-                    track = eval_track_names[t]
-                    start_val.setdefault(track, {}).setdefault(start, []).append(locus[t][b])
-        print(" bed- ", end="")
-        p1 = None
-        p2 = None
-        predictions_for_bed = None
+            predictions = np.concatenate((predictions, p2), dtype=np.float32)
         gc.collect()
 
     protein_gene_set = []
@@ -162,6 +122,7 @@ def eval_perf(p, our_model, eval_track_names, eval_infos, should_draw, current_e
         if not eval_infos[i][5]:
             protein_gene_set.append(eval_infos[i][2])
         for it, track in enumerate(eval_track_names):
+            # Grouping TSS into genes
             final_pred[eval_infos[i][2]].setdefault(track, []).append(predictions[i][it])
             final_pred_tss.setdefault(track, []).append(predictions[i][it])
     for i, gene in enumerate(final_pred.keys()):
@@ -250,15 +211,6 @@ def eval_perf(p, our_model, eval_track_names, eval_infos, should_draw, current_e
             myfile.write(str(np.mean([i[0] for i in corrs_p[track_type]])) + "\t")
         myfile.write("\n")
 
-    print("Saving bed files")
-    for track in start_val.keys():
-        for start in start_val[track].keys():
-            start_val[track][start] = np.max(start_val[track][start])  # MAX can be better on the test set!
-        with open("bed_output/" + chr_name + "_" + track + ".bedGraph", 'w+') as f:
-            for start in sorted(start_val[track].keys()):
-                f.write(f"{chr_name}\t{start}\t{start+p.bin_size}\t{start_val[track][start]}")
-                f.write("\n")
-
     print("Across tracks (TSS)")
     corrs_p = {}
     corrs_s = {}
@@ -293,33 +245,6 @@ def eval_perf(p, our_model, eval_track_names, eval_infos, should_draw, current_e
         print(f"{track_type} correlation : {np.mean(type_pcc)}"
               f" {np.mean([i[0] for i in corrs_s[track_type]])} {len(type_pcc)}")
     return_result = np.mean([i[0] for i in corrs_s["CAGE"]])
-
-    print("Across tracks (TSS) [Averaged across evaluations]")
-    corrs_p = {}
-    corrs_s = {}
-    all_track_spearman = {}
-    for track in start_val.keys():
-        type = track[:track.find(".")]
-        a = eval_gt_tss[track]
-        # b = final_pred_tss[track]
-        b = []
-        for info in eval_infos:
-            mid = info[1] - (info[1] % p.bin_size)
-            val = start_val[track][mid - p.bin_size] + start_val[track][mid] + start_val[track][mid + p.bin_size]
-            b.append(val)
-        a = np.nan_to_num(a, neginf=0, posinf=0)
-        b = np.nan_to_num(b, neginf=0, posinf=0)
-        pc = stats.pearsonr(a, b)[0]
-        sc = stats.spearmanr(a, b)[0]
-        if pc is not None and sc is not None:
-            corrs_p.setdefault(type, []).append((pc, track))
-            corrs_s.setdefault(type, []).append((sc, track))
-            all_track_spearman[track] = stats.spearmanr(a, b)[0]
-
-    for track_type in corrs_p.keys():
-        type_pcc = [i[0] for i in corrs_p[track_type]]
-        print(f"{track_type} correlation : {np.mean(type_pcc)}"
-              f" {np.mean([i[0] for i in corrs_s[track_type]])} {len(type_pcc)}")
 
     if should_draw:
         viz.draw_regplots(eval_track_names, track_perf, final_pred, eval_gt,
