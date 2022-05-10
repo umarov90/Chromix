@@ -241,9 +241,9 @@ def train_step(head, head_name, input_sequences, output_scores, output_hic, fit_
                 our_model = mo.small_model(p.input_size, p.num_features, p.num_bins, len(head), p.bin_size)
             print(f"=== Training with head {head_name} ===")
             hic_lr = 0.0001
-            head_lr = 0.0001
-            resnet_lr = 0.00001
-            resnet_wd = 0.000001
+            head_lr = 0.001
+            resnet_lr = 0.0001
+            resnet_wd = 0.0000001
             # cap_e = min(current_epoch, 40)
             # transformer_lr = 0.0000005 + cap_e * 0.0000025
             # tfa.optimizers.AdamW
@@ -420,10 +420,11 @@ if __name__ == '__main__':
         print(f"Number of tracks in head {p.species[i]}: {len(heads[i])}")
 
     # hic_keys = parser.parse_hic(p.parsed_hic_folder)
-    hic_keys = ["hic_Ery.10kb.intra_chromosomal.interaction_table.tsv",
-                "hic_HUVEC.10kb.intra_chromosomal.interaction_table.tsv",
-                "hic_Islets.10kb.intra_chromosomal.interaction_table.tsv",
-                "hic_SkMC.10kb.intra_chromosomal.interaction_table.tsv"]
+    # hic_keys = ["hic_Ery.10kb.intra_chromosomal.interaction_table.tsv",
+    #             "hic_HUVEC.10kb.intra_chromosomal.interaction_table.tsv",
+    #             "hic_Islets.10kb.intra_chromosomal.interaction_table.tsv",
+    #             "hic_SkMC.10kb.intra_chromosomal.interaction_table.tsv"]
+    hic_keys = []
     hic_num = len(hic_keys)
     print(f"hic {hic_num}")
 

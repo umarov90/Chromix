@@ -36,8 +36,8 @@ def recover_shape(v, size_X):
 
 eval_gt_full = []
 p = MainParams()
-w_step = 20
-predict_batch_size = 4
+w_step = 2
+predict_batch_size = 1
 script_folder = pathlib.Path(__file__).parent.resolve()
 folders = open(str(script_folder) + "/../data_dirs").read().strip().split("\n")
 os.chdir(folders[0])
@@ -48,7 +48,11 @@ heads = joblib.load("pickle/heads.gz")
 head_id = 0
 head_tracks = heads[head_id]
 p.parsed_hic_folder = folders[2]
-hic_keys = parser.parse_hic(p.parsed_hic_folder)
+# hic_keys = parser.parse_hic(p.parsed_hic_folder)
+hic_keys = ["hic_Ery.10kb.intra_chromosomal.interaction_table.tsv",
+            "hic_HUVEC.10kb.intra_chromosomal.interaction_table.tsv",
+            "hic_Islets.10kb.intra_chromosomal.interaction_table.tsv",
+            "hic_SkMC.10kb.intra_chromosomal.interaction_table.tsv"]
 for k in hic_keys:
     print(k, end=", ")
 # hn = []
@@ -65,10 +69,13 @@ print(f"Number of positions: {len(infos)}")
 one_hot = joblib.load("pickle/hg38_one_hot.gz")
 strategy = tf.distribute.MultiWorkerMirroredStrategy()
 with strategy.scope():
-    our_model = mo.small_model(p.input_size, p.num_features, p.num_bins, len(head_tracks), p.bin_size)
+    our_model = mo.hic_model(p.input_size, p.num_features, p.num_bins,
+                             len(head_tracks), len(hic_keys), p.hic_size,
+                             p.bin_size)
     print(our_model.summary())
     our_model.get_layer("our_resnet").set_weights(joblib.load(p.model_path + "_res"))
     our_model.get_layer("our_head").set_weights(joblib.load(p.model_path + "_head_hg38"))
+    our_model.get_layer("our_hic").set_weights(joblib.load(p.model_path + "_hic"))
 
 hic_output = []
 for hi, key in enumerate(hic_keys):
@@ -120,12 +127,7 @@ for info in infos:
         ns = one_hot[info[0]][start:start + p.input_size]
     if len(ns) != p.input_size:
         print(f"Wrong! {ns.shape} {start} {extra} {info[1]}")
-    test_seq.append(ns)
-
-strategy = tf.distribute.MultiWorkerMirroredStrategy()
-with strategy.scope():
-    our_model = tf.keras.models.load_model(model_folder + p.model_name)
-    # our_model.get_layer("our_head").set_weights(joblib.load(model_folder + p.model_name + "_head_" + str(head_id)))
+    test_seq.append(ns[:, :-1])
 
 for w in range(0, len(test_seq), w_step):
     print(w, end=" ")
@@ -134,7 +136,6 @@ for w in range(0, len(test_seq), w_step):
         predictions_hic = p1[1]
     else:
         predictions_hic = np.concatenate((predictions_hic, p1[1]))
-
 
 for n in range(len(hic_output)):
     fig, axs = plt.subplots(2, len(hic_keys), figsize=(12, 12))
@@ -155,5 +156,3 @@ for n in range(len(hic_output)):
     fig.tight_layout()
     plt.savefig(f"hic_check/{n}.png")
     plt.close(fig)
-
-
