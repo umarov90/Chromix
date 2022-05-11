@@ -19,17 +19,6 @@ from scipy.ndimage import gaussian_filter
 from sklearn.cluster import KMeans
 
 
-def valid(chunks):
-    for chunk in chunks:
-        print("1")
-        mask = chunk['locus1_chrom'] == chunk['locus2_chrom']
-        if mask.all():
-            yield chunk
-        else:
-            yield chunk.loc[mask]
-            break
-
-
 def parse_hic(folder):
     if Path("pickle/hic_keys.gz").is_file():
         return joblib.load("pickle/hic_keys.gz")
@@ -38,56 +27,51 @@ def parse_hic(folder):
         directory = "hic"
 
         for filename in os.listdir(directory):
-            fn = os.path.join(directory, filename)
-            t_name = fn.replace("/", "_")
-            print(t_name)
-            # if t_name not in ["hic_Ery.10kb.intra_chromosomal.interaction_table.tsv",
-            #                   "hic_HUVEC.10kb.intra_chromosomal.interaction_table.tsv",
-            #                   "hic_Islets.10kb.intra_chromosomal.interaction_table.tsv",
-            #                   "hic_SkMC.10kb.intra_chromosomal.interaction_table.tsv"]:
-            #     continue
-            hic_keys.append(t_name)
-            # if Path(folder + t_name + "chr1").is_file():
-            #     continue
-            with open("hic.txt", "a+") as myfile:
-                myfile.write(t_name)
-            fields = ["locus1_chrom", "locus2_chrom", "locus1_start", "locus2_start",
-                      "pvalue", "logObservedOverExpected"]
-            dtypes = {"locus1_chrom": str, "locus2_chrom": str, "locus1_start": int, "locus2_start": int,
-                      "pvalue": str, "logObservedOverExpected": float}
-            chunksize = 10 ** 8
-            chunks = pd.read_csv(fn, sep="\t", index_col=False, usecols=fields,
-                                 dtype=dtypes, chunksize=chunksize, low_memory=True)
-            df = pd.concat(valid(chunks))
-            # df = pd.read_csv(fn, sep="\t", index_col=False, usecols=fields, dtype=dtypes, low_memory=True)
-            df['pvalue'] = pd.to_numeric(df['pvalue'], errors='raise')
-            # df['pvalue'].fillna(0, inplace=True)
-            print(len(df))
-            # No inter-chromosome connections are considered
-            df.drop(df[df['locus1_chrom'] != df['locus2_chrom']].index, inplace=True)
-            print(len(df))
-            df.drop(['locus2_chrom'], axis=1, inplace=True)
-            df.drop(df[df['locus1_start'] - df['locus2_start'] > 420000].index, inplace=True)
-            print(len(df))
+            try:
+                fn = os.path.join(directory, filename)
+                if not fn.endswith("10000nt.tsv.gz"):
+                    continue
+                t_name = fn.replace("/", "_")
+                print(t_name)
+                # if t_name not in ["hic_Ery.10kb.intra_chromosomal.interaction_table.tsv",
+                #                   "hic_HUVEC.10kb.intra_chromosomal.interaction_table.tsv",
+                #                   "hic_Islets.10kb.intra_chromosomal.interaction_table.tsv",
+                #                   "hic_SkMC.10kb.intra_chromosomal.interaction_table.tsv"]:
+                #     continue
+                hic_keys.append(t_name)
+                # if Path(folder + t_name + "chr1").is_file():
+                #     continue
+                fields = ["chrom", "start1", "start2", "value"]
+                dtypes = {"chrom": str, "start1": int, "start2": int, "value": float}
+                df = pd.read_csv(fn, sep="\t", index_col=False, names=fields, dtype=dtypes, header=None)
+                chrd = list(df["chrom"].unique())
+                should_continue = False
+                for i in range(22):
+                    if "chr" + str(i+1) not in chrd:
+                        should_continue = True
+                        break
+                if should_continue or "chrX" not in chrd:
+                    print(f"!!!!!!!!!!!!!!!{t_name}")
+                    continue
+                df.drop(df[df['start1'] - df['start2'] > 420000].index, inplace=True)
+                print(len(df))
 
-            df["pvalue"] = -1 * np.log(df["pvalue"])
-            m = df.loc[df['pvalue'] != np.inf, 'pvalue'].max()
-            print("P Max is: " + str(m))
-            df['pvalue'].replace(np.inf, m, inplace=True)
-            df['pvalue'].clip(upper=100, inplace=True)
-            df["score"] = df["pvalue"] / df["pvalue"].max()
-            # df["score"] = df["logObservedOverExpected"] / df["logObservedOverExpected"].max()
+                m = df.loc[df['value'] != np.inf, 'value'].max()
+                print("P Max is: " + str(m))
+                df['value'].replace(np.inf, m, inplace=True)
+                # df['value'].clip(upper=100, inplace=True)
+                df["score"] = df["value"] / df["value"].max()
 
-            df.drop(["pvalue"], axis=1, inplace=True)
-            chrd = list(df["locus1_chrom"].unique())
-            for chr in chrd:
-                joblib.dump(df.loc[df['locus1_chrom'] == chr].sort_values(by=['locus1_start']),
-                            folder + t_name + chr, compress="lz4")
-            print(t_name)
-            with open("hic.txt", "a+") as myfile:
-                myfile.write(t_name)
-            del df
-            gc.collect()
+                df.drop(["value"], axis=1, inplace=True)
+
+                for chr in chrd:
+                    joblib.dump(df.loc[df['chrom'] == chr].sort_values(by=['start1']),
+                                folder + t_name + chr, compress="lz4")
+                print(t_name)
+                del df
+                gc.collect()
+            except Exception:
+                print(f"!!!!!!!!!!!!!!!{t_name}")
 
         joblib.dump(hic_keys, "pickle/hic_keys.gz", compress="lz4")
         chromosomes = ["chrX", "chrY"]

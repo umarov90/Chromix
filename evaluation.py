@@ -14,8 +14,8 @@ def eval_perf(p, our_model, eval_track_names, eval_infos, should_draw, current_e
               loaded_tracks):
     import model as mo
     print("Model loaded")
-    predict_batch_size = 2
-    w_step = 4
+    predict_batch_size = p.GLOBAL_BATCH_SIZE
+    w_step = 500
 
     if Path(f"pickle/{label}_seq.gz").is_file():
         print(datetime.now().strftime('[%H:%M:%S] ') + "Loading sequences. ")
@@ -76,10 +76,10 @@ def eval_perf(p, our_model, eval_track_names, eval_infos, should_draw, current_e
             extra = start + p.input_size - len(one_hot[info[0]])
             if start < 0:
                 ns = one_hot[info[0]][0:start + p.input_size]
-                ns = np.concatenate((np.zeros((-1 * start, p.num_features)), ns))
+                ns = np.concatenate((np.zeros((-1 * start, 5)), ns))
             elif extra > 0:
                 ns = one_hot[info[0]][start: len(one_hot[info[0]])]
-                ns = np.concatenate((ns, np.zeros((extra, p.num_features))))
+                ns = np.concatenate((ns, np.zeros((extra, 5))))
             else:
                 ns = one_hot[info[0]][start:start + p.input_size]
             if len(ns) != p.input_size:
@@ -108,7 +108,7 @@ def eval_perf(p, our_model, eval_track_names, eval_infos, should_draw, current_e
 
     for w in range(0, len(test_seq), w_step):
         print(w, end=" ")
-        p1 = our_model.predict(mo.wrap2(test_seq[w:w + w_step], predict_batch_size))
+        p1 = our_model.predict(mo.wrap2(test_seq[w:w + w_step], predict_batch_size), batch_size=predict_batch_size)
         p2 = p1[:, :, p.mid_bin - 1] + p1[:, :, p.mid_bin] + p1[:, :, p.mid_bin + 1] + p1[:, :, p.mid_bin + 2] + p1[:, :, p.mid_bin - 2]
         if w == 0:
             predictions = p2

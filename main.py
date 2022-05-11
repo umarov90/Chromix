@@ -118,14 +118,14 @@ def run_epoch(last_proc, fit_epochs, head_id):
                 hic_mat = np.zeros((p.num_hic_bins, p.num_hic_bins))
                 start_hic = int(info[1] - (info[1] % p.bin_size) - p.half_size_hic + shifts[i] * p.bin_size)
                 end_hic = start_hic + 2 * p.half_size_hic
-                start_row = hd['locus1_start'].searchsorted(start_hic - p.hic_bin_size, side='left')
-                end_row = hd['locus1_start'].searchsorted(end_hic, side='right')
+                start_row = hd['start1'].searchsorted(start_hic - p.hic_bin_size, side='left')
+                end_row = hd['start1'].searchsorted(end_hic, side='right')
                 hd = hd.iloc[start_row:end_row]
                 # convert start of the input region to the bin number
                 start_hic = int(start_hic / p.hic_bin_size)
                 # subtract start bin from the binned entries in the range [start_row : end_row]
-                l1 = (np.floor(hd["locus1_start"].values / p.hic_bin_size) - start_hic).astype(int)
-                l2 = (np.floor(hd["locus2_start"].values / p.hic_bin_size) - start_hic).astype(int)
+                l1 = (np.floor(hd["start1"].values / p.hic_bin_size) - start_hic).astype(int)
+                l2 = (np.floor(hd["start2"].values / p.hic_bin_size) - start_hic).astype(int)
                 hic_score = hd["score"].values
                 # drop contacts with regions outside the [start_row : end_row] range
                 lix = (l2 < len(hic_mat)) & (l2 >= 0) & (l1 >= 0)
@@ -241,8 +241,8 @@ def train_step(head, head_name, input_sequences, output_scores, output_hic, fit_
                 our_model = mo.small_model(p.input_size, p.num_features, p.num_bins, len(head), p.bin_size)
             print(f"=== Training with head {head_name} ===")
             hic_lr = 0.0001
-            head_lr = 0.001
-            resnet_lr = 0.0001
+            head_lr = 0.0001
+            resnet_lr = 0.00001
             resnet_wd = 0.0000001
             # cap_e = min(current_epoch, 40)
             # transformer_lr = 0.0000005 + cap_e * 0.0000025
@@ -419,12 +419,7 @@ if __name__ == '__main__':
     for i in range(len(heads)):
         print(f"Number of tracks in head {p.species[i]}: {len(heads[i])}")
 
-    # hic_keys = parser.parse_hic(p.parsed_hic_folder)
-    # hic_keys = ["hic_Ery.10kb.intra_chromosomal.interaction_table.tsv",
-    #             "hic_HUVEC.10kb.intra_chromosomal.interaction_table.tsv",
-    #             "hic_Islets.10kb.intra_chromosomal.interaction_table.tsv",
-    #             "hic_SkMC.10kb.intra_chromosomal.interaction_table.tsv"]
-    hic_keys = []
+    hic_keys = parser.parse_hic(p.parsed_hic_folder)
     hic_num = len(hic_keys)
     print(f"hic {hic_num}")
 
