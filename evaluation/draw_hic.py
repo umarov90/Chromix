@@ -38,21 +38,10 @@ eval_gt_full = []
 p = MainParams()
 w_step = 2
 predict_batch_size = 1
-script_folder = pathlib.Path(__file__).parent.resolve()
-folders = open(str(script_folder) + "/../data_dirs").read().strip().split("\n")
-os.chdir(folders[0])
-parsed_tracks_folder = folders[1]
-parsed_hic_folder = folders[2]
-model_folder = folders[3]
 heads = joblib.load("pickle/heads.gz")
 head_id = 0
 head_tracks = heads[head_id]
-p.parsed_hic_folder = folders[2]
-# hic_keys = parser.parse_hic(p.parsed_hic_folder)
-hic_keys = ["hic_Ery.10kb.intra_chromosomal.interaction_table.tsv",
-            "hic_HUVEC.10kb.intra_chromosomal.interaction_table.tsv",
-            "hic_Islets.10kb.intra_chromosomal.interaction_table.tsv",
-            "hic_SkMC.10kb.intra_chromosomal.interaction_table.tsv"]
+hic_keys = parser.parse_hic(p.parsed_hic_folder)
 for k in hic_keys:
     print(k, end=", ")
 # hn = []
@@ -119,10 +108,10 @@ for info in infos:
     extra = start + p.input_size - len(one_hot[info[0]])
     if start < 0:
         ns = one_hot[info[0]][0:start + p.input_size]
-        ns = np.concatenate((np.zeros((-1 * start, p.num_features)), ns))
+        ns = np.concatenate((np.zeros((-1 * start, 5)), ns))
     elif extra > 0:
         ns = one_hot[info[0]][start: len(one_hot[info[0]])]
-        ns = np.concatenate((ns, np.zeros((extra, p.num_features))))
+        ns = np.concatenate((ns, np.zeros((extra, 5))))
     else:
         ns = one_hot[info[0]][start:start + p.input_size]
     if len(ns) != p.input_size:
@@ -138,7 +127,7 @@ for w in range(0, len(test_seq), w_step):
         predictions_hic = np.concatenate((predictions_hic, p1[1]))
 
 for n in range(len(hic_output)):
-    fig, axs = plt.subplots(2, len(hic_keys), figsize=(12, 12))
+    fig, axs = plt.subplots(2, len(hic_keys), figsize=(48, 12))
     for i in range(len(hic_keys)):
         mat = recover_shape(hic_output[n][i], p.num_hic_bins)
         mat = gaussian_filter(mat, sigma=0.5)

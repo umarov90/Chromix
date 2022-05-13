@@ -24,7 +24,7 @@ def hic_model(input_size, num_features, num_regions, cell_num, hic_num, hic_size
     hx = Conv1D(32, kernel_size=1, strides=1, name="pointwise_hic_1", activation=LeakyReLU(alpha=leaky_alpha))(hic_input)
 
     hx = tf.transpose(hx, [0, 2, 1])
-    hx = Conv1D(input_size // 5000, kernel_size=1, strides=1, name="pointwise_hic_2", activation=LeakyReLU(alpha=leaky_alpha))(hx)
+    hx = Dense(input_size // 5000, kernel_size=1, strides=1, name="pointwise_hic_2", activation=LeakyReLU(alpha=leaky_alpha))(hx)
     hx = tf.transpose(hx, [0, 2, 1])
 
     hx = Flatten()(hx)

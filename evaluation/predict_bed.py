@@ -7,6 +7,7 @@ import numpy as np
 
 head_name = "canFam3"
 track_inds_bed = [0, 1, 2]
+predict_batch_size = 2
 
 p = MainParams()
 heads = joblib.load("pickle/heads.gz")
@@ -15,7 +16,7 @@ one_hot = joblib.load(f"pickle/{head_name}_one_hot.gz")
 
 strategy = tf.distribute.MultiWorkerMirroredStrategy()
 with strategy.scope():
-    our_model = mo.small_model(p.input_size, p.num_features, p.num_bins, len(head))
+    our_model = mo.small_model(p.input_size, p.num_features, p.num_bins, len(head), p.bin_size)
     our_model.get_layer("our_resnet").set_weights(joblib.load(p.model_path + "_res"))
     our_model.get_layer("our_head").set_weights(joblib.load(p.model_path + "_head_" + head_name))
 
@@ -29,16 +30,18 @@ for expression_region in range(0, len(one_hot[chrom]), p.bin_size * p.num_bins):
     extra = start + p.input_size - len(one_hot[chrom])
     if start < 0:
         ns = one_hot[chrom][0:start + p.input_size]
-        ns = np.concatenate((np.zeros((-1 * start, p.num_features)), ns))
+        ns = np.concatenate((np.zeros((-1 * start, 5)), ns))
     elif extra > 0:
         ns = one_hot[chrom][start: len(one_hot[chrom])]
-        ns = np.concatenate((ns, np.zeros((extra, p.num_features))))
+        ns = np.concatenate((ns, np.zeros((extra, 5))))
     else:
         ns = one_hot[chrom][start:start + p.input_size]
-    batch.append(ns)
+    batch.append(ns[:, :-1])
     starts_for_bins.append(expression_region)
     if len(batch) > batch_size:
-        pred = our_model.predict(batch)
+        print(expression_region, end=" ")
+        batch = np.asarray(batch, dtype=bool)
+        pred = our_model.predict(mo.wrap2(batch, predict_batch_size), batch_size=predict_batch_size)
         for c, locus in enumerate(pred):
             start1 = starts_for_bins[c]
             for b in range(p.num_bins):
@@ -46,6 +49,8 @@ for expression_region in range(0, len(one_hot[chrom]), p.bin_size * p.num_bins):
                 for t in track_inds_bed:
                     track = head[t]
                     start_val.setdefault(track, {})[start2] = locus[t][b]
+        starts_for_bins = []
+        batch = []
 
 
 print("Saving bed files")
