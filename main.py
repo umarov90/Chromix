@@ -94,7 +94,7 @@ def run_epoch(last_proc, fit_epochs, head_id):
 
     output_scores = []
     for t in range(start, end, step_size):
-        output_scores.append(joblib.load(f"temp/data{t}"))
+        output_scores.append(joblib.load(f"{p.temp_folder}data{t}"))
 
     gc.collect()
     output_scores = np.concatenate(output_scores, axis=1, dtype=np.float32)
@@ -106,7 +106,7 @@ def run_epoch(last_proc, fit_epochs, head_id):
     # print(datetime.now().strftime('[%H:%M:%S] ') + "Hi-C")
     if head_id == 0:
         for hi, key in enumerate(hic_keys):
-            print(key, end=" ")
+            # print(key, end=" ")
             hdf = joblib.load(p.parsed_hic_folder + key)
             ni = 0
             for i, info in enumerate(shuffled_info):
@@ -267,7 +267,7 @@ def train_step(head, head_name, input_sequences, output_scores, output_hic, fit_
             our_model.get_layer("our_resnet").trainable = True
 
             if hic_step:
-                loss_weights = {"our_head": 1.0, "our_hic": 0.1}
+                loss_weights = {"our_head": 1.0, "our_hic": 1.0}
                 losses = {
                     "our_head": "mse",
                     "our_hic": "mse",
@@ -387,7 +387,7 @@ def load_data(mp_q, p, tracks, scores, t, t_end):
         parsed_track = joblib.load(p.parsed_tracks_folder + track_name)
         for j in range(len(scores)):
             scores_after_loading[j, i] = parsed_track[scores[j, i, 0]][int(scores[j, i, 1]):int(scores[j, i, 2])].copy()
-    joblib.dump(scores_after_loading, f"temp/data{t}", compress="lz4")
+    joblib.dump(scores_after_loading, f"{p.temp_folder}data{t}", compress="lz4")
     mp_q.put(None)
 
 

@@ -31,14 +31,13 @@ def parse_hic(folder):
                 fn = os.path.join(directory, filename)
                 if not fn.endswith("10000nt.tsv.gz"):
                     continue
-                t_name = fn.replace("/", "_")
+                t_name = filename
                 print(t_name)
                 # if t_name not in ["hic_Ery.10kb.intra_chromosomal.interaction_table.tsv",
                 #                   "hic_HUVEC.10kb.intra_chromosomal.interaction_table.tsv",
                 #                   "hic_Islets.10kb.intra_chromosomal.interaction_table.tsv",
                 #                   "hic_SkMC.10kb.intra_chromosomal.interaction_table.tsv"]:
                 #     continue
-                hic_keys.append(t_name)
                 # if Path(folder + t_name + "chr1").is_file():
                 #     continue
                 fields = ["chrom", "start1", "start2", "value"]
@@ -51,7 +50,7 @@ def parse_hic(folder):
                         should_continue = True
                         break
                 if should_continue or "chrX" not in chrd:
-                    print(f"!!!!!!!!!!!!!!!{t_name}")
+                    print(f"Not all chroms present in {t_name}")
                     continue
                 df.drop(df[df['start1'] - df['start2'] > 420000].index, inplace=True)
                 print(len(df))
@@ -70,7 +69,9 @@ def parse_hic(folder):
                 print(t_name)
                 del df
                 gc.collect()
-            except Exception:
+                hic_keys.append(t_name)
+            except Exception as exc:
+                print(exc)
                 print(f"!!!!!!!!!!!!!!!{t_name}")
 
         joblib.dump(hic_keys, "pickle/hic_keys.gz", compress="lz4")

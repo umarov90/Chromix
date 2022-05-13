@@ -31,11 +31,11 @@ class MainParams:
         self.parsed_tracks_folder = folders[1]
         self.parsed_hic_folder = folders[2]
         self.model_folder = folders[3]
+        self.temp_folder = folders[4]
         self.model_name = "hic_model.h5"
         self.model_path = self.model_folder + self.model_name
         self.figures_folder = "figures_1"
         self.tracks_folder = "/Users/ramzan/variants_100/tracks/"
-        self.temp_folder = "/home/user/data/temp/"
         Path(self.model_folder).mkdir(parents=True, exist_ok=True)
         Path(self.figures_folder + "/" + "attribution").mkdir(parents=True, exist_ok=True)
         Path(self.figures_folder + "/" + "tracks").mkdir(parents=True, exist_ok=True)
