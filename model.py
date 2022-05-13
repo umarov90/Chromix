@@ -13,7 +13,7 @@ num_patches = 4201
 num_filters = 1026
 
 
-def hic_model(input_size, num_features, num_regions, cell_num, hic_num, hic_size, bin_size):
+def human_model(input_size, num_features, num_regions, cell_num, hic_num, hic_size, con_num, bin_size):
     input_shape = (input_size, num_features)
     inputs = Input(shape=input_shape, dtype=tf.float32)
     x = inputs
@@ -21,10 +21,10 @@ def hic_model(input_size, num_features, num_regions, cell_num, hic_num, hic_size
     our_resnet = Model(inputs, resnet_output, name="our_resnet")
 
     hic_input = Input(shape=(num_patches, num_filters))
-    hx = Conv1D(32, kernel_size=1, strides=1, name="pointwise_hic_1", activation=LeakyReLU(alpha=leaky_alpha))(hic_input)
+    hx = Conv1D(32, kernel_size=1, strides=1, name="hic_layer_1", activation=LeakyReLU(alpha=leaky_alpha))(hic_input)
 
     hx = tf.transpose(hx, [0, 2, 1])
-    hx = Dense(input_size // 5000, kernel_size=1, strides=1, name="pointwise_hic_2", activation=LeakyReLU(alpha=leaky_alpha))(hx)
+    hx = Dense(input_size // 5000, kernel_size=1, strides=1, name="hic_layer_2", activation=LeakyReLU(alpha=leaky_alpha))(hx)
     hx = tf.transpose(hx, [0, 2, 1])
 
     hx = Flatten()(hx)
@@ -56,8 +56,24 @@ def hic_model(input_size, num_features, num_regions, cell_num, hic_num, hic_size
     our_head = Model(head_input, head_output, name="our_head")
     # print(our_head)
 
+    con_head_input = Input(shape=(num_patches, num_filters))
+    x = con_head_input
+
+    trim = (x.shape[-2] - num_regions) // 2
+    x = x[..., trim:-trim, :]
+
+    x = Dropout(dropout_rate, input_shape=(num_regions, num_filters))(x)
+
+    x = Conv1D(2048, kernel_size=1, strides=1, name="pointwise_con", activation=LeakyReLU(alpha=leaky_alpha))(x)
+    outputs = Conv1D(con_num, kernel_size=1, strides=1, name="con_last_conv1d")(x)
+    outputs = tf.transpose(outputs, [0, 2, 1])
+    # print(outputs)
+    con_head_output = outputs
+    our_con_head = Model(con_head_input, con_head_output, name="our_con")
+
     our_model = Model(inputs, [our_head(our_resnet(inputs)),
-                               our_hic(our_resnet(inputs))], name="our_model")
+                               our_hic(our_resnet(inputs)),
+                               our_con_head(our_resnet(inputs))], name="our_model")
     # print("\nModel constructed")
     # print(our_model.summary())
     return our_model
@@ -199,6 +215,17 @@ def wrap_with_hic(input_sequences, output_scores, bs):
     with tf.device('cpu:0'):
         train_data = tf.data.Dataset.from_tensor_slices(
             (input_sequences, {"our_head": output_scores[0], "our_hic": output_scores[1]}))
+        train_data = train_data.batch(bs)
+        options = tf.data.Options()
+        options.experimental_distribute.auto_shard_policy = tf.data.experimental.AutoShardPolicy.DATA
+        train_data = train_data.with_options(options)
+        return train_data
+
+
+def wrap_with_hic_con(input_sequences, output_scores, bs):
+    with tf.device('cpu:0'):
+        train_data = tf.data.Dataset.from_tensor_slices(
+            (input_sequences, {"our_head": output_scores[0], "our_hic": output_scores[1], "our_con": output_scores[2]}))
         train_data = train_data.batch(bs)
         options = tf.data.Options()
         options.experimental_distribute.auto_shard_policy = tf.data.experimental.AutoShardPolicy.DATA

@@ -75,29 +75,8 @@ def run_epoch(last_proc, fit_epochs, head_id):
     # return 1
     output_scores_info = np.asarray(output_scores_info)
     print(datetime.now().strftime('[%H:%M:%S] ') + "Loading parsed tracks")
-
-    ps = []
-    start = 0
-    nproc = min(mp.cpu_count(), len(heads[head_id]))
-    step_size = len(heads[head_id]) // nproc
-    end = len(heads[head_id])
-    for t in range(start, end, step_size):
-        t_end = min(t + step_size, end)
-        load_proc = mp.Process(target=load_data,
-                               args=(mp_q, p, heads[head_id][t:t_end], output_scores_info[:, t:t_end], t, t_end,))
-        load_proc.start()
-        ps.append(load_proc)
-
-    for load_proc in ps:
-        load_proc.join()
-    print(mp_q.get())
-
-    output_scores = []
-    for t in range(start, end, step_size):
-        output_scores.append(joblib.load(f"{p.temp_folder}data{t}"))
-
-    gc.collect()
-    output_scores = np.concatenate(output_scores, axis=1, dtype=np.float32)
+    output_scores = par_load_data(output_scores_info, heads[head_id])
+    output_con = par_load_data(output_scores_info, conservation_tracks)
     gc.collect()
     print("")
     half = len(input_sequences) // 2
@@ -191,7 +170,7 @@ def run_epoch(last_proc, fit_epochs, head_id):
     # argss = joblib.load("pickle/run.gz")
     # p = mp.Process(target=train_step, args=(argss[0][:400], argss[1][:400], argss[2][:400], fit_epochs, head_id,))
     proc = mp.Process(target=train_step, args=(
-        heads[head_id], p.species[head_id], input_sequences, output_scores, output_hic, fit_epochs, hic_num, mp_q,))
+        heads[head_id], p.species[head_id], input_sequences, output_scores, output_hic, output_con, fit_epochs, hic_num, mp_q,))
     proc.start()
     return proc
 
@@ -203,10 +182,10 @@ def safe_save(thing, place):
     os.rename(place + "_temp", place)
 
 
-def train_step(head, head_name, input_sequences, output_scores, output_hic, fit_epochs, hic_num, mp_q):
-    hic_step = True
+def train_step(head, head_name, input_sequences, output_scores, output_hic, output_con, fit_epochs, hic_num, mp_q):
+    human_training = True
     if head_name != "hg38" or hic_num == 0:
-        hic_step = False
+        human_training = False
     try:
         import tensorflow as tf
         # physical_devices = tf.config.experimental.list_physical_devices('GPU')
@@ -215,12 +194,13 @@ def train_step(head, head_name, input_sequences, output_scores, output_hic, fit_
         #     tf.config.experimental.set_memory_growth(device, True)
 
         import model as mo
-        if hic_step:
-            train_data = mo.wrap_with_hic(input_sequences, [output_scores, output_hic], p.GLOBAL_BATCH_SIZE)
+        if human_training:
+            train_data = mo.wrap_with_hic_con(input_sequences, [output_scores, output_hic, output_con], p.GLOBAL_BATCH_SIZE)
             zero_fit_1 = np.zeros_like(input_sequences[0])
             zero_fit_2 = np.zeros_like(output_scores[0])
             zero_fit_3 = np.zeros_like(output_hic[0])
-            zero_data = mo.wrap_with_hic([zero_fit_1], [[zero_fit_2], [zero_fit_3]], p.GLOBAL_BATCH_SIZE)
+            zero_fit_4 = np.zeros_like(output_con[0])
+            zero_data = mo.wrap_with_hic_con([zero_fit_1], [[zero_fit_2], [zero_fit_3], [zero_fit_4]], p.GLOBAL_BATCH_SIZE)
         else:
             train_data = mo.wrap(input_sequences, output_scores, p.GLOBAL_BATCH_SIZE)
             zero_fit_1 = np.zeros_like(input_sequences[0])
@@ -234,13 +214,14 @@ def train_step(head, head_name, input_sequences, output_scores, output_hic, fit_
         strategy = tf.distribute.MultiWorkerMirroredStrategy()
         # print(datetime.now().strftime('[%H:%M:%S] ') + "Loading the model")
         with strategy.scope():
-            if hic_step:
-                our_model = mo.hic_model(p.input_size, p.num_features, p.num_bins, len(head), hic_num, p.hic_size,
-                                         p.bin_size)
+            if human_training:
+                our_model = mo.human_model(p.input_size, p.num_features, p.num_bins, len(head), hic_num, p.hic_size, len(conservation_tracks),
+                                           p.bin_size)
             else:
                 our_model = mo.small_model(p.input_size, p.num_features, p.num_bins, len(head), p.bin_size)
             print(f"=== Training with head {head_name} ===")
             hic_lr = 0.0001
+            con_lr = 0.0001
             head_lr = 0.0001
             resnet_lr = 0.00001
             resnet_wd = 0.0000001
@@ -258,19 +239,22 @@ def train_step(head, head_name, input_sequences, output_scores, output_hic, fit_
             optimizers_and_layers = [(optimizers["our_resnet"], our_model.get_layer("our_resnet")),
                                      (optimizers["our_head"], our_model.get_layer("our_head"))
                                      ]
-            if hic_step:
+            if human_training:
                 optimizers["our_hic"] = tf.keras.optimizers.Adam(learning_rate=hic_lr)
                 optimizers_and_layers.append((optimizers["our_hic"], our_model.get_layer("our_hic")))
+                optimizers["our_con"] = tf.keras.optimizers.Adam(learning_rate=con_lr)
+                optimizers_and_layers.append((optimizers["our_con"], our_model.get_layer("our_con")))
 
             optimizer = tfa.optimizers.MultiOptimizer(optimizers_and_layers)
 
             our_model.get_layer("our_resnet").trainable = True
 
-            if hic_step:
-                loss_weights = {"our_head": 1.0, "our_hic": 1.0}
+            if human_training:
+                loss_weights = {"our_head": 1.0, "our_hic": 10.0, "our_con": 1.0}
                 losses = {
                     "our_head": "mse",
                     "our_hic": "mse",
+                    "our_con": "mse",
                 }
                 our_model.compile(optimizer=optimizer, loss=losses, loss_weights=loss_weights)
             else:
@@ -282,8 +266,10 @@ def train_step(head, head_name, input_sequences, output_scores, output_hic, fit_
                 our_model.get_layer("our_resnet").set_weights(joblib.load(p.model_path + "_res"))
             if os.path.exists(p.model_path + "_head_" + head_name):
                 our_model.get_layer("our_head").set_weights(joblib.load(p.model_path + "_head_" + head_name))
-            if hic_step and os.path.exists(p.model_path + "_hic"):
+            if human_training and os.path.exists(p.model_path + "_hic"):
                 our_model.get_layer("our_hic").set_weights(joblib.load(p.model_path + "_hic"))
+            if human_training and os.path.exists(p.model_path + "_con"):
+                our_model.get_layer("our_con").set_weights(joblib.load(p.model_path + "_con"))
 
             if os.path.exists(p.model_path + "_opt_resnet"):
                 print("loading resnet optimizer")
@@ -293,21 +279,27 @@ def train_step(head, head_name, input_sequences, output_scores, output_hic, fit_
                 print("loading head optimizer")
                 optimizers["our_head"].set_weights(joblib.load(p.model_path + "_opt_head_" + head_name))
 
-            if hic_step and os.path.exists(p.model_path + "_opt_hic"):
+            if human_training and os.path.exists(p.model_path + "_opt_hic"):
                 print("loading hic optimizer")
                 optimizers["our_hic"].set_weights(joblib.load(p.model_path + "_opt_hic"))
+
+            if human_training and os.path.exists(p.model_path + "_opt_con"):
+                print("loading con optimizer")
+                optimizers["our_con"].set_weights(joblib.load(p.model_path + "_opt_con"))
 
             optimizers["our_resnet"].learning_rate = resnet_lr
             optimizers["our_resnet"].weight_decay = resnet_wd
             optimizers["our_head"].learning_rate = head_lr
-            if hic_step:
+            if human_training:
                 optimizers["our_hic"].learning_rate = hic_lr
+                optimizers["our_con"].learning_rate = con_lr
 
             print(len(our_model.trainable_weights))
             print(len(our_model.get_layer("our_resnet").trainable_weights))
             print(len(our_model.get_layer("our_head").trainable_weights))
-            if hic_step:
+            if human_training:
                 print(len(our_model.get_layer("our_hic").trainable_weights))
+                print(len(our_model.get_layer("our_con").trainable_weights))
     except Exception as e:
         traceback.print_exc()
         print(datetime.now().strftime('[%H:%M:%S] ') + "Error while compiling.")
@@ -325,9 +317,11 @@ def train_step(head, head_name, input_sequences, output_scores, output_hic, fit_
         safe_save(our_model.get_layer("our_head").get_weights(), p.model_path + "_head_" + head_name)
         safe_save(optimizers["our_resnet"].get_weights(), p.model_path + "_opt_resnet")
         safe_save(optimizers["our_head"].get_weights(), p.model_path + "_opt_head_" + head_name)
-        if hic_step:
+        if human_training:
             safe_save(optimizers["our_hic"].get_weights(), p.model_path + "_opt_hic")
             safe_save(our_model.get_layer("our_hic").get_weights(), p.model_path + "_hic")
+            safe_save(optimizers["our_con"].get_weights(), p.model_path + "_opt_con")
+            safe_save(our_model.get_layer("our_con").get_weights(), p.model_path + "_con")
     except Exception as e:
         print(e)
         print(datetime.now().strftime('[%H:%M:%S] ') + "Error while training.")
@@ -391,6 +385,30 @@ def load_data(mp_q, p, tracks, scores, t, t_end):
     mp_q.put(None)
 
 
+def par_load_data(output_scores_info, tracks):
+    ps = []
+    start = 0
+    nproc = min(mp.cpu_count(), len(tracks))
+    step_size = len(tracks) // nproc
+    end = len(tracks)
+    for t in range(start, end, step_size):
+        t_end = min(t + step_size, end)
+        load_proc = mp.Process(target=load_data,
+                               args=(mp_q, p, tracks[t:t_end], output_scores_info[:, t:t_end], t, t_end,))
+        load_proc.start()
+        ps.append(load_proc)
+
+    for load_proc in ps:
+        load_proc.join()
+    print(mp_q.get())
+
+    output_scores = []
+    for t in range(start, end, step_size):
+        output_scores.append(joblib.load(f"{p.temp_folder}data{t}"))
+
+    gc.collect()
+    return np.concatenate(output_scores, axis=1, dtype=np.float32)
+
 last_proc = None
 p = MainParams()
 picked_training_regions = {}
@@ -423,6 +441,8 @@ if __name__ == '__main__':
     hic_num = len(hic_keys)
     print(f"hic {hic_num}")
 
+    conservation_tracks = parser.parse_tracks_conservation(p.bin_size, p.tracks_folder)
+
     mp_q = mp.Queue()
     loaded_tracks = {}
     # for i, key in enumerate(track_names):
@@ -444,13 +464,20 @@ if __name__ == '__main__':
                 head_id = 0
             else:
                 head_id = 1 + (current_epoch - math.ceil(current_epoch / 2)) % (len(heads) - 1)
+            # Only human to test HIC and CON!
+            head_id = 0
+            if head_id == 0:
+                p.STEPS_PER_EPOCH = 100
+                fit_epochs = 4
+            elif head_id == 1:
+                p.STEPS_PER_EPOCH = 400
+                fit_epochs = 2
+            else:
+                p.STEPS_PER_EPOCH = 1000
+                fit_epochs = 1
 
-            # if current_epoch < 10:
-            #     fit_epochs = 1
-            # elif current_epoch < 40:
-            #     fit_epochs = 2
-            # else:
-            #     fit_epochs = 3
+            if current_epoch < 10:
+                fit_epochs = 1
 
             # check_perf(mp_q, 0)
             # exit()

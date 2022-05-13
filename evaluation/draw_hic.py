@@ -58,9 +58,9 @@ print(f"Number of positions: {len(infos)}")
 one_hot = joblib.load("pickle/hg38_one_hot.gz")
 strategy = tf.distribute.MultiWorkerMirroredStrategy()
 with strategy.scope():
-    our_model = mo.hic_model(p.input_size, p.num_features, p.num_bins,
-                             len(head_tracks), len(hic_keys), p.hic_size,
-                             p.bin_size)
+    our_model = mo.human_model(p.input_size, p.num_features, p.num_bins,
+                               len(head_tracks), len(hic_keys), p.hic_size,
+                               p.bin_size)
     print(our_model.summary())
     our_model.get_layer("our_resnet").set_weights(joblib.load(p.model_path + "_res"))
     our_model.get_layer("our_head").set_weights(joblib.load(p.model_path + "_head_hg38"))

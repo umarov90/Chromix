@@ -140,6 +140,47 @@ def parse_tracks(species, bin_size, tracks_folder_parent):
     return track_names_col
 
 
+def parse_tracks_conservation(bin_size, tracks_folder_parent):
+    if Path(f"pickle/conservation_tracks.gz").is_file():
+        track_names = joblib.load(f"pickle/conservation_tracks.gz")
+    else:
+        ga = joblib.load(f"pickle/hg38_ga.gz")
+        tracks_folder = tracks_folder_parent + "conservation" + "/"
+        track_names = []
+        for filename in os.listdir(tracks_folder):
+            if filename.endswith(".gz"):
+                track = filename[:-len(".100nt.bed.gz")]
+                track_names.append(track)
+
+        print(f"Conservation {len(track_names)}")
+
+        step_size = 5
+        q = mp.Queue()
+        ps = []
+        start = 0
+        nproc = 28
+        end = len(track_names)
+        for t in range(start, end, step_size):
+            t_end = min(t+step_size, end)
+            sub_tracks = track_names[t:t_end]
+            p = mp.Process(target=parse_some_tracks,
+                           args=(q, sub_tracks, ga, bin_size, tracks_folder,))
+            p.start()
+            ps.append(p)
+            if len(ps) >= nproc:
+                for p in ps:
+                    p.join()
+                print(q.get())
+                ps = []
+
+        if len(ps) > 0:
+            for p in ps:
+                p.join()
+            print(q.get())
+        joblib.dump(track_names, f"pickle/conservation_tracks.gz", compress="lz4")
+    return track_names
+
+
 def parse_some_tracks(q, some_tracks, ga, bin_size, tracks_folder):
     for track in some_tracks:
         try:

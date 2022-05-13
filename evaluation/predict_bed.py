@@ -5,9 +5,9 @@ import tensorflow as tf
 import numpy as np
 
 
-head_name = "canFam3"
+head_name = "oviAri4"
 track_inds_bed = [0, 1, 2]
-predict_batch_size = 2
+predict_batch_size = 4
 
 p = MainParams()
 heads = joblib.load("pickle/heads.gz")
