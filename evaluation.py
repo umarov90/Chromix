@@ -14,8 +14,8 @@ def eval_perf(p, our_model, eval_track_names, eval_infos, should_draw, current_e
               loaded_tracks):
     import model as mo
     print("Model loaded")
-    predict_batch_size = p.GLOBAL_BATCH_SIZE
-    w_step = 500
+    predict_batch_size = 4
+    w_step = 40
 
     if Path(f"pickle/{label}_seq.gz").is_file():
         print(datetime.now().strftime('[%H:%M:%S] ') + "Loading sequences. ")
@@ -108,7 +108,7 @@ def eval_perf(p, our_model, eval_track_names, eval_infos, should_draw, current_e
 
     for w in range(0, len(test_seq), w_step):
         print(w, end=" ")
-        p1 = our_model.predict(mo.wrap2(test_seq[w:w + w_step], predict_batch_size), batch_size=predict_batch_size)
+        p1 = our_model.predict(mo.wrap2(test_seq[w:w + w_step], predict_batch_size))
         p2 = p1[:, :, p.mid_bin - 1] + p1[:, :, p.mid_bin] + p1[:, :, p.mid_bin + 1] + p1[:, :, p.mid_bin + 2] + p1[:, :, p.mid_bin - 2]
         if w == 0:
             predictions = p2
@@ -155,11 +155,11 @@ def eval_perf(p, our_model, eval_track_names, eval_infos, should_draw, current_e
             genes_performance.append(f"{gene}\t{sc}\t{np.mean(b)}\t{np.std(b)}")
 
     print("")
-    print(f"Across genes {len(corr_p)} {np.mean(corr_p)} {np.mean(corr_s)}")
+    print(f"Across tracks {len(corr_p)} {np.mean(corr_p)} {np.mean(corr_s)}")
     with open("genes_performance.tsv", 'w+') as f:
         f.write('\n'.join(genes_performance))
 
-    print("Across tracks (Genes)")
+    print("Across Genes")
     corrs_p = {}
     corrs_s = {}
     all_track_spearman = {}
@@ -211,7 +211,7 @@ def eval_perf(p, our_model, eval_track_names, eval_infos, should_draw, current_e
             myfile.write(str(np.mean([i[0] for i in corrs_p[track_type]])) + "\t")
         myfile.write("\n")
 
-    print("Across tracks (TSS)")
+    print("Across genes (TSS)")
     corrs_p = {}
     corrs_s = {}
     all_track_spearman = {}

@@ -92,13 +92,13 @@ def parse_hic(folder):
 
 
 def parse_tracks(species, bin_size, tracks_folder_parent):
-    track_names_col = []
-    for i in range(len(species)):
-        if Path(f"pickle/track_names_{species[i]}.gz").is_file():
-            track_names = joblib.load(f"pickle/track_names_{species[i]}.gz")
+    track_names_col = {}
+    for specie in species:
+        if Path(f"pickle/track_names_{specie}.gz").is_file():
+            track_names = joblib.load(f"pickle/track_names_{specie}.gz")
         else:
-            ga = joblib.load(f"pickle/{species[i]}_ga.gz")
-            tracks_folder = tracks_folder_parent + species[i] + "/"
+            ga = joblib.load(f"pickle/{specie}_ga.gz")
+            tracks_folder = tracks_folder_parent + specie + "/"
             track_names = []
             for filename in os.listdir(tracks_folder):
                 if filename.endswith(".gz"):
@@ -108,7 +108,7 @@ def parse_tracks(species, bin_size, tracks_folder_parent):
                     if size > 200000 or track.startswith("sc"):
                         track_names.append(track)
 
-            print(f"{species[i]} {len(track_names)}")
+            print(f"{specie} {len(track_names)}")
 
             step_size = 50
             q = mp.Queue()
@@ -133,56 +133,17 @@ def parse_tracks(species, bin_size, tracks_folder_parent):
                 for p in ps:
                     p.join()
                 print(q.get())
-            joblib.dump(track_names, f"pickle/track_names_{species[i]}.gz", compress="lz4")
-        track_names_col.append(track_names)
+            joblib.dump(track_names, f"pickle/track_names_{specie}.gz", compress="lz4")
+        track_names_col[specie] = track_names
 
     joblib.dump(track_names_col, "pickle/track_names_col.gz", compress="lz4")
     return track_names_col
 
 
-def parse_tracks_conservation(bin_size, tracks_folder_parent):
-    if Path(f"pickle/conservation_tracks.gz").is_file():
-        track_names = joblib.load(f"pickle/conservation_tracks.gz")
-    else:
-        ga = joblib.load(f"pickle/hg38_ga.gz")
-        tracks_folder = tracks_folder_parent + "conservation" + "/"
-        track_names = []
-        for filename in os.listdir(tracks_folder):
-            if filename.endswith(".gz"):
-                track = filename[:-len(".100nt.bed.gz")]
-                track_names.append(track)
-
-        print(f"Conservation {len(track_names)}")
-
-        step_size = 5
-        q = mp.Queue()
-        ps = []
-        start = 0
-        nproc = 28
-        end = len(track_names)
-        for t in range(start, end, step_size):
-            t_end = min(t+step_size, end)
-            sub_tracks = track_names[t:t_end]
-            p = mp.Process(target=parse_some_tracks,
-                           args=(q, sub_tracks, ga, bin_size, tracks_folder,))
-            p.start()
-            ps.append(p)
-            if len(ps) >= nproc:
-                for p in ps:
-                    p.join()
-                print(q.get())
-                ps = []
-
-        if len(ps) > 0:
-            for p in ps:
-                p.join()
-            print(q.get())
-        joblib.dump(track_names, f"pickle/conservation_tracks.gz", compress="lz4")
-    return track_names
-
-
 def parse_some_tracks(q, some_tracks, ga, bin_size, tracks_folder):
     for track in some_tracks:
+        if Path(main.p.parsed_tracks_folder + track).is_file():
+            continue
         try:
             fn = tracks_folder + f"{track}.100nt.bed.gz"
             gast = copy.deepcopy(ga)
@@ -207,13 +168,15 @@ def parse_some_tracks(q, some_tracks, ga, bin_size, tracks_folder):
                 gast[key][pos] += score
 
             max_val = -1
+            min_val = 0
             # all_vals = None
+            for key in gast.keys():
+                min_val = min(np.min(gast[key]), min_val)
             for key in gast.keys():
                 if "scEnd5" in track:
                     gast[key] = np.log10(np.exp(gast[key]))
                 else:
-                    gast[key] = np.log10(gast[key] + 1)
-
+                    gast[key] = np.log10(gast[key] + 1 + abs(min_val))
                 max_val = max(np.max(gast[key]), max_val)
                 # if all_vals is not None:
                 #     all_vals = np.concatenate((all_vals, gast[key][tss_loc[key]]))

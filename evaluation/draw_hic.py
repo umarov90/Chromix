@@ -36,8 +36,8 @@ def recover_shape(v, size_X):
 
 eval_gt_full = []
 p = MainParams()
-w_step = 2
-predict_batch_size = 1
+w_step = 40
+predict_batch_size = 4
 heads = joblib.load("pickle/heads.gz")
 head_id = 0
 head_tracks = heads[head_id]

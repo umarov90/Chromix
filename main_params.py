@@ -15,9 +15,9 @@ class MainParams:
         self.num_bins = 1001
         self.half_num_regions = int(self.num_bins / 2)
         self.mid_bin = math.floor(self.num_bins / 2)
-        self.BATCH_SIZE = 2
-        self.GLOBAL_BATCH_SIZE = 8 * self.BATCH_SIZE
-        self.STEPS_PER_EPOCH = 100
+        self.BATCH_SIZE = 1
+        self.GLOBAL_BATCH_SIZE = 4 * self.BATCH_SIZE
+        self.STEPS_PER_EPOCH = 200
         self.num_epochs = 1000
         self.hic_track_size = 1
         self.num_features = 4
@@ -35,7 +35,7 @@ class MainParams:
         self.model_name = "hic_model.h5"
         self.model_path = self.model_folder + self.model_name
         self.figures_folder = "figures_1"
-        self.tracks_folder = "/Users/ramzan/variants_100/tracks/"
+        self.tracks_folder = "/media/user/PASSPORT1/variants_100/tracks/"
         Path(self.model_folder).mkdir(parents=True, exist_ok=True)
         Path(self.figures_folder + "/" + "attribution").mkdir(parents=True, exist_ok=True)
         Path(self.figures_folder + "/" + "tracks").mkdir(parents=True, exist_ok=True)

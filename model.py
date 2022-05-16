@@ -7,13 +7,13 @@ from tensorflow.keras.models import Model
 import tensorflow as tf
 import numpy as np
 
-dropout_rate = 0.3
+dropout_rate = 0.0
 leaky_alpha = 0.2
 num_patches = 4201
 num_filters = 1026
 
 
-def human_model(input_size, num_features, num_regions, cell_num, hic_num, hic_size, con_num, bin_size):
+def human_model(input_size, num_features, num_regions, hic_num, hic_size, bin_size, one_d_heads):
     input_shape = (input_size, num_features)
     inputs = Input(shape=input_shape, dtype=tf.float32)
     x = inputs
@@ -21,13 +21,15 @@ def human_model(input_size, num_features, num_regions, cell_num, hic_num, hic_si
     our_resnet = Model(inputs, resnet_output, name="our_resnet")
 
     hic_input = Input(shape=(num_patches, num_filters))
-    hx = Conv1D(32, kernel_size=1, strides=1, name="hic_layer_1", activation=LeakyReLU(alpha=leaky_alpha))(hic_input)
+    hi = Conv1D(48, kernel_size=1, strides=1, name="hic_layer_1")(hic_input)
+    hx = LeakyReLU(alpha=leaky_alpha, name="hic_act")(hi)
+    hxp = tf.keras.layers.AveragePooling1D(pool_size=50)(hi)
 
     hx = tf.transpose(hx, [0, 2, 1])
-    hx = Dense(input_size // 5000, kernel_size=1, strides=1, name="hic_layer_2", activation=LeakyReLU(alpha=leaky_alpha))(hx)
+    hx = Dense(input_size // 5000, name="hic_layer_2", activation=LeakyReLU(alpha=leaky_alpha))(hx)
     hx = tf.transpose(hx, [0, 2, 1])
 
-    hx = Flatten()(hx)
+    hx = Flatten()(hx) + Flatten()(hxp)
     h_layers = []
     for h in range(hic_num):
         h_layers.append(Dense(hic_size)(hx))
@@ -35,6 +37,19 @@ def human_model(input_size, num_features, num_regions, cell_num, hic_num, hic_si
     # print(hic_output)
     our_hic = Model(hic_input, hic_output, name="our_hic")
 
+    all_heads = []
+    for key in one_d_heads.keys():
+        new_head = make_head(len(one_d_heads[key]), num_regions, "our_" + key)
+        all_heads.append(new_head(our_resnet(inputs)))
+    all_heads.append(our_hic(our_resnet(inputs)))
+
+    our_model = Model(inputs, all_heads, name="our_model")
+    # print("\nModel constructed")
+    # print(our_model.summary())
+    return our_model
+
+
+def make_head(track_num, num_regions, name):
     head_input = Input(shape=(num_patches, num_filters))
     x = head_input
 
@@ -48,35 +63,12 @@ def human_model(input_size, num_features, num_regions, cell_num, hic_num, hic_si
 
     x = Dropout(dropout_rate, input_shape=(num_regions, num_filters))(x)
 
-    x = Conv1D(2048, kernel_size=1, strides=1, name="pointwise", activation=LeakyReLU(alpha=leaky_alpha))(x)
-    outputs = Conv1D(cell_num, kernel_size=1, strides=1, name="last_conv1d")(x)
+    x = Conv1D(2048, kernel_size=1, strides=1, name=name + "_pointwise", activation=LeakyReLU(alpha=leaky_alpha))(x)
+    outputs = Conv1D(track_num, kernel_size=1, strides=1, name=name+"_last_conv1d")(x)
     outputs = tf.transpose(outputs, [0, 2, 1])
     # print(outputs)
     head_output = outputs
-    our_head = Model(head_input, head_output, name="our_head")
-    # print(our_head)
-
-    con_head_input = Input(shape=(num_patches, num_filters))
-    x = con_head_input
-
-    trim = (x.shape[-2] - num_regions) // 2
-    x = x[..., trim:-trim, :]
-
-    x = Dropout(dropout_rate, input_shape=(num_regions, num_filters))(x)
-
-    x = Conv1D(2048, kernel_size=1, strides=1, name="pointwise_con", activation=LeakyReLU(alpha=leaky_alpha))(x)
-    outputs = Conv1D(con_num, kernel_size=1, strides=1, name="con_last_conv1d")(x)
-    outputs = tf.transpose(outputs, [0, 2, 1])
-    # print(outputs)
-    con_head_output = outputs
-    our_con_head = Model(con_head_input, con_head_output, name="our_con")
-
-    our_model = Model(inputs, [our_head(our_resnet(inputs)),
-                               our_hic(our_resnet(inputs)),
-                               our_con_head(our_resnet(inputs))], name="our_model")
-    # print("\nModel constructed")
-    # print(our_model.summary())
-    return our_model
+    return Model(head_input, head_output, name=name)
 
 
 def small_model(input_size, num_features, num_regions, cell_num, bin_size):
@@ -222,10 +214,9 @@ def wrap_with_hic(input_sequences, output_scores, bs):
         return train_data
 
 
-def wrap_with_hic_con(input_sequences, output_scores, bs):
+def wrap_for_human_training(input_sequences, output_scores, bs):
     with tf.device('cpu:0'):
-        train_data = tf.data.Dataset.from_tensor_slices(
-            (input_sequences, {"our_head": output_scores[0], "our_hic": output_scores[1], "our_con": output_scores[2]}))
+        train_data = tf.data.Dataset.from_tensor_slices((input_sequences, output_scores))
         train_data = train_data.batch(bs)
         options = tf.data.Options()
         options.experimental_distribute.auto_shard_policy = tf.data.experimental.AutoShardPolicy.DATA
