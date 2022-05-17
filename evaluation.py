@@ -8,14 +8,17 @@ from scipy import stats
 import math
 import visualization as viz
 import common as cm
+import parse_data as parser
+import multiprocessing as mp
 
 
-def eval_perf(p, our_model, eval_track_names, eval_infos, should_draw, current_epoch, label, one_hot,
-              loaded_tracks):
+def eval_perf(p, our_model, head, eval_infos, should_draw, current_epoch, label, one_hot):
     import model as mo
     print("Model loaded")
-    predict_batch_size = 4
-    w_step = 40
+
+    eval_track_names = []
+    for key in head.keys():
+        eval_track_names += head[key]
 
     if Path(f"pickle/{label}_seq.gz").is_file():
         print(datetime.now().strftime('[%H:%M:%S] ') + "Loading sequences. ")
@@ -28,51 +31,30 @@ def eval_perf(p, our_model, eval_track_names, eval_infos, should_draw, current_e
         # eval_gt_tss = pickle.load(open(f"pickle/{chr_name}_eval_gt_tss.gz", "rb"))
         print(datetime.now().strftime('[%H:%M:%S] ') + "Finished loading. ")
     else:
+        load_info = []
+        for j, info in enumerate(eval_infos):
+            mid = int(info[1] / p.bin_size)
+            load_info.append([info[0], mid])
+
+        gt = parser.par_load_data(load_info, eval_track_names, p)
+
         eval_gt = {}
         eval_gt_tss = {}
         for i in range(len(eval_infos)):
             eval_gt[eval_infos[i][2]] = {}
-        for i, key in enumerate(eval_track_names):
-            if i % 100 == 0:
-                print(i, end=" ")
-                gc.collect()
-            if key in loaded_tracks.keys():
-                parsed_track = loaded_tracks[key]
-            else:
-                parsed_track = joblib.load(p.parsed_tracks_folder + key)
-                # with open(p.parsed_tracks_folder + key, 'rb') as fp:
-                #     parsed_track = pickle.load(fp)
-            mids = []
-            for j, info in enumerate(eval_infos):
-                mid = int(info[1] / p.bin_size)
-                # if mid in mids:
-                #     continue
-                # mids.append(mid)
-                # val = parsed_track[info[0]][mid]
-                val = parsed_track[info[0]][mid - 1] + parsed_track[info[0]][mid] + \
-                      parsed_track[info[0]][mid + 1] + parsed_track[info[0]][mid + 2] + parsed_track[info[0]][mid - 2]
-                eval_gt_tss.setdefault(key, []).append(val)
-                eval_gt[info[2]].setdefault(key, []).append(val)
-            if i == 0:
-                print(f"Skipped: {len(eval_infos) - len(mids)}")
 
-        for i, gene in enumerate(eval_gt.keys()):
-            if i % 10 == 0:
-                print(i, end=" ")
-            for track in eval_track_names:
+        for i, info in enumerate(eval_infos):
+            for j, track in enumerate(eval_track_names):
+                eval_gt_tss.setdefault(track, []).append(gt[i, j])
+                eval_gt[info[2]].setdefault(track, []).append(gt[i, j])
+
+        for track in eval_track_names:
+            for gene in eval_gt.keys():
                 eval_gt[gene][track] = np.mean(eval_gt[gene][track])
-        print("")
-
-        for key in eval_gt_tss.keys():
-            eval_gt_tss[key] = np.asarray(eval_gt_tss[key], dtype=np.float16)
 
         test_seq = []
-        starts = []
         for info in eval_infos:
             start = int(info[1] - (info[1] % p.bin_size) - p.half_size)
-            # if start in starts:
-            #     continue
-            # starts.append(start)
             extra = start + p.input_size - len(one_hot[info[0]])
             if start < 0:
                 ns = one_hot[info[0]][0:start + p.input_size]
@@ -82,10 +64,7 @@ def eval_perf(p, our_model, eval_track_names, eval_infos, should_draw, current_e
                 ns = np.concatenate((ns, np.zeros((extra, 5))))
             else:
                 ns = one_hot[info[0]][start:start + p.input_size]
-            if len(ns) != p.input_size:
-                print(f"Wrong! {ns.shape} {start} {extra} {info[1]}")
             test_seq.append(ns[:, :-1])
-        print(f"Skipped: {len(eval_infos) - len(starts)}")
         test_seq = np.asarray(test_seq, dtype=bool)
         print(f"Lengths: {len(test_seq)} {len(eval_gt)}")
         gc.collect()
@@ -106,10 +85,11 @@ def eval_perf(p, our_model, eval_track_names, eval_infos, should_draw, current_e
     for i in range(len(eval_infos)):
         final_pred[eval_infos[i][2]] = {}
 
-    for w in range(0, len(test_seq), w_step):
+    for w in range(0, len(test_seq), p.w_step):
         print(w, end=" ")
-        p1 = our_model.predict(mo.wrap2(test_seq[w:w + w_step], predict_batch_size))
-        p2 = p1[:, :, p.mid_bin - 1] + p1[:, :, p.mid_bin] + p1[:, :, p.mid_bin + 1] + p1[:, :, p.mid_bin + 2] + p1[:, :, p.mid_bin - 2]
+        p = our_model.predict(mo.wrap2(test_seq[w:w + p.w_step], p.predict_batch_size))
+        p1 = np.concatenate((p[0], p[1], p[2]), axis=1)
+        p2 = p1[:, :, p.mid_bin - 1] + p1[:, :, p.mid_bin] + p1[:, :, p.mid_bin + 1]
         if w == 0:
             predictions = p2
         else:

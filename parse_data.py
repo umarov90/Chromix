@@ -314,3 +314,56 @@ def parse_one_track(ga, bin_size, fn):
         gast[key] = gast[key] / max_val
 
     return gast
+
+
+def load_data(mp_q, p, tracks, scores, t, t_end):
+    scores_after_loading = np.zeros((len(scores), t_end - t, p.num_bins), dtype=np.float32)
+    for i, track_name in enumerate(tracks):
+        parsed_track = joblib.load(p.parsed_tracks_folder + track_name)
+        for j in range(len(scores)):
+            scores_after_loading[j, i] = parsed_track[scores[j][0]][int(scores[j][1]):int(scores[j][2])].copy()
+    joblib.dump(scores_after_loading, f"{p.temp_folder}data{t}", compress="lz4")
+    mp_q.put(None)
+
+
+def load_data_sum(mp_q, p, tracks, scores, t, t_end):
+    scores_after_loading = np.zeros((len(scores), t_end - t), dtype=np.float32)
+    for i, track_name in enumerate(tracks):
+        parsed_track = joblib.load(p.parsed_tracks_folder + track_name)
+        for j in range(len(scores)):
+            # 3 or 6 bins?
+            pt = parsed_track[scores[j, 0]]
+            mid = int(scores[j][1])
+            scores_after_loading[j, i] = pt[mid - 1] + pt[mid] + pt[mid + 1]
+    joblib.dump(scores_after_loading, f"{p.temp_folder}data{t}", compress="lz4")
+    mp_q.put(None)
+
+
+def par_load_data(output_scores_info, tracks, p):
+    mp_q = mp.Queue()
+    ps = []
+    start = 0
+    nproc = min(mp.cpu_count(), len(tracks))
+    step_size = len(tracks) // nproc
+    end = len(tracks)
+    if len(output_scores_info[0]) == 3:
+        load_func = load_data
+    else:
+        load_func = load_data_sum
+    for t in range(start, end, step_size):
+        t_end = min(t + step_size, end)
+        load_proc = mp.Process(target=load_func,
+                               args=(mp_q, p, tracks[t:t_end], output_scores_info, t, t_end,))
+        load_proc.start()
+        ps.append(load_proc)
+
+    for load_proc in ps:
+        load_proc.join()
+    print(mp_q.get())
+
+    output_scores = []
+    for t in range(start, end, step_size):
+        output_scores.append(joblib.load(f"{p.temp_folder}data{t}"))
+
+    gc.collect()
+    return np.concatenate(output_scores, axis=1, dtype=np.float32)

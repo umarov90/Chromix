@@ -10,7 +10,7 @@ import numpy as np
 dropout_rate = 0.0
 leaky_alpha = 0.2
 num_patches = 4201
-num_filters = 1026
+num_filters = 885
 
 
 def human_model(input_size, num_features, num_regions, hic_num, hic_size, bin_size, one_d_heads):
@@ -21,12 +21,12 @@ def human_model(input_size, num_features, num_regions, hic_num, hic_size, bin_si
     our_resnet = Model(inputs, resnet_output, name="our_resnet")
 
     hic_input = Input(shape=(num_patches, num_filters))
-    hi = Conv1D(48, kernel_size=1, strides=1, name="hic_layer_1")(hic_input)
+    hi = Conv1D(32, kernel_size=1, strides=1, name="hic_layer_1")(hic_input)
     hx = LeakyReLU(alpha=leaky_alpha, name="hic_act")(hi)
-    hxp = tf.keras.layers.AveragePooling1D(pool_size=50)(hi)
+    hxp = tf.keras.layers.AveragePooling1D(pool_size=100)(hi)
 
     hx = tf.transpose(hx, [0, 2, 1])
-    hx = Dense(input_size // 5000, name="hic_layer_2", activation=LeakyReLU(alpha=leaky_alpha))(hx)
+    hx = Dense(input_size // 10000, name="hic_layer_2", activation=LeakyReLU(alpha=leaky_alpha))(hx)
     hx = tf.transpose(hx, [0, 2, 1])
 
     hx = Flatten()(hx) + Flatten()(hxp)
@@ -45,7 +45,7 @@ def human_model(input_size, num_features, num_regions, hic_num, hic_size, bin_si
 
     our_model = Model(inputs, all_heads, name="our_model")
     # print("\nModel constructed")
-    # print(our_model.summary())
+    print(our_model.summary())
     return our_model
 
 
@@ -126,7 +126,7 @@ def resnet_layer(inputs,
 
 def resnet(input_x, input_size, bin_size):
     # Initial number of filters
-    num_filters = 512
+    num_filters = 384
 
     # First convolutional layer. Since it is first, it is not preceded by activation and batch normalization
     patchify_val = 3
@@ -138,21 +138,23 @@ def resnet(input_x, input_size, bin_size):
                      name="rl_1_")
     current_len = input_size // patchify_val
     # Instantiate the stack of residual units
-    num_blocks = 6
+    num_blocks = 7
     for block in range(num_blocks):
         cname = "rl_" + str(block) + "_"
         strides = 1
         y = x
-        if block != num_blocks - 1:
+        # at block num_blocks - 2 final resolution is reached
+        if block != num_blocks - 2:
             num_filters = int(num_filters * 1.15)
         activation = True
         if block != 0:
-            # Downsample
-            strides = 2
-            current_len = math.ceil(current_len / 2)
-            if block == num_blocks - 1:
-                current_len = input_size // bin_size
-            if block > 3:
+            if block != num_blocks - 1:
+                # Downsample
+                strides = 2
+                current_len = math.ceil(current_len / 2)
+                if block == num_blocks - 2:
+                    current_len = input_size // bin_size
+            if block > 4:
                 y = LeakyReLU(alpha=leaky_alpha, name="dwn_" + str(block))(y)
                 y = tf.transpose(y, [0, 2, 1])
                 # Replace by conv maybe
@@ -175,7 +177,7 @@ def resnet(input_x, input_size, bin_size):
         y = resnet_layer(inputs=y,
                          num_filters=num_filters,
                          name=cname + "2_")
-        if block != num_blocks - 1:
+        if block != num_blocks - 2:
             # linear projection residual shortcut connection to match changed dims
             x = resnet_layer(inputs=x,
                              num_filters=num_filters,
