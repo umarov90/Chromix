@@ -19,9 +19,9 @@ from scipy.ndimage import gaussian_filter
 from sklearn.cluster import KMeans
 
 
-def parse_hic(folder):
-    if Path("pickle/hic_keys.gz").is_file():
-        return joblib.load("pickle/hic_keys.gz")
+def parse_hic(p):
+    if Path(f"{p.pickle_folder}hic_keys.gz").is_file():
+        return joblib.load(f"{p.pickle_folder}hic_keys.gz")
     else:
         hic_keys = []
         directory = "hic"
@@ -65,7 +65,7 @@ def parse_hic(folder):
 
                 for chr in chrd:
                     joblib.dump(df.loc[df['chrom'] == chr].sort_values(by=['start1']),
-                                folder + t_name + chr, compress="lz4")
+                                p.parsed_hic_folder + t_name + chr, compress="lz4")
                 print(t_name)
                 del df
                 gc.collect()
@@ -74,7 +74,7 @@ def parse_hic(folder):
                 print(exc)
                 print(f"!!!!!!!!!!!!!!!{t_name}")
 
-        joblib.dump(hic_keys, "pickle/hic_keys.gz", compress="lz4")
+        joblib.dump(hic_keys, f"{p.pickle_folder}hic_keys.gz", compress="lz4")
         chromosomes = ["chrX", "chrY"]
         for i in range(1, 23):
             chromosomes.append("chr" + str(i))
@@ -83,22 +83,22 @@ def parse_hic(folder):
             hdf = {}
             for chr in chromosomes:
                 try:
-                    hdf[chr] = joblib.load(folder + key + chr)
+                    hdf[chr] = joblib.load(p.parsed_hic_folder + key + chr)
                 except:
                     pass
-            joblib.dump(hdf, folder + key, compress="lz4")
+            joblib.dump(hdf, p.parsed_hic_folder + key, compress="lz4")
             print(key)
         return hic_keys
 
 
-def parse_tracks(species, bin_size, tracks_folder_parent):
+def parse_tracks(p):
     track_names_col = {}
-    for specie in species:
-        if Path(f"pickle/track_names_{specie}.gz").is_file():
-            track_names = joblib.load(f"pickle/track_names_{specie}.gz")
+    for specie in p.species:
+        if Path(f"{p.pickle_folder}track_names_{specie}.gz").is_file():
+            track_names = joblib.load(f"{p.pickle_folder}track_names_{specie}.gz")
         else:
-            ga = joblib.load(f"pickle/{specie}_ga.gz")
-            tracks_folder = tracks_folder_parent + specie + "/"
+            ga = joblib.load(f"{p.pickle_folder}{specie}_ga.gz")
+            tracks_folder = p.tracks_folder + specie + "/"
             track_names = []
             for filename in os.listdir(tracks_folder):
                 if filename.endswith(".gz"):
@@ -119,24 +119,24 @@ def parse_tracks(species, bin_size, tracks_folder_parent):
             for t in range(start, end, step_size):
                 t_end = min(t+step_size, end)
                 sub_tracks = track_names[t:t_end]
-                p = mp.Process(target=parse_some_tracks,
-                               args=(q, sub_tracks, ga, bin_size, tracks_folder,))
-                p.start()
-                ps.append(p)
+                proc = mp.Process(target=parse_some_tracks,
+                               args=(q, sub_tracks, ga, p.bin_size, tracks_folder,))
+                proc.start()
+                ps.append(proc)
                 if len(ps) >= nproc:
-                    for p in ps:
-                        p.join()
+                    for proc in ps:
+                        proc.join()
                     print(q.get())
                     ps = []
 
             if len(ps) > 0:
-                for p in ps:
-                    p.join()
+                for proc in ps:
+                    proc.join()
                 print(q.get())
-            joblib.dump(track_names, f"pickle/track_names_{specie}.gz", compress="lz4")
+            joblib.dump(track_names, f"{p.pickle_folder}track_names_{specie}.gz", compress="lz4")
         track_names_col[specie] = track_names
 
-    joblib.dump(track_names_col, "pickle/track_names_col.gz", compress="lz4")
+    joblib.dump(track_names_col, f"{p.pickle_folder}track_names_col.gz", compress="lz4")
     return track_names_col
 
 
@@ -202,11 +202,11 @@ def parse_some_tracks(q, some_tracks, ga, bin_size, tracks_folder):
     q.put(None)
 
 
-def parse_sequences(species, bin_size):
-    if Path("pickle/train_info.gz").is_file():
-        test_info = joblib.load("pickle/test_info.gz")
-        train_info = joblib.load("pickle/train_info.gz")
-        protein_coding = joblib.load("pickle/protein_coding.gz")
+def parse_sequences(p):
+    if Path(f"{p.pickle_folder}train_info.gz").is_file():
+        test_info = joblib.load(f"{p.pickle_folder}test_info.gz")
+        train_info = joblib.load(f"{p.pickle_folder}train_info.gz")
+        protein_coding = joblib.load(f"{p.pickle_folder}protein_coding.gz")
     else:
         gene_info = pd.read_csv("data/hg38.GENCODEv38.pc_lnc.gene.info.tsv", sep="\t", index_col=False)
         train_tss = pd.read_csv("data/final_train_tss.bed", sep="\t", index_col=False, names=["chrom", "start", "end", "geneID", "score", "strand"])
@@ -239,15 +239,15 @@ def parse_sequences(species, bin_size):
 
         print(f"Training set complete {len(train_info)}")
 
-        joblib.dump(test_info, "pickle/test_info.gz", compress="lz4")
-        joblib.dump(train_info, "pickle/train_info.gz", compress="lz4")
-        joblib.dump(protein_coding, "pickle/protein_coding.gz", compress="lz4")
+        joblib.dump(test_info, f"{p.pickle_folder}test_info.gz", compress="lz4")
+        joblib.dump(train_info, f"{p.pickle_folder}train_info.gz", compress="lz4")
+        joblib.dump(protein_coding, f"{p.pickle_folder}protein_coding.gz", compress="lz4")
 
-    for sp in species:
-        if Path(f"pickle/{sp}_regions.gz").is_file():
+    for sp in p.species:
+        if Path(f"{p.pickle_folder}{sp}_regions.gz").is_file():
             continue
         print(sp)
-        genome, ga = cm.parse_genome(f"data/species/{sp}/genome.fa", bin_size)
+        genome, ga = cm.parse_genome(f"data/species/{sp}/genome.fa", p.bin_size)
         regions = pd.read_csv(f"data/species/{sp}/windows.bed", sep="\t",
                                     index_col=False, names=["chrom", "start", "end"])
         regions["mid"] = (regions["start"] + (regions["end"] - regions["start"]) / 2)
@@ -276,9 +276,9 @@ def parse_sequences(species, bin_size):
             print(f"{chromosome}: {np.sum(tss_layer)}")
             one_hot[chromosome] = np.hstack([one_hot[chromosome], tss_layer])
 
-        joblib.dump(one_hot, f"pickle/{sp}_one_hot.gz", compress="lz4")
-        joblib.dump(ga, f"pickle/{sp}_ga.gz", compress=3)
-        joblib.dump(regions, f"pickle/{sp}_regions.gz", compress="lz4")
+        joblib.dump(one_hot, f"{p.pickle_folder}{sp}_one_hot.gz", compress="lz4")
+        joblib.dump(ga, f"{p.pickle_folder}{sp}_ga.gz", compress=3)
+        joblib.dump(regions, f"{p.pickle_folder}{sp}_regions.gz", compress="lz4")
         gc.collect()
 
     return train_info, test_info, protein_coding
@@ -332,7 +332,7 @@ def load_data_sum(mp_q, p, tracks, scores, t, t_end):
         parsed_track = joblib.load(p.parsed_tracks_folder + track_name)
         for j in range(len(scores)):
             # 3 or 6 bins?
-            pt = parsed_track[scores[j, 0]]
+            pt = parsed_track[scores[j][0]]
             mid = int(scores[j][1])
             scores_after_loading[j, i] = pt[mid - 1] + pt[mid] + pt[mid + 1]
     joblib.dump(scores_after_loading, f"{p.temp_folder}data{t}", compress="lz4")

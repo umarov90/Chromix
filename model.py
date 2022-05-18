@@ -9,7 +9,7 @@ import numpy as np
 
 dropout_rate = 0.0
 leaky_alpha = 0.2
-num_patches = 4201
+num_patches = 2101
 num_filters = 885
 
 
@@ -21,9 +21,9 @@ def human_model(input_size, num_features, num_regions, hic_num, hic_size, bin_si
     our_resnet = Model(inputs, resnet_output, name="our_resnet")
 
     hic_input = Input(shape=(num_patches, num_filters))
-    hi = Conv1D(32, kernel_size=1, strides=1, name="hic_layer_1")(hic_input)
+    hi = Conv1D(48, kernel_size=1, strides=1, name="hic_layer_1")(hic_input)
     hx = LeakyReLU(alpha=leaky_alpha, name="hic_act")(hi)
-    hxp = tf.keras.layers.AveragePooling1D(pool_size=100)(hi)
+    hxp = tf.keras.layers.MaxPooling1D(pool_size=50)(hi)
 
     hx = tf.transpose(hx, [0, 2, 1])
     hx = Dense(input_size // 10000, name="hic_layer_2", activation=LeakyReLU(alpha=leaky_alpha))(hx)
@@ -143,17 +143,16 @@ def resnet(input_x, input_size, bin_size):
         cname = "rl_" + str(block) + "_"
         strides = 1
         y = x
-        # at block num_blocks - 2 final resolution is reached
-        if block != num_blocks - 2:
+        # at block num_blocks - 1 final resolution is reached
+        if block != num_blocks - 1:
             num_filters = int(num_filters * 1.15)
         activation = True
         if block != 0:
-            if block != num_blocks - 1:
-                # Downsample
-                strides = 2
-                current_len = math.ceil(current_len / 2)
-                if block == num_blocks - 2:
-                    current_len = input_size // bin_size
+            # Downsample
+            strides = 2
+            current_len = math.ceil(current_len / 2)
+            if block == num_blocks - 1:
+                current_len = input_size // bin_size
             if block > 4:
                 y = LeakyReLU(alpha=leaky_alpha, name="dwn_" + str(block))(y)
                 y = tf.transpose(y, [0, 2, 1])
@@ -177,7 +176,7 @@ def resnet(input_x, input_size, bin_size):
         y = resnet_layer(inputs=y,
                          num_filters=num_filters,
                          name=cname + "2_")
-        if block != num_blocks - 2:
+        if block != num_blocks - 1:
             # linear projection residual shortcut connection to match changed dims
             x = resnet_layer(inputs=x,
                              num_filters=num_filters,

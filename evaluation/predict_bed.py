@@ -7,18 +7,16 @@ import numpy as np
 
 head_name = "oviAri4"
 track_inds_bed = [0, 1, 2]
-predict_batch_size = 4
-
 p = MainParams()
 heads = joblib.load("pickle/heads.gz")
-head = heads[p.species.index(head_name)]
+head = heads[head_name]
 one_hot = joblib.load(f"pickle/{head_name}_one_hot.gz")
 
 strategy = tf.distribute.MultiWorkerMirroredStrategy()
 with strategy.scope():
     our_model = mo.small_model(p.input_size, p.num_features, p.num_bins, len(head), p.bin_size)
     our_model.get_layer("our_resnet").set_weights(joblib.load(p.model_path + "_res"))
-    our_model.get_layer("our_head").set_weights(joblib.load(p.model_path + "_head_" + head_name))
+    our_model.get_layer("our_expression").set_weights(joblib.load(p.model_path + "_expression_" + head_name))
 
 chrom = "chr1"
 start_val = {}
@@ -41,7 +39,7 @@ for expression_region in range(0, len(one_hot[chrom]), p.bin_size * p.num_bins):
     if len(batch) > batch_size:
         print(expression_region, end=" ")
         batch = np.asarray(batch, dtype=bool)
-        pred = our_model.predict(mo.wrap2(batch, predict_batch_size), batch_size=predict_batch_size)
+        pred = our_model.predict(mo.wrap2(batch, p.predict_batch_size), batch_size=p.predict_batch_size)
         for c, locus in enumerate(pred):
             start1 = starts_for_bins[c]
             for b in range(p.num_bins):

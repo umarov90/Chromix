@@ -6,19 +6,19 @@ import pathlib
 
 class MainParams:
     def __init__(self):
-        self.input_size = 420100
+        self.input_size = 420200
         self.half_size = int(self.input_size / 2)
-        self.bin_size = 100
+        self.bin_size = 200
         self.hic_bin_size = 10000
         self.num_hic_bins = 40
         self.half_size_hic = 200000
-        self.num_bins = 1001
+        self.num_bins = 501
         self.half_num_regions = int(self.num_bins / 2)
         self.mid_bin = math.floor(self.num_bins / 2)
         self.BATCH_SIZE = 1
         self.GLOBAL_BATCH_SIZE = 4 * self.BATCH_SIZE
         self.predict_batch_size = 4 * self.BATCH_SIZE
-        self.w_step = 40
+        self.w_step = 100
         self.STEPS_PER_EPOCH = 200
         self.num_epochs = 1000
         self.hic_track_size = 1
@@ -34,6 +34,7 @@ class MainParams:
         self.parsed_hic_folder = folders[2]
         self.model_folder = folders[3]
         self.temp_folder = folders[4]
+        self.pickle_folder = folders[5]
         self.model_name = "hic_model.h5"
         self.model_path = self.model_folder + self.model_name
         self.figures_folder = "figures_1"

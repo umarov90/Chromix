@@ -9,35 +9,32 @@ import math
 import visualization as viz
 import common as cm
 import parse_data as parser
-import multiprocessing as mp
 
 
 def eval_perf(p, our_model, head, eval_infos, should_draw, current_epoch, label, one_hot):
     import model as mo
-    print("Model loaded")
-
     eval_track_names = []
     for key in head.keys():
         eval_track_names += head[key]
 
-    if Path(f"pickle/{label}_seq.gz").is_file():
+    if Path(f"{p.pickle_folder}{label}_seq.gz").is_file():
         print(datetime.now().strftime('[%H:%M:%S] ') + "Loading sequences. ")
-        test_seq = joblib.load(f"pickle/{label}_seq.gz")
+        test_seq = joblib.load(f"{p.pickle_folder}/{label}_seq.gz")
         print(datetime.now().strftime('[%H:%M:%S] ') + "Loading gt 1. ")
-        # eval_gt = joblib.load(f"pickle/{chr_name}_eval_gt.gz")
-        eval_gt = pickle.load(open(f"pickle/{label}_eval_gt.gz", "rb"))
+        # eval_gt = joblib.load(f"{p.pickle_folder}/{chr_name}_eval_gt.gz")
+        eval_gt = pickle.load(open(f"{p.pickle_folder}/{label}_eval_gt.gz", "rb"))
         print(datetime.now().strftime('[%H:%M:%S] ') + "Loading gt 2. ")
-        eval_gt_tss = joblib.load(f"pickle/{label}_eval_gt_tss.gz")
-        # eval_gt_tss = pickle.load(open(f"pickle/{chr_name}_eval_gt_tss.gz", "rb"))
+        # eval_gt_tss = joblib.load(f"{p.pickle_folder}/{label}_eval_gt_tss.gz")
+        eval_gt_tss = pickle.load(open(f"{p.pickle_folder}/{label}_eval_gt_tss.gz", "rb"))
         print(datetime.now().strftime('[%H:%M:%S] ') + "Finished loading. ")
     else:
         load_info = []
         for j, info in enumerate(eval_infos):
             mid = int(info[1] / p.bin_size)
             load_info.append([info[0], mid])
-
+        print("Loading ground truth tracks")
         gt = parser.par_load_data(load_info, eval_track_names, p)
-
+        print("Extracting evaluation regions")
         eval_gt = {}
         eval_gt_tss = {}
         for i in range(len(eval_infos)):
@@ -51,7 +48,7 @@ def eval_perf(p, our_model, head, eval_infos, should_draw, current_epoch, label,
         for track in eval_track_names:
             for gene in eval_gt.keys():
                 eval_gt[gene][track] = np.mean(eval_gt[gene][track])
-
+        print("Extracting DNA regions")
         test_seq = []
         for info in eval_infos:
             start = int(info[1] - (info[1] % p.bin_size) - p.half_size)
@@ -68,18 +65,15 @@ def eval_perf(p, our_model, head, eval_infos, should_draw, current_epoch, label,
         test_seq = np.asarray(test_seq, dtype=bool)
         print(f"Lengths: {len(test_seq)} {len(eval_gt)}")
         gc.collect()
-        joblib.dump(test_seq, f"pickle/{label}_seq.gz", compress="lz4")
-        # pickle.dump(test_seq, open(f"pickle/{chr_name}_seq.gz", "wb"), protocol=pickle.HIGHEST_PROTOCOL)
-        del test_seq
+        print("Dumping the evaluation data")
+        joblib.dump(test_seq, f"{p.pickle_folder}/{label}_seq.gz", compress="lz4")
+        # pickle.dump(test_seq, open(f"{p.pickle_folder}/{chr_name}_seq.gz", "wb"), protocol=pickle.HIGHEST_PROTOCOL)
         gc.collect()
-        # joblib.dump(eval_gt, f"pickle/{chr_name}_eval_gt.gz", compress="lz4")
-        pickle.dump(eval_gt, open(f"pickle/{label}_eval_gt.gz", "wb"), protocol=pickle.HIGHEST_PROTOCOL)
-        del eval_gt
+        # joblib.dump(eval_gt, f"{p.pickle_folder}/{chr_name}_eval_gt.gz", compress="lz4")
+        pickle.dump(eval_gt, open(f"{p.pickle_folder}/{label}_eval_gt.gz", "wb"), protocol=pickle.HIGHEST_PROTOCOL)
         gc.collect()
-        joblib.dump(eval_gt_tss, f"pickle/{label}_eval_gt_tss.gz", compress="lz4")
-        # pickle.dump(eval_gt_tss, open(f"pickle/{chr_name}_eval_gt_tss.gz", "wb"), protocol=pickle.HIGHEST_PROTOCOL)
-        test_seq = joblib.load(f"pickle/{label}_seq.gz")
-        eval_gt = joblib.load(f"pickle/{label}_eval_gt.gz")
+        # joblib.dump(eval_gt_tss, f"{p.pickle_folder}/{label}_eval_gt_tss.gz", compress="lz4")
+        pickle.dump(eval_gt_tss, open(f"{p.pickle_folder}/{label}_eval_gt_tss.gz", "wb"), protocol=pickle.HIGHEST_PROTOCOL)
 
     final_pred = {}
     for i in range(len(eval_infos)):
@@ -87,8 +81,8 @@ def eval_perf(p, our_model, head, eval_infos, should_draw, current_epoch, label,
 
     for w in range(0, len(test_seq), p.w_step):
         print(w, end=" ")
-        p = our_model.predict(mo.wrap2(test_seq[w:w + p.w_step], p.predict_batch_size))
-        p1 = np.concatenate((p[0], p[1], p[2]), axis=1)
+        pr = our_model.predict(mo.wrap2(test_seq[w:w + p.w_step], p.predict_batch_size))
+        p1 = np.concatenate((pr[0], pr[1], pr[2]), axis=1)
         p2 = p1[:, :, p.mid_bin - 1] + p1[:, :, p.mid_bin] + p1[:, :, p.mid_bin + 1]
         if w == 0:
             predictions = p2

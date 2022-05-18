@@ -27,8 +27,8 @@ matplotlib.use("agg")
 
 def run_epoch(last_proc, fit_epochs, head_id):
     print(datetime.now().strftime('[%H:%M:%S] ') + "Epoch " + str(current_epoch) + " " + p.species[head_id])
-    training_regions = joblib.load(f"pickle/{p.species[head_id]}_regions.gz")
-    one_hot = joblib.load(f"pickle/{p.species[head_id]}_one_hot.gz")
+    training_regions = joblib.load(f"{p.pickle_folder}{p.species[head_id]}_regions.gz")
+    one_hot = joblib.load(f"p.pickle_folder/{p.species[head_id]}_one_hot.gz")
     shuffled_info = random.sample(training_regions, len(training_regions))
     input_sequences = []
     output_scores_info = []
@@ -343,7 +343,7 @@ def check_perf(mp_q):
     for device in physical_devices:
         tf.config.experimental.set_memory_growth(device, True)
     import model as mo
-    one_hot = joblib.load("pickle/hg38_one_hot.gz")
+    one_hot = joblib.load(f"{p.pickle_folder}hg38_one_hot.gz")
     try:
         strategy = tf.distribute.MultiWorkerMirroredStrategy()
         with strategy.scope():
@@ -389,14 +389,14 @@ last_proc = None
 p = MainParams()
 picked_training_regions = {}
 if __name__ == '__main__':
-    train_info, test_info, protein_coding = parser.parse_sequences(p.species, p.bin_size)
-    if Path("pickle/track_names_col.gz").is_file():
-        track_names_col = joblib.load("pickle/track_names_col.gz")
+    train_info, test_info, protein_coding = parser.parse_sequences(p)
+    if Path(f"{p.pickle_folder}track_names_col.gz").is_file():
+        track_names_col = joblib.load(f"{p.pickle_folder}track_names_col.gz")
     else:
-        track_names_col = parser.parse_tracks(p.species, p.bin_size, p.tracks_folder)
+        track_names_col = parser.parse_tracks(p)
 
-    if Path("pickle/heads.gz").is_file():
-        heads = joblib.load("pickle/heads.gz")
+    if Path(f"{p.pickle_folder}heads.gz").is_file():
+        heads = joblib.load(f"{p.pickle_folder}heads.gz")
     else:
         heads = {}
         for specie in p.species:
@@ -411,7 +411,7 @@ if __name__ == '__main__':
                 new_head = shuffled_tracks
                 # new_head = [x for x in new_head if not x.startswith("sc")]
             heads[specie] = new_head
-        joblib.dump(heads, "pickle/heads.gz", compress="lz4")
+        joblib.dump(heads, f"{p.pickle_folder}heads.gz", compress="lz4")
 
     for head_key in heads.keys():
         if head_key == "hg38":
@@ -423,7 +423,7 @@ if __name__ == '__main__':
     # import model as mo
     # our_model = mo.human_model(p.input_size, p.num_features, p.num_bins, 56, p.hic_size, p.bin_size, heads["hg38"])
 
-    hic_keys = parser.parse_hic(p.parsed_hic_folder)
+    hic_keys = parser.parse_hic(p)
     hic_num = len(hic_keys)
     print(f"hic {hic_num}")
 
@@ -441,16 +441,13 @@ if __name__ == '__main__':
             # Only human to test HIC and CON!
             head_id = 0
             if head_id == 0:
-                p.STEPS_PER_EPOCH = 100
-                fit_epochs = 4
+                p.STEPS_PER_EPOCH = 300
+                fit_epochs = 2
             elif head_id == 1:
                 p.STEPS_PER_EPOCH = 400
                 fit_epochs = 2
             else:
                 p.STEPS_PER_EPOCH = 1000
-                fit_epochs = 1
-
-            if current_epoch < 10:
                 fit_epochs = 1
 
             # check_perf(mp_q)
