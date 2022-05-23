@@ -3,12 +3,8 @@ import os
 import pickle
 import multiprocessing as mp
 # os.environ["CUDA_VISIBLE_DEVICES"] = '-1'
-import tensorflow_hub as hub
 import joblib
 import gzip
-import kipoiseq
-from kipoiseq import Interval
-import pyfaidx
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -124,8 +120,8 @@ print(counts)
 
 gt_matrix = np.zeros((len(eval_tracks), len(gene_tss)))
 
-bin = 100 # 128
-half_bin = 50 # 63
+bin = 200 # 128
+half_bin = 100 # 63
 
 # for track in eval_tracks:
 #     gt_vector = np.zeros(len(gene_tss))

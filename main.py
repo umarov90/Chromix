@@ -28,7 +28,7 @@ matplotlib.use("agg")
 def run_epoch(last_proc, fit_epochs, head_id):
     print(datetime.now().strftime('[%H:%M:%S] ') + "Epoch " + str(current_epoch) + " " + p.species[head_id])
     training_regions = joblib.load(f"{p.pickle_folder}{p.species[head_id]}_regions.gz")
-    one_hot = joblib.load(f"p.pickle_folder/{p.species[head_id]}_one_hot.gz")
+    one_hot = joblib.load(f"{p.pickle_folder}{p.species[head_id]}_one_hot.gz")
     shuffled_info = random.sample(training_regions, len(training_regions))
     input_sequences = []
     output_scores_info = []
@@ -254,7 +254,7 @@ def train_step(head, head_name, input_sequences, all_outputs, fit_epochs, hic_nu
             # our_model.get_layer("our_resnet").trainable = False
 
             if human_training:
-                loss_weights = {"our_expression": 50.0, "our_epigenome": 10.0, "our_conservation": 1.0, "our_hic": 50.0}
+                loss_weights = {"our_expression": 100.0, "our_epigenome": 10.0, "our_conservation": 1.0, "our_hic": 50.0}
                 losses = {
                     "our_expression": "mse",
                     "our_epigenome": "mse",
@@ -441,7 +441,7 @@ if __name__ == '__main__':
             # Only human to test HIC and CON!
             head_id = 0
             if head_id == 0:
-                p.STEPS_PER_EPOCH = 300
+                p.STEPS_PER_EPOCH = 150
                 fit_epochs = 2
             elif head_id == 1:
                 p.STEPS_PER_EPOCH = 400

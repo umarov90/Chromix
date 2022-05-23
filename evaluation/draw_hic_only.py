@@ -44,9 +44,8 @@ os.chdir(folders[0])
 parsed_tracks_folder = folders[1]
 parsed_hic_folder = folders[2]
 model_folder = folders[3]
-heads = joblib.load("pickle/heads.gz")
-head_id = 0
-head_tracks = heads[head_id]
+heads = joblib.load(f"{p.pickle_folder}/heads.gz")
+head_tracks = heads["hg38"]
 p.parsed_hic_folder = folders[2]
 hic_keys = parser.parse_hic(p.parsed_hic_folder)
 for k in hic_keys:

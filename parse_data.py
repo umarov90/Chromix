@@ -175,8 +175,10 @@ def parse_some_tracks(q, some_tracks, ga, bin_size, tracks_folder):
             for key in gast.keys():
                 if "scEnd5" in track:
                     gast[key] = np.log10(np.exp(gast[key]))
+                elif "conservation" in track.lower():
+                    gast[key] = gast[key] + abs(min_val)
                 else:
-                    gast[key] = np.log10(gast[key] + 1 + abs(min_val))
+                    gast[key] = np.log10(gast[key] + 1)
                 max_val = max(np.max(gast[key]), max_val)
                 # if all_vals is not None:
                 #     all_vals = np.concatenate((all_vals, gast[key][tss_loc[key]]))

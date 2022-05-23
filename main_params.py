@@ -12,13 +12,13 @@ class MainParams:
         self.hic_bin_size = 10000
         self.num_hic_bins = 40
         self.half_size_hic = 200000
-        self.num_bins = 501
+        self.num_bins = 1001
         self.half_num_regions = int(self.num_bins / 2)
         self.mid_bin = math.floor(self.num_bins / 2)
-        self.BATCH_SIZE = 1
-        self.GLOBAL_BATCH_SIZE = 4 * self.BATCH_SIZE
-        self.predict_batch_size = 4 * self.BATCH_SIZE
-        self.w_step = 100
+        self.BATCH_SIZE = 2
+        self.GLOBAL_BATCH_SIZE = 8 * self.BATCH_SIZE
+        self.predict_batch_size = 8 * self.BATCH_SIZE
+        self.w_step = 50
         self.STEPS_PER_EPOCH = 200
         self.num_epochs = 1000
         self.hic_track_size = 1
@@ -29,7 +29,8 @@ class MainParams:
         self.species = ["hg38", "mm10", "macFas5", "calJac4", "rheMac8", "canFam3", "oviAri4", "rn6"]
         script_folder = pathlib.Path(__file__).parent.resolve()
         folders = open(str(script_folder) + "/../data_dirs").read().strip().split("\n")
-        os.chdir(folders[0])
+        self.data_folder = folders[0]
+        os.chdir(self.data_folder)
         self.parsed_tracks_folder = folders[1]
         self.parsed_hic_folder = folders[2]
         self.model_folder = folders[3]

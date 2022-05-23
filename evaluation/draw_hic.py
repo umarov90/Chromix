@@ -38,10 +38,10 @@ eval_gt_full = []
 p = MainParams()
 w_step = 40
 predict_batch_size = 4
-heads = joblib.load("pickle/heads.gz")
-head_id = 0
-head_tracks = heads[head_id]
-hic_keys = parser.parse_hic(p.parsed_hic_folder)
+heads = joblib.load(f"{p.pickle_folder}heads.gz")
+head_tracks = heads["hg38"]
+hic_keys = parser.parse_hic(p)
+hic_num = len(hic_keys)
 for k in hic_keys:
     print(k, end=", ")
 # hn = []
@@ -52,19 +52,19 @@ for k in hic_keys:
 # hic_keys = hn
 # joblib.dump(hic_keys, "pickle/hic_keys.gz", compress=3)
 
-infos = joblib.load("pickle/test_info.gz")[100:500]
+infos = joblib.load(f"{p.pickle_folder}test_info.gz")[100:150]
 infos = infos[::5]
 print(f"Number of positions: {len(infos)}")
-one_hot = joblib.load("pickle/hg38_one_hot.gz")
+one_hot = joblib.load(f"{p.pickle_folder}hg38_one_hot.gz")
 strategy = tf.distribute.MultiWorkerMirroredStrategy()
 with strategy.scope():
-    our_model = mo.human_model(p.input_size, p.num_features, p.num_bins,
-                               len(head_tracks), len(hic_keys), p.hic_size,
-                               p.bin_size)
-    print(our_model.summary())
+    our_model = mo.human_model(p.input_size, p.num_features, p.num_bins, hic_num, p.hic_size, p.bin_size,
+                               heads["hg38"])
     our_model.get_layer("our_resnet").set_weights(joblib.load(p.model_path + "_res"))
-    our_model.get_layer("our_head").set_weights(joblib.load(p.model_path + "_head_hg38"))
+    our_model.get_layer("our_expression").set_weights(joblib.load(p.model_path + "_expression_hg38"))
+    our_model.get_layer("our_epigenome").set_weights(joblib.load(p.model_path + "_epigenome"))
     our_model.get_layer("our_hic").set_weights(joblib.load(p.model_path + "_hic"))
+    our_model.get_layer("our_conservation").set_weights(joblib.load(p.model_path + "_conservation"))
 
 hic_output = []
 for hi, key in enumerate(hic_keys):
@@ -122,9 +122,9 @@ for w in range(0, len(test_seq), w_step):
     print(w, end=" ")
     p1 = our_model.predict(mo.wrap2(test_seq[w:w + w_step], predict_batch_size))
     if w == 0:
-        predictions_hic = p1[1]
+        predictions_hic = p1[3]
     else:
-        predictions_hic = np.concatenate((predictions_hic, p1[1]))
+        predictions_hic = np.concatenate((predictions_hic, p1[3]))
 
 for n in range(len(hic_output)):
     fig, axs = plt.subplots(2, len(hic_keys), figsize=(48, 12))

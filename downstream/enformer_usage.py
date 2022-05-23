@@ -21,9 +21,11 @@ import pyBigWig
 import model as mo
 from main_params import MainParams
 
+params = MainParams()
+
 transform_path = 'gs://dm-enformer/models/enformer.finetuned.SAD.robustscaler-PCA500-robustscaler.transform.pkl'
 model_path = 'https://tfhub.dev/deepmind/enformer/1'
-fasta_file = '/Users/ramzan/variants_100/data/species/hg38/genome.fa'
+fasta_file = f'{params.data_folder}data/species/hg38/genome.fa'
 clinvar_vcf = '/root/data/clinvar.vcf.gz'
 
 # Download targets from Basenji2 dataset
@@ -190,13 +192,6 @@ model = Enformer(model_path)
 
 fasta_extractor = FastaStringExtractor(fasta_file)
 
-script_folder = pathlib.Path(__file__).parent.resolve()
-folders = open(str(script_folder) + "/../data_dirs").read().strip().split("\n")
-os.chdir(folders[0])
-parsed_tracks_folder = folders[1]
-parsed_hic_folder = folders[2]
-model_folder = folders[3]
-params = MainParams()
 # tracks = {'DNASE:CD14-positive monocyte female': predictions[:, 41],
 #           'DNASE:keratinocyte female': predictions[:, 42],
 #           'CHIP:H3K27ac:keratinocyte female': predictions[:, 706],

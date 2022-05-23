@@ -18,16 +18,15 @@ os.chdir(folders[0])
 parsed_tracks_folder = folders[1]
 parsed_hic_folder = folders[2]
 model_folder = folders[3]
-heads = joblib.load("pickle/heads.gz")
-head_id = 0
-head_tracks = heads[head_id]
+heads = joblib.load(f"{p.pickle_folder}heads.gz")
+head_tracks = heads["hg38"]
 p.parsed_hic_folder = folders[2]
-hic_keys = joblib.load("pickle/hic_keys.gz")
+hic_keys = joblib.load(f"{p.pickle_folder}hic_keys.gz")
 for h in hic_keys:
     print(h)
-infos = joblib.load("pickle/test_info.gz")
+infos = joblib.load(f"{p.pickle_folder}test_info.gz")
 
-one_hot = joblib.load("pickle/one_hot.gz")
+one_hot = joblib.load(f"{p.pickle_folder}one_hot.gz")
 # hic_keys = [hic_keys[0]]
 eval_track_names = []
 
@@ -39,8 +38,12 @@ for track in head_tracks:
 
 strategy = tf.distribute.MultiWorkerMirroredStrategy()
 with strategy.scope():
-    our_model = tf.keras.models.load_model(model_folder + p.model_name)
-    our_model.get_layer("our_head").set_weights(joblib.load(model_folder + p.model_name + "_head_" + str(head_id)))
+    our_model = mo.human_model(p.input_size, p.num_features, p.num_bins,
+                               len(head_tracks), len(hic_keys), p.hic_size,
+                               p.bin_size)
+    our_model.get_layer("our_resnet").set_weights(joblib.load(p.model_path + "_res"))
+    our_model.get_layer("our_expression").set_weights(joblib.load(p.model_path + "_expression"))
+    our_model.get_layer("our_hic").set_weights(joblib.load(p.model_path + "_hic"))
 
 for i in range(len(infos)):
     eval_gt_full.append([])
