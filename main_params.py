@@ -15,9 +15,9 @@ class MainParams:
         self.num_bins = 1001
         self.half_num_regions = int(self.num_bins / 2)
         self.mid_bin = math.floor(self.num_bins / 2)
-        self.BATCH_SIZE = 2
-        self.GLOBAL_BATCH_SIZE = 8 * self.BATCH_SIZE
-        self.predict_batch_size = 8 * self.BATCH_SIZE
+        self.BATCH_SIZE = 1
+        self.GLOBAL_BATCH_SIZE = 4 * self.BATCH_SIZE
+        self.predict_batch_size = 4 * self.BATCH_SIZE
         self.w_step = 50
         self.STEPS_PER_EPOCH = 200
         self.num_epochs = 1000
@@ -27,8 +27,8 @@ class MainParams:
         self.initial_shift = 250 # +- 50k
         self.hic_size = 780
         self.species = ["hg38", "mm10", "macFas5", "calJac4", "rheMac8", "canFam3", "oviAri4", "rn6"]
-        script_folder = pathlib.Path(__file__).parent.resolve()
-        folders = open(str(script_folder) + "/../data_dirs").read().strip().split("\n")
+        self.script_folder = pathlib.Path(__file__).parent.resolve()
+        folders = open(str(self.script_folder) + "/../data_dirs").read().strip().split("\n")
         self.data_folder = folders[0]
         os.chdir(self.data_folder)
         self.parsed_tracks_folder = folders[1]

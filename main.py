@@ -244,7 +244,11 @@ def train_step(head, head_name, input_sequences, all_outputs, fit_epochs, hic_nu
             # our_model.get_layer("our_resnet").trainable = False
 
             if human_training:
-                loss_weights = {"our_expression": 100.0, "our_epigenome": 10.0, "our_conservation": 1.0, "our_hic": 50.0}
+                loss_weights = {}
+                with open(str(p.script_folder) + "/../loss_weights") as f:
+                    for line in f:
+                        (key, val) = line.split()
+                        loss_weights[key] = float(val)
                 losses = {
                     "our_expression": "mse",
                     "our_epigenome": "mse",
@@ -443,7 +447,7 @@ if __name__ == '__main__':
             # Only human to test HIC and CON!
             head_id = 0
             if head_id == 0:
-                p.STEPS_PER_EPOCH = 150
+                p.STEPS_PER_EPOCH = 100
                 fit_epochs = 2
             elif head_id == 1:
                 p.STEPS_PER_EPOCH = 400
