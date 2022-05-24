@@ -219,6 +219,18 @@ def train_step(head, head_name, input_sequences, all_outputs, fit_epochs, hic_nu
                                            head)
             else:
                 our_model = mo.small_model(p.input_size, p.num_features, p.num_bins, len(head), p.bin_size)
+            # Loading model weights
+            if os.path.exists(p.model_path + "_res"):
+                our_model.get_layer("our_resnet").set_weights(joblib.load(p.model_path + "_res"))
+            if os.path.exists(p.model_path + "_expression_" + head_name):
+                our_model.get_layer("our_expression").set_weights(
+                    joblib.load(p.model_path + "_expression_" + head_name))
+            if human_training and os.path.exists(p.model_path + "_epigenome"):
+                our_model.get_layer("our_epigenome").set_weights(joblib.load(p.model_path + "_epigenome"))
+            if human_training and os.path.exists(p.model_path + "_hic"):
+                our_model.get_layer("our_hic").set_weights(joblib.load(p.model_path + "_hic"))
+            if human_training and os.path.exists(p.model_path + "_conservation"):
+                our_model.get_layer("our_conservation").set_weights(joblib.load(p.model_path + "_conservation"))
             print(f"=== Training with head {head_name} ===")
 
             # resnet_wd = 0.0000001
@@ -260,18 +272,6 @@ def train_step(head, head_name, input_sequences, all_outputs, fit_epochs, hic_nu
                 our_model.compile(optimizer=optimizer, loss="mse")
             if current_epoch == start_epoch:
                 our_model.fit(zero_data, steps_per_epoch=1, epochs=1)
-
-                if os.path.exists(p.model_path + "_res"):
-                    our_model.get_layer("our_resnet").set_weights(joblib.load(p.model_path + "_res"))
-                if os.path.exists(p.model_path + "_expression_" + head_name):
-                    our_model.get_layer("our_expression").set_weights(joblib.load(p.model_path + "_expression_" + head_name))
-                if human_training and os.path.exists(p.model_path + "_epigenome"):
-                    our_model.get_layer("our_epigenome").set_weights(joblib.load(p.model_path + "_epigenome"))
-                if human_training and os.path.exists(p.model_path + "_hic"):
-                    our_model.get_layer("our_hic").set_weights(joblib.load(p.model_path + "_hic"))
-                if human_training and os.path.exists(p.model_path + "_conservation"):
-                    our_model.get_layer("our_conservation").set_weights(joblib.load(p.model_path + "_conservation"))
-
                 if os.path.exists(p.model_path + "_opt_resnet"):
                     print("loading resnet optimizer")
                     optimizers["our_resnet"].set_weights(joblib.load(p.model_path + "_opt_resnet"))
@@ -308,18 +308,17 @@ def train_step(head, head_name, input_sequences, all_outputs, fit_epochs, hic_nu
 
     try:
         our_model.fit(train_data, epochs=fit_epochs, batch_size=p.GLOBAL_BATCH_SIZE)
-        if current_epoch % 10 == 0:
-            safe_save(our_model.get_layer("our_resnet").get_weights(), p.model_path + "_res")
-            safe_save(optimizers["our_resnet"].get_weights(), p.model_path + "_opt_resnet")
-            safe_save(our_model.get_layer("our_expression").get_weights(), p.model_path + "_expression_" + head_name)
-            safe_save(optimizers["our_expression"].get_weights(), p.model_path + "_opt_expression_" + head_name)
-            if human_training:
-                safe_save(optimizers["our_hic"].get_weights(), p.model_path + "_opt_hic")
-                safe_save(our_model.get_layer("our_hic").get_weights(), p.model_path + "_hic")
-                safe_save(optimizers["our_epigenome"].get_weights(), p.model_path + "_opt_epigenome")
-                safe_save(our_model.get_layer("our_epigenome").get_weights(), p.model_path + "_epigenome")
-                safe_save(optimizers["our_conservation"].get_weights(), p.model_path + "_opt_conservation")
-                safe_save(our_model.get_layer("our_conservation").get_weights(), p.model_path + "_conservation")
+        safe_save(our_model.get_layer("our_resnet").get_weights(), p.model_path + "_res")
+        safe_save(optimizers["our_resnet"].get_weights(), p.model_path + "_opt_resnet")
+        safe_save(our_model.get_layer("our_expression").get_weights(), p.model_path + "_expression_" + head_name)
+        safe_save(optimizers["our_expression"].get_weights(), p.model_path + "_opt_expression_" + head_name)
+        if human_training:
+            safe_save(optimizers["our_hic"].get_weights(), p.model_path + "_opt_hic")
+            safe_save(our_model.get_layer("our_hic").get_weights(), p.model_path + "_hic")
+            safe_save(optimizers["our_epigenome"].get_weights(), p.model_path + "_opt_epigenome")
+            safe_save(our_model.get_layer("our_epigenome").get_weights(), p.model_path + "_epigenome")
+            safe_save(optimizers["our_conservation"].get_weights(), p.model_path + "_opt_conservation")
+            safe_save(our_model.get_layer("our_conservation").get_weights(), p.model_path + "_conservation")
     except Exception as e:
         print(e)
         print(datetime.now().strftime('[%H:%M:%S] ') + "Error while training.")
