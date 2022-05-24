@@ -18,6 +18,7 @@ import multiprocessing as mp
 import evaluation
 from main_params import MainParams
 import tensorflow_addons as tfa
+import tensorflow as tf
 from scipy.ndimage import gaussian_filter
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
@@ -106,7 +107,7 @@ def run_epoch(last_proc, fit_epochs, head_id):
                 hic_score = hic_score[lix]
                 hic_mat[l1, l2] += hic_score
                 hic_mat = hic_mat + hic_mat.T - np.diag(np.diag(hic_mat))
-                hic_mat = gaussian_filter(hic_mat, sigma=0.5)
+                hic_mat = gaussian_filter(hic_mat, sigma=1)
                 if ni < half:
                     hic_mat = np.rot90(hic_mat, k=2)
                 # if i == 0:
@@ -185,12 +186,10 @@ def train_step(head, head_name, input_sequences, all_outputs, fit_epochs, hic_nu
     if head_name != "hg38" or hic_num == 0:
         human_training = False
     try:
-        import tensorflow as tf
         # physical_devices = tf.config.experimental.list_physical_devices('GPU')
         # assert len(physical_devices) > 0, "Not enough GPU hardware devices available"
         # for device in physical_devices:
         #     tf.config.experimental.set_memory_growth(device, True)
-
         import model as mo
         if human_training:
             train_data = mo.wrap_for_human_training(input_sequences, all_outputs, p.GLOBAL_BATCH_SIZE)
@@ -221,11 +220,7 @@ def train_step(head, head_name, input_sequences, all_outputs, fit_epochs, hic_nu
             else:
                 our_model = mo.small_model(p.input_size, p.num_features, p.num_bins, len(head), p.bin_size)
             print(f"=== Training with head {head_name} ===")
-            hic_lr = 0.0001
-            expression_lr = 0.0001
-            conservation_lr = 0.0008
-            epigenome_lr = 0.0004
-            resnet_lr = 0.00001
+
             # resnet_wd = 0.0000001
             # cap_e = min(current_epoch, 40)
             # transformer_lr = 0.0000005 + cap_e * 0.0000025
@@ -235,18 +230,13 @@ def train_step(head, head_name, input_sequences, all_outputs, fit_epochs, hic_nu
             #     tfa.optimizers.AdamW(learning_rate=transformer_lr, weight_decay=transformer_wd),
             #     tf.keras.optimizers.Adam(learning_rate=expression_lr)
             # ]
-            optimizers = {"our_resnet": tf.keras.optimizers.Adam(learning_rate=resnet_lr),
-                          "our_expression": tf.keras.optimizers.Adam(learning_rate=expression_lr), }
 
             optimizers_and_layers = [(optimizers["our_resnet"], our_model.get_layer("our_resnet")),
                                      (optimizers["our_expression"], our_model.get_layer("our_expression"))
                                      ]
             if human_training:
-                optimizers["our_hic"] = tf.keras.optimizers.Adam(learning_rate=hic_lr)
                 optimizers_and_layers.append((optimizers["our_hic"], our_model.get_layer("our_hic")))
-                optimizers["our_epigenome"] = tf.keras.optimizers.Adam(learning_rate=epigenome_lr)
                 optimizers_and_layers.append((optimizers["our_epigenome"], our_model.get_layer("our_epigenome")))
-                optimizers["our_conservation"] = tf.keras.optimizers.Adam(learning_rate=conservation_lr)
                 optimizers_and_layers.append((optimizers["our_conservation"], our_model.get_layer("our_conservation")))
 
             optimizer = tfa.optimizers.MultiOptimizer(optimizers_and_layers)
@@ -264,47 +254,47 @@ def train_step(head, head_name, input_sequences, all_outputs, fit_epochs, hic_nu
                 our_model.compile(optimizer=optimizer, loss=losses, loss_weights=loss_weights)
             else:
                 our_model.compile(optimizer=optimizer, loss="mse")
+            if current_epoch == start_epoch:
+                our_model.fit(zero_data, steps_per_epoch=1, epochs=1)
 
-            our_model.fit(zero_data, steps_per_epoch=1, epochs=1)
+                if os.path.exists(p.model_path + "_res"):
+                    our_model.get_layer("our_resnet").set_weights(joblib.load(p.model_path + "_res"))
+                if os.path.exists(p.model_path + "_expression_" + head_name):
+                    our_model.get_layer("our_expression").set_weights(joblib.load(p.model_path + "_expression_" + head_name))
+                if human_training and os.path.exists(p.model_path + "_epigenome"):
+                    our_model.get_layer("our_epigenome").set_weights(joblib.load(p.model_path + "_epigenome"))
+                if human_training and os.path.exists(p.model_path + "_hic"):
+                    our_model.get_layer("our_hic").set_weights(joblib.load(p.model_path + "_hic"))
+                if human_training and os.path.exists(p.model_path + "_conservation"):
+                    our_model.get_layer("our_conservation").set_weights(joblib.load(p.model_path + "_conservation"))
 
-            if os.path.exists(p.model_path + "_res"):
-                our_model.get_layer("our_resnet").set_weights(joblib.load(p.model_path + "_res"))
-            if os.path.exists(p.model_path + "_expression_" + head_name):
-                our_model.get_layer("our_expression").set_weights(joblib.load(p.model_path + "_expression_" + head_name))
-            if human_training and os.path.exists(p.model_path + "_epigenome"):
-                our_model.get_layer("our_epigenome").set_weights(joblib.load(p.model_path + "_epigenome"))
-            if human_training and os.path.exists(p.model_path + "_hic"):
-                our_model.get_layer("our_hic").set_weights(joblib.load(p.model_path + "_hic"))
-            if human_training and os.path.exists(p.model_path + "_conservation"):
-                our_model.get_layer("our_conservation").set_weights(joblib.load(p.model_path + "_conservation"))
+                if os.path.exists(p.model_path + "_opt_resnet"):
+                    print("loading resnet optimizer")
+                    optimizers["our_resnet"].set_weights(joblib.load(p.model_path + "_opt_resnet"))
 
-            if os.path.exists(p.model_path + "_opt_resnet"):
-                print("loading resnet optimizer")
-                optimizers["our_resnet"].set_weights(joblib.load(p.model_path + "_opt_resnet"))
+                if os.path.exists(p.model_path + "_opt_expression_" + head_name):
+                    print("loading expression optimizer")
+                    optimizers["our_expression"].set_weights(joblib.load(p.model_path + "_opt_expression_" + head_name))
 
-            if os.path.exists(p.model_path + "_opt_expression_" + head_name):
-                print("loading expression optimizer")
-                optimizers["our_expression"].set_weights(joblib.load(p.model_path + "_opt_expression_" + head_name))
+                if human_training and os.path.exists(p.model_path + "_opt_hic"):
+                    print("loading hic optimizer")
+                    optimizers["our_hic"].set_weights(joblib.load(p.model_path + "_opt_hic"))
 
-            if human_training and os.path.exists(p.model_path + "_opt_hic"):
-                print("loading hic optimizer")
-                optimizers["our_hic"].set_weights(joblib.load(p.model_path + "_opt_hic"))
+                if human_training and os.path.exists(p.model_path + "_opt_epigenome"):
+                    print("loading epigenome optimizer")
+                    optimizers["our_epigenome"].set_weights(joblib.load(p.model_path + "_opt_epigenome"))
 
-            if human_training and os.path.exists(p.model_path + "_opt_epigenome"):
-                print("loading epigenome optimizer")
-                optimizers["our_epigenome"].set_weights(joblib.load(p.model_path + "_opt_epigenome"))
+                if human_training and os.path.exists(p.model_path + "_opt_conservation"):
+                    print("loading conservation optimizer")
+                    optimizers["our_conservation"].set_weights(joblib.load(p.model_path + "_opt_conservation"))
 
-            if human_training and os.path.exists(p.model_path + "_opt_conservation"):
-                print("loading conservation optimizer")
-                optimizers["our_conservation"].set_weights(joblib.load(p.model_path + "_opt_conservation"))
-
-            optimizers["our_resnet"].learning_rate = resnet_lr
-            # optimizers["our_resnet"].weight_decay = resnet_wd
-            optimizers["our_expression"].learning_rate = expression_lr
-            if human_training:
-                optimizers["our_hic"].learning_rate = hic_lr
-                optimizers["our_epigenome"].learning_rate = epigenome_lr
-                optimizers["our_conservation"].learning_rate = conservation_lr
+                optimizers["our_resnet"].learning_rate = resnet_lr
+                # optimizers["our_resnet"].weight_decay = resnet_wd
+                optimizers["our_expression"].learning_rate = expression_lr
+                if human_training:
+                    optimizers["our_hic"].learning_rate = hic_lr
+                    optimizers["our_epigenome"].learning_rate = epigenome_lr
+                    optimizers["our_conservation"].learning_rate = conservation_lr
 
     except Exception as e:
         traceback.print_exc()
@@ -314,17 +304,18 @@ def train_step(head, head_name, input_sequences, all_outputs, fit_epochs, hic_nu
 
     try:
         our_model.fit(train_data, epochs=fit_epochs, batch_size=p.GLOBAL_BATCH_SIZE)
-        safe_save(our_model.get_layer("our_resnet").get_weights(), p.model_path + "_res")
-        safe_save(optimizers["our_resnet"].get_weights(), p.model_path + "_opt_resnet")
-        safe_save(our_model.get_layer("our_expression").get_weights(), p.model_path + "_expression_" + head_name)
-        safe_save(optimizers["our_expression"].get_weights(), p.model_path + "_opt_expression_" + head_name)
-        if human_training:
-            safe_save(optimizers["our_hic"].get_weights(), p.model_path + "_opt_hic")
-            safe_save(our_model.get_layer("our_hic").get_weights(), p.model_path + "_hic")
-            safe_save(optimizers["our_epigenome"].get_weights(), p.model_path + "_opt_epigenome")
-            safe_save(our_model.get_layer("our_epigenome").get_weights(), p.model_path + "_epigenome")
-            safe_save(optimizers["our_conservation"].get_weights(), p.model_path + "_opt_conservation")
-            safe_save(our_model.get_layer("our_conservation").get_weights(), p.model_path + "_conservation")
+        if current_epoch % 10 == 0:
+            safe_save(our_model.get_layer("our_resnet").get_weights(), p.model_path + "_res")
+            safe_save(optimizers["our_resnet"].get_weights(), p.model_path + "_opt_resnet")
+            safe_save(our_model.get_layer("our_expression").get_weights(), p.model_path + "_expression_" + head_name)
+            safe_save(optimizers["our_expression"].get_weights(), p.model_path + "_opt_expression_" + head_name)
+            if human_training:
+                safe_save(optimizers["our_hic"].get_weights(), p.model_path + "_opt_hic")
+                safe_save(our_model.get_layer("our_hic").get_weights(), p.model_path + "_hic")
+                safe_save(optimizers["our_epigenome"].get_weights(), p.model_path + "_opt_epigenome")
+                safe_save(our_model.get_layer("our_epigenome").get_weights(), p.model_path + "_epigenome")
+                safe_save(optimizers["our_conservation"].get_weights(), p.model_path + "_opt_conservation")
+                safe_save(our_model.get_layer("our_conservation").get_weights(), p.model_path + "_conservation")
     except Exception as e:
         print(e)
         print(datetime.now().strftime('[%H:%M:%S] ') + "Error while training.")
@@ -333,6 +324,7 @@ def train_step(head, head_name, input_sequences, all_outputs, fit_epochs, hic_nu
 
     print(datetime.now().strftime('[%H:%M:%S] ') + "Epoch finished. ")
     mp_q.put(None)
+    return None
 
 
 def check_perf(mp_q):
@@ -427,6 +419,16 @@ if __name__ == '__main__':
     hic_num = len(hic_keys)
     print(f"hic {hic_num}")
 
+    hic_lr = 0.0001
+    expression_lr = 0.0001
+    conservation_lr = 0.0008
+    epigenome_lr = 0.0004
+    resnet_lr = 0.00001
+    optimizers = {"our_resnet": tf.keras.optimizers.Adam(learning_rate=resnet_lr),
+                  "our_expression": tf.keras.optimizers.Adam(learning_rate=expression_lr),
+                  "our_epigenome": tf.keras.optimizers.Adam(learning_rate=epigenome_lr),
+                  "our_conservation": tf.keras.optimizers.Adam(learning_rate=conservation_lr),
+                  "our_hic": tf.keras.optimizers.Adam(learning_rate=hic_lr), }
     mp_q = mp.Queue()
 
     print("Training starting")

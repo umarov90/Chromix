@@ -39,15 +39,9 @@ p = MainParams()
 w_step = 20
 predict_batch_size = 4
 script_folder = pathlib.Path(__file__).parent.resolve()
-folders = open(str(script_folder) + "/../data_dirs").read().strip().split("\n")
-os.chdir(folders[0])
-parsed_tracks_folder = folders[1]
-parsed_hic_folder = folders[2]
-model_folder = folders[3]
 heads = joblib.load(f"{p.pickle_folder}/heads.gz")
 head_tracks = heads["hg38"]
-p.parsed_hic_folder = folders[2]
-hic_keys = parser.parse_hic(p.parsed_hic_folder)
+hic_keys = parser.parse_hic(p)
 for k in hic_keys:
     print(k, end=", ")
 # hn = []
@@ -59,12 +53,11 @@ for k in hic_keys:
 # joblib.dump(hic_keys, "pickle/hic_keys.gz", compress=3)
 
 infos = joblib.load("pickle/test_info.gz")[100:600]
-infos = infos[::5]
+infos = infos[::40]
 print(f"Number of positions: {len(infos)}")
-one_hot = joblib.load("pickle/hg38_one_hot.gz")
-# hic_keys = [hic_keys[0]]
 
 hic_output = []
+hic_output2 = []
 for hi, key in enumerate(hic_keys):
     hdf = joblib.load(p.parsed_hic_folder + key)
     ni = 0
@@ -88,10 +81,18 @@ for hi, key in enumerate(hic_keys):
         l2 = l2[lix]
         hic_score = hic_score[lix]
         hic_mat[l1, l2] += hic_score
+
+        hic_mat = hic_mat + hic_mat.T - np.diag(np.diag(hic_mat))
+        hic_mat = gaussian_filter(hic_mat, sigma=1)
+        hic_mat2 = np.rot90(hic_mat, k=2)
+        hic_mat2 = hic_mat2[np.triu_indices_from(hic_mat2, k=1)]
+
         hic_mat = hic_mat[np.triu_indices_from(hic_mat, k=1)]
         if hi == 0:
             hic_output.append([])
+            hic_output2.append([])
         hic_output[ni].append(hic_mat)
+        hic_output2[ni].append(hic_mat2)
         ni += 1
     del hd
     del hdf
@@ -99,15 +100,19 @@ for hi, key in enumerate(hic_keys):
 
 
 for n in range(len(hic_output)):
-    fig, axs = plt.subplots(3, int(len(hic_keys) / 3), figsize=(24, 24))
-    axs = axs.flatten()
+    fig, axs = plt.subplots(2, len(hic_keys), figsize=(60, 20))
     for i in range(len(hic_keys)):
         mat = recover_shape(hic_output[n][i], p.num_hic_bins)
-        mat = gaussian_filter(mat, sigma=0.5)
-        sns.heatmap(mat, linewidth=0.0, ax=axs[i], square=True, cbar=False)
-        axs[i].set(xticklabels=[])
-        axs[i].set(yticklabels=[])
-        axs[i].set_title("hic"+str(i+1))
+        sns.heatmap(mat, linewidth=0.0, ax=axs[0, i], square=True, cbar=False)
+        axs[0, i].set(xticklabels=[])
+        axs[0, i].set(yticklabels=[])
+        axs[0, i].set_title("hic"+str(i+1))
+
+        mat = recover_shape(hic_output2[n][i], p.num_hic_bins)
+        sns.heatmap(mat, linewidth=0.0, ax=axs[1, i], square=True, cbar=False)
+        axs[1, i].set(xticklabels=[])
+        axs[1, i].set(yticklabels=[])
+        axs[1, i].set_title("hic" + str(i + 1))
 
     fig.tight_layout()
     plt.savefig(f"hic_check/{n}.png")
