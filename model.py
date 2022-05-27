@@ -46,7 +46,7 @@ def human_model(input_size, num_features, num_regions, hic_num, hic_size, bin_si
     our_resnet = Model(inputs, resnet_output, name="our_resnet")
 
     hic_input = Input(shape=(num_patches, num_filters))
-    hi = Conv1D(128, kernel_size=1, strides=1, name="hic_layer_1")(hic_input)
+    hi = Conv1D(256, kernel_size=1, strides=1, name="hic_layer_1")(hic_input)
     hx = LeakyReLU(alpha=leaky_alpha, name="hic_act")(hi)
     hxp = tf.keras.layers.AveragePooling1D(pool_size=50)(hi)
 
@@ -299,7 +299,7 @@ class pearsonr_poisson(tf.keras.losses.Loss):
         self.reduction = tf.keras.losses.Reduction.SUM
         if not self.alpha:
             print('ALPHA SET TO DEFAULT VALUE!')
-            self.alpha = 0.1 
+            self.alpha = 0.1
     def call(self, y_true, y_pred):
         #multinomial part of loss function
         pr_loss = basenjipearsonr()
