@@ -17,10 +17,10 @@ class MainParams:
         self.mid_bin = math.floor(self.num_bins / 2)
         self.BATCH_SIZE = 1
         self.GLOBAL_BATCH_SIZE = 4 * self.BATCH_SIZE
-        self.predict_batch_size = 4 * self.BATCH_SIZE
+        self.predict_batch_size = 4 * 2 * self.BATCH_SIZE
         self.w_step = 50
         self.STEPS_PER_EPOCH = 200
-        self.num_epochs = 1000
+        self.num_epochs = 1
         self.hic_track_size = 1
         self.num_features = 4
         self.shift_speed = 2000000

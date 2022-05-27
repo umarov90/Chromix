@@ -197,7 +197,7 @@ fasta_extractor = FastaStringExtractor(fasta_file)
 #           'CHIP:H3K27ac:keratinocyte female': predictions[:, 706],
 #           'CAGE:Keratinocyte - epidermal': np.log10(1 + predictions[:, 4799])}
 # plot_tracks(tracks, target_interval)
-
+p = MainParams()
 gene_tss = pd.read_csv("data/enformer/enformer_test_tss_less.bed", sep="\t", index_col=False,
                        names=["chr", "start", "end", "type"])
 # gene_tss = gene_tss.loc[gene_tss['chr'] == "chr1"]
@@ -210,7 +210,7 @@ enf_tracks = df_targets[df_targets['description'].str.contains("CAGE")]['identif
 heads = joblib.load("pickle/heads.gz")
 head_id = 0
 head_name = "hg38"
-head_tracks = heads[head_id]
+head_tracks = heads[head_name]["expression"]
 track_ind_our = {}
 eval_tracks = []
 for track in enf_tracks:
@@ -221,7 +221,7 @@ for track in enf_tracks:
             break
 
 full_name = {}
-tracks_folder = "/Volumes/passport1/bw/"
+tracks_folder = "/media/user/PASSPORT1/variants100/bw/"
 for filename in os.listdir(tracks_folder):
     for track in eval_tracks:
         if track in filename:

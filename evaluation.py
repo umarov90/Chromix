@@ -75,10 +75,22 @@ def eval_perf(p, our_model, head, eval_infos, should_draw, current_epoch, label,
         # joblib.dump(eval_gt_tss, f"{p.pickle_folder}/{label}_eval_gt_tss.gz", compress="lz4")
         pickle.dump(eval_gt_tss, open(f"{p.pickle_folder}/{label}_eval_gt_tss.gz", "wb"), protocol=pickle.HIGHEST_PROTOCOL)
 
+    start_val = {}
+    track_inds_bed = []
+    with open('candidate_tracks.tsv') as f:
+        candidates_list = f.read().splitlines()
+
+    for i, track in enumerate(eval_track_names):
+        if track in candidates_list:
+            track_inds_bed.append(i)
+    print(f"Number of tracks for bed: {len(track_inds_bed)}")
     final_pred = {}
+    gene_positions = {}
     for i in range(len(eval_infos)):
         final_pred[eval_infos[i][2]] = {}
+        gene_positions[eval_infos[i][2]] = eval_infos[i][0] + "\t" + str(eval_infos[i][1])
 
+    # predictions = joblib.load("pred.gz")
     for w in range(0, len(test_seq), p.w_step):
         print(w, end=" ")
         pr = our_model.predict(mo.wrap2(test_seq[w:w + p.w_step], p.predict_batch_size))
@@ -88,8 +100,23 @@ def eval_perf(p, our_model, head, eval_infos, should_draw, current_epoch, label,
             predictions = p2
         else:
             predictions = np.concatenate((predictions, p2), dtype=np.float32)
-        gc.collect()
+        predictions_for_bed = p1
 
+        print(" -bed ", end="")
+        for c, locus in enumerate(predictions_for_bed):
+            ind = w + c
+            mid = eval_infos[ind][1] - p.half_num_regions * p.bin_size - (eval_infos[ind][1] % p.bin_size)
+            for b in range(p.num_bins):
+                start = mid + b * p.bin_size
+                for t in track_inds_bed:
+                    track = eval_track_names[t]
+                    start_val.setdefault(track, {}).setdefault(eval_infos[ind][0], {}).setdefault(start, []).append(locus[t][b])
+        print(" bed- ", end="")
+        p1 = None
+        p2 = None
+        predictions_for_bed = None
+        gc.collect()
+    # joblib.dump(predictions, "pred.gz", compress="lz4")
     protein_gene_set = []
     final_pred_tss = {}
     for i in range(len(eval_infos)):
@@ -104,30 +131,74 @@ def eval_perf(p, our_model, head, eval_infos, should_draw, current_epoch, label,
             print(i, end=" ")
         for track in eval_track_names:
             final_pred[gene][track] = np.mean(final_pred[gene][track])
+    # joblib.dump(final_pred, "final_pred.gz", compress="lz4")
+    # pickle.dump(final_pred, open(f"{p.pickle_folder}/final_pred_testt.gz", "wb"), protocol=pickle.HIGHEST_PROTOCOL)
+    # np.savetxt('test.tsv', np.asarray([a, b]).T, delimiter='\t')
+    # final_pred = pickle.load(open(f"{p.pickle_folder}/final_pred_testt.gz", "rb"))
+
+    print("Saving bed files")
+    for track in start_val.keys():
+        with open("bed_output/OUR_" + track + ".bedGraph", 'w+') as f:
+            for chrom in start_val[track].keys():
+                for start in start_val[track][chrom].keys():
+                    start_val[track][chrom][start] = np.max(start_val[track][chrom][start])  # MAX can be better on the test set!
+                for start in sorted(start_val[track][chrom].keys()):
+                    f.write(f"{chrom}\t{start}\t{start + p.bin_size}\t{start_val[track][chrom][start]}")
+                    f.write("\n")
 
     corr_p = []
     corr_s = []
     genes_performance = []
+    candidates = []
+    candidate_tracks = []
     for gene in final_pred.keys():
         a = []
         b = []
-        for track in eval_track_names:
+        indices = []
+        for v, track in enumerate(eval_track_names):
             type = track[:track.find(".")]
-            if type != "CAGE":
+            if type != "CAGE" or "FANTOM5" not in track or "response" in track.lower() or "00" in track:
                 continue
             # if track not in eval_tracks:
             #     continue
             a.append(final_pred[gene][track])
             b.append(eval_gt[gene][track])
+            indices.append(v)
         a = np.nan_to_num(a, neginf=0, posinf=0)
         b = np.nan_to_num(b, neginf=0, posinf=0)
         pc = stats.pearsonr(a, b)[0]
         sc = stats.spearmanr(a, b)[0]
+        bigf = False
+        smallf = False
+        bi = -1
+        si = -1
+        max_ai = -1
+        min_ai = 100
+        for i in range(len(a)):
+            if a[i] > 0.3 and b[i] > 0.3:
+                bigf = True
+                if a[i] > max_ai:
+                    bi = i
+                    max_ai = a[i]
+            if a[i] < 0.05 and b[i] < 0.05:
+                smallf = True
+                if a[i] < min_ai:
+                    si = i
+                    min_ai = a[i]
+        if bigf and smallf and sc > 0.6:
+            candidates.append(str(max_ai) + "\t" + gene + "\t" + gene_positions[gene] + "\t" + eval_track_names[indices[bi]]
+                              + "\t" + eval_track_names[indices[si]])
+            candidate_tracks.append(eval_track_names[indices[si]])
+            candidate_tracks.append(eval_track_names[indices[bi]])
         if not math.isnan(sc) and not math.isnan(pc):
             corr_p.append(pc)
             corr_s.append(sc)
-            genes_performance.append(f"{gene}\t{sc}\t{np.mean(b)}\t{np.std(b)}")
+            genes_performance.append(f"{gene}\t{sc}\t{np.mean(b)}\t{np.std(b)}\t{eval_track_names[indices[np.argmin(a)]]}\t{eval_track_names[indices[np.argmax(a)]]}")
 
+    with open("candidates.tsv", 'w+') as f:
+        f.write('\n'.join(candidates))
+    with open("candidate_tracks.tsv", 'w+') as f:
+        f.write('\n'.join(candidate_tracks))
     print("")
     print(f"Across tracks {len(corr_p)} {np.mean(corr_p)} {np.mean(corr_s)}")
     with open("genes_performance.tsv", 'w+') as f:

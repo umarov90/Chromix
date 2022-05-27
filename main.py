@@ -165,8 +165,8 @@ def run_epoch(last_proc, fit_epochs, head_id):
         print(mp_q.get())
         last_proc.join()
         print("Finished waiting")
-    # joblib.dump([input_sequences, output_scores, output_hic], "pickle/run.gz", compress=3)
-    # argss = joblib.load("pickle/run.gz")
+    # joblib.dump([input_sequences, all_outputs], f"{p.pickle_folder}run.gz", compress=3)
+    # argss = joblib.load(f"{p.pickle_folder}run.gz")
     # p = mp.Process(target=train_step, args=(argss[0][:400], argss[1][:400], argss[2][:400], fit_epochs, head_id,))
     proc = mp.Process(target=train_step, args=(
         heads[p.species[head_id]], p.species[head_id], input_sequences, all_outputs, fit_epochs, hic_num, mp_q,))
@@ -262,10 +262,10 @@ def train_step(head, head_name, input_sequences, all_outputs, fit_epochs, hic_nu
                         (key, val) = line.split()
                         loss_weights[key] = float(val)
                 losses = {
-                    "our_expression": "mse",
+                    "our_expression": mo.pearsonr_mse(),
                     "our_epigenome": "mse",
                     "our_conservation": "mse",
-                    "our_hic": "mse",
+                    "our_hic": "msle",
                 }
                 our_model.compile(optimizer=optimizer, loss=losses, loss_weights=loss_weights)
             else:
@@ -355,11 +355,15 @@ def check_perf(mp_q):
             if info[0] == train_eval_chr:
                 train_eval_chr_info.append(info)
         print(f"Training set {len(train_eval_chr_info)}")
-        training_spearman = evaluation.eval_perf(p, our_model, heads["hg38"], train_eval_chr_info,
-                                                 False, current_epoch, "train", one_hot)
-        # training_spearman = 0
-        print(f"Test set {len(test_info)}")
-        test_spearman = evaluation.eval_perf(p, our_model, heads["hg38"], test_info,
+        # training_spearman = evaluation.eval_perf(p, our_model, heads["hg38"], train_eval_chr_info,
+        #                                          False, current_epoch, "train", one_hot)
+        training_spearman = 0
+        test_eval_chr_info = []
+        for info in test_info:
+            if info[0] == "chr11":
+                test_eval_chr_info.append(info)
+        print(f"Test set {len(test_eval_chr_info)}")
+        test_spearman = evaluation.eval_perf(p, our_model, heads["hg38"], test_eval_chr_info,
                                              True, current_epoch, "test", one_hot)
         with open(p.model_name + "_history.csv", "a+") as myfile:
             myfile.write(f"{training_spearman},{test_spearman}")
@@ -384,6 +388,17 @@ last_proc = None
 p = MainParams()
 picked_training_regions = {}
 if __name__ == '__main__':
+    # import model as mo
+    # import tensorflow as tf
+    # nl = mo.pearsonr_poisson()
+    #
+    # x = np.random.random((2, 4, 4))
+    # y = np.random.random((2, 4, 4))
+    #
+    # x = tf.convert_to_tensor(x, dtype=tf.float32)
+    # y = tf.convert_to_tensor(y, dtype=tf.float32)
+    # a = mo.loop_cor_loss(x, y)
+
     train_info, test_info, protein_coding = parser.parse_sequences(p)
     if Path(f"{p.pickle_folder}track_names_col.gz").is_file():
         track_names_col = joblib.load(f"{p.pickle_folder}track_names_col.gz")
@@ -427,11 +442,11 @@ if __name__ == '__main__':
     conservation_lr = 0.0008
     epigenome_lr = 0.0004
     resnet_lr = 0.00001
-    optimizers = {"our_resnet": tf.keras.optimizers.Adam(learning_rate=resnet_lr),
-                  "our_expression": tf.keras.optimizers.Adam(learning_rate=expression_lr),
-                  "our_epigenome": tf.keras.optimizers.Adam(learning_rate=epigenome_lr),
-                  "our_conservation": tf.keras.optimizers.Adam(learning_rate=conservation_lr),
-                  "our_hic": tf.keras.optimizers.Adam(learning_rate=hic_lr), }
+    optimizers = {"our_resnet": tf.keras.optimizers.Adam(learning_rate=resnet_lr, clipnorm=0.001),
+                  "our_expression": tf.keras.optimizers.Adam(learning_rate=expression_lr, clipnorm=0.001),
+                  "our_epigenome": tf.keras.optimizers.Adam(learning_rate=epigenome_lr, clipnorm=0.001),
+                  "our_conservation": tf.keras.optimizers.Adam(learning_rate=conservation_lr, clipnorm=0.001),
+                  "our_hic": tf.keras.optimizers.Adam(learning_rate=hic_lr, clipnorm=0.001), }
     mp_q = mp.Queue()
 
     print("Training starting")

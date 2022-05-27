@@ -52,8 +52,8 @@ for k in hic_keys:
 # hic_keys = hn
 # joblib.dump(hic_keys, "pickle/hic_keys.gz", compress=3)
 
-infos = joblib.load(f"{p.pickle_folder}test_info.gz")[100:150]
-infos = infos[::5]
+infos = joblib.load(f"{p.pickle_folder}test_info.gz")[100:1000]
+infos = infos[::20]
 print(f"Number of positions: {len(infos)}")
 one_hot = joblib.load(f"{p.pickle_folder}hg38_one_hot.gz")
 strategy = tf.distribute.MultiWorkerMirroredStrategy()
@@ -126,22 +126,27 @@ for w in range(0, len(test_seq), w_step):
     else:
         predictions_hic = np.concatenate((predictions_hic, p1[3]))
 
+hic_output = np.asarray(hic_output)
+print("drawing")
+print(predictions_hic.shape)
+print(hic_output.shape)
+hic_num = 5
 for n in range(len(hic_output)):
-    fig, axs = plt.subplots(2, len(hic_keys), figsize=(48, 12))
-    for i in range(len(hic_keys)):
+    fig, axs = plt.subplots(2, hic_num, figsize=(20, 10))
+    for i in range(hic_num):
         mat = recover_shape(hic_output[n][i], p.num_hic_bins)
         mat = gaussian_filter(mat, sigma=0.5)
-        sns.heatmap(mat, linewidth=0.0, ax=axs[0, i], square=True, cbar=False)
+        sns.heatmap(mat, linewidth=0.0, ax=axs[0, i], square=True)
         axs[0, i].set(xticklabels=[])
         axs[0, i].set(yticklabels=[])
 
-    for i in range(len(hic_keys)):
+    for i in range(hic_num):
         mat = recover_shape(predictions_hic[n][i], p.num_hic_bins)
         # mat = gaussian_filter(mat, sigma=0.5)
-        sns.heatmap(mat, linewidth=0.0, ax=axs[1, i], square=True, cbar=False)
+        sns.heatmap(mat, linewidth=0.0, ax=axs[1, i], square=True)
         axs[1, i].set(xticklabels=[])
         axs[1, i].set(yticklabels=[])
 
     fig.tight_layout()
-    plt.savefig(f"hic_check/{n}.png")
+    plt.savefig(f"hic_check/{n}.svg")
     plt.close(fig)
