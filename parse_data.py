@@ -1,4 +1,5 @@
 import os
+import sys
 from pathlib import Path
 import pandas as pd
 import numpy as np
@@ -29,7 +30,7 @@ def parse_hic(p):
         for filename in os.listdir(directory):
             try:
                 fn = os.path.join(directory, filename)
-                if not fn.endswith("10000nt.tsv.gz"):
+                if not fn.endswith("10368nt.tsv.gz"):
                     continue
                 t_name = filename
                 print(t_name)
@@ -40,9 +41,13 @@ def parse_hic(p):
                 #     continue
                 # if Path(folder + t_name + "chr1").is_file():
                 #     continue
-                fields = ["chrom", "start1", "start2", "value"]
-                dtypes = {"chrom": str, "start1": int, "start2": int, "value": float}
-                df = pd.read_csv(fn, sep="\t", index_col=False, names=fields, dtype=dtypes, header=None)
+                df = pd.read_csv(fn, sep="\t", index_col=False)
+                df.rename(columns={'hg38_chrom': 'chrom', 'hg38_bin_1_start': 'start1',
+                                   'hg38_bin_2_start': 'start2', 'rlogP_max': 'score',
+                                   'rlogQ_max': 'score', 'CHiCAGO_score_max': 'score'}, inplace=True)
+                if 'score' not in df.columns:
+                    print("score not in columns")
+                df = df[["chrom", "start1", "start2", "score"]]
                 chrd = list(df["chrom"].unique())
                 should_continue = False
                 for i in range(22):
@@ -52,16 +57,13 @@ def parse_hic(p):
                 if should_continue or "chrX" not in chrd:
                     print(f"Not all chroms present in {t_name}")
                     continue
-                df.drop(df[df['start1'] - df['start2'] > 420000].index, inplace=True)
+                df.drop(df[df['start1'] - df['start2'] > p.input_size].index, inplace=True)
                 print(len(df))
 
-                m = df.loc[df['value'] != np.inf, 'value'].max()
+                m = df.loc[df['score'] != np.inf, 'score'].max()
                 print("P Max is: " + str(m))
-                df['value'].replace(np.inf, m, inplace=True)
-                # df['value'].clip(upper=100, inplace=True)
-                df["score"] = df["value"] / df["value"].max()
-
-                df.drop(["value"], axis=1, inplace=True)
+                df['score'].replace(np.inf, m, inplace=True)
+                df["score"] = df["score"] / m
 
                 for chr in chrd:
                     joblib.dump(df.loc[df['chrom'] == chr].sort_values(by=['start1']),
@@ -93,6 +95,7 @@ def parse_hic(p):
 
 def parse_tracks(p):
     track_names_col = {}
+    meta = pd.read_csv("data/ML_all_track.metadata.2022053017.tsv", sep="\t")
     for specie in p.species:
         if Path(f"{p.pickle_folder}track_names_{specie}.gz").is_file():
             track_names = joblib.load(f"{p.pickle_folder}track_names_{specie}.gz")
@@ -102,11 +105,10 @@ def parse_tracks(p):
             track_names = []
             for filename in os.listdir(tracks_folder):
                 if filename.endswith(".gz"):
-                    track = filename[:-len(".100nt.bed.gz")]
-                    fn = tracks_folder + f"{track}.100nt.bed.gz"
+                    fn = tracks_folder + filename
                     size = os.path.getsize(fn)
-                    if size > 200000 or track.startswith("sc"):
-                        track_names.append(track)
+                    if size > 200000 or filename.startswith("sc"):
+                        track_names.append(filename)
 
             print(f"{specie} {len(track_names)}")
 
@@ -119,8 +121,9 @@ def parse_tracks(p):
             for t in range(start, end, step_size):
                 t_end = min(t+step_size, end)
                 sub_tracks = track_names[t:t_end]
+                # parse_some_tracks(q, sub_tracks, ga, p.bin_size, tracks_folder,meta)
                 proc = mp.Process(target=parse_some_tracks,
-                               args=(q, sub_tracks, ga, p.bin_size, tracks_folder,))
+                               args=(q, sub_tracks, ga, p.bin_size, tracks_folder,meta,))
                 proc.start()
                 ps.append(proc)
                 if len(ps) >= nproc:
@@ -140,17 +143,24 @@ def parse_tracks(p):
     return track_names_col
 
 
-def parse_some_tracks(q, some_tracks, ga, bin_size, tracks_folder):
+def parse_some_tracks(q, some_tracks, ga, bin_size, tracks_folder, meta):
     for track in some_tracks:
         if Path(main.p.parsed_tracks_folder + track).is_file():
             continue
         try:
-            fn = tracks_folder + f"{track}.100nt.bed.gz"
+            fn = tracks_folder + track
+            meta_row = meta.loc[meta['file_name'] == track]
+            if len(meta_row) > 0:
+                meta_row = meta_row.iloc[0]
+            else:
+                meta_row = None
             gast = copy.deepcopy(ga)
             dtypes = {"chr": str, "start": int, "end": int, "score": float}
             df = pd.read_csv(fn, delim_whitespace=True, names=["chr", "start", "end", "score"],
                              dtype=dtypes, header=None, index_col=False)
-
+            if df['start'].iloc[0] % 64 != 0:
+                print(f"not 64 {track}")
+                sys.exit()
             chrd = list(df["chr"].unique())
             df["mid"] = (df["start"] + (df["end"] - df["start"]) / 2) / bin_size
             df = df.astype({"mid": int})
@@ -170,12 +180,18 @@ def parse_some_tracks(q, some_tracks, ga, bin_size, tracks_folder):
             max_val = -1
             min_val = 0
             # all_vals = None
+            library_size = 0
             for key in gast.keys():
                 min_val = min(np.min(gast[key]), min_val)
+                library_size += np.sum(gast[key])
             for key in gast.keys():
-                if "scEnd5" in track:
+                if meta_row is None:
+                    gast[key] = np.log10(1000000 * (gast[key] / library_size) + 1)
+                elif meta_row["technology"] == "scEnd5":
                     gast[key] = np.log10(np.exp(gast[key]))
-                elif "conservation" in track.lower():
+                elif meta_row["value"] == "RNA":
+                    gast[key] = np.log10(1000000 * (gast[key] / library_size) + 1)
+                elif meta_row["value"] == "conservation":
                     gast[key] = gast[key] + abs(min_val)
                 else:
                     gast[key] = np.log10(gast[key] + 1)
@@ -191,7 +207,8 @@ def parse_some_tracks(q, some_tracks, ga, bin_size, tracks_folder):
             # if scale_val == 0:
             #     print(scale_val)
             for key in gast.keys():
-                gast[key] = gast[key] / max_val  # np.clip(gast[key], 0, scale_val) / scale_val
+                if not (meta_row is None or meta_row["value"] == "RNA"):
+                    gast[key] = gast[key] / max_val  # np.clip(gast[key], 0, scale_val) / scale_val
                 gast[key] = gaussian_filter(gast[key], sigma=0.5)
                 gast[key] = gast[key].astype(np.float32)
             joblib.dump(gast, main.p.parsed_tracks_folder + track, compress="lz4")

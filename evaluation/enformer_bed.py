@@ -197,30 +197,20 @@ p = MainParams()
 #           'CHIP:H3K27ac:keratinocyte female': predictions[:, 706],
 #           'CAGE:Keratinocyte - epidermal': np.log10(1 + predictions[:, 4799])}
 # plot_tracks(tracks, target_interval)
-
-enf_tracks = df_targets[df_targets['description'].str.contains("CAGE")]['description'].tolist()
-enf_tracks_id = df_targets[df_targets['description'].str.contains("CAGE")]['identifier'].tolist()
 track_inds_bed = []
-for i, track in enumerate(enf_tracks):
-    if "brain" in track.lower():
-        track_inds_bed.append(i)
-        print(track)
-        break
-for i, track in enumerate(enf_tracks):
-    if "bladder" in track.lower():
-        track_inds_bed.append(i)
-        print(track)
-        break
-
-for t in track_inds_bed:
-    print(enf_tracks_id[t])
+enf_tracks_id = {}
+for index, row in df_targets.iterrows():
+    if "monocytes" in row["description"].lower() or "t cells" in row["description"].lower():
+        track_inds_bed.append(row["index"])
+        enf_tracks_id[row["index"]] = row["identifier"]
+        print(row["description"] + " " + row["identifier"])
 
 print("Predicting")
 num_bins = 896
 bin_size = 128
 all_start_vals = {}
 for chrom in fasta_extractor._chromosome_sizes.keys():
-    if chrom != "chr14":
+    if chrom != "chr5":
         continue
     start_val = {}
     batch = []

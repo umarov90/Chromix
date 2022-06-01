@@ -77,11 +77,11 @@ def eval_perf(p, our_model, head, eval_infos, should_draw, current_epoch, label,
 
     start_val = {}
     track_inds_bed = []
-    with open('candidate_tracks.tsv') as f:
-        candidates_list = f.read().splitlines()
+    # with open('candidate_tracks.tsv') as f:
+    #     candidates_list = f.read().splitlines()
 
     for i, track in enumerate(eval_track_names):
-        if track in candidates_list:
+        if "CNhs13920" in track or "CNhs13224" in track:
             track_inds_bed.append(i)
     print(f"Number of tracks for bed: {len(track_inds_bed)}")
     final_pred = {}
@@ -157,7 +157,7 @@ def eval_perf(p, our_model, head, eval_infos, should_draw, current_epoch, label,
         indices = []
         for v, track in enumerate(eval_track_names):
             type = track[:track.find(".")]
-            if type != "CAGE" or "FANTOM5" not in track or "response" in track.lower() or "00" in track:
+            if type != "CAGE" or "FANTOM5" not in track: # or "response" in track.lower() or "00" in track
                 continue
             # if track not in eval_tracks:
             #     continue

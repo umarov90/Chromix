@@ -1,81 +1,75 @@
 import math
 
-from tensorflow.keras.layers import LeakyReLU, LayerNormalization, MultiHeadAttention, \
-    Add, Embedding, Layer, Reshape, Dropout, \
-    Dense, Conv1D, Input, Flatten, Activation, BatchNormalization, LocallyConnected1D
-from tensorflow.keras.models import Model
 import tensorflow as tf
+from tensorflow.keras.layers import LeakyReLU, LayerNormalization, MultiHeadAttention, \
+    Add, Embedding, Layer, Reshape, \
+    Dense, Conv1D, Input, Flatten, Activation, BatchNormalization, LocallyConnected1D, DepthwiseConv1D, DepthwiseConv2D
+from tensorflow.keras.models import Model
+
 import numpy as np
 
-dropout_rate = 0.0
-leaky_alpha = 0.2
-num_patches = 2101
-num_filters = 885
 
 # Taken from https://github.com/calico/basenji/blob/master/basenji/layers.py
 class UpperTri(tf.keras.layers.Layer):
-  ''' Unroll matrix to its upper triangular portion.'''
-  def __init__(self, diagonal_offset=1):
-    super(UpperTri, self).__init__()
-    self.diagonal_offset = diagonal_offset
+    ''' Unroll matrix to its upper triangular portion.'''
 
-  def call(self, inputs):
-    seq_len = inputs.shape[1]
-    output_dim = inputs.shape[-1]
+    def __init__(self, diagonal_offset=1):
+        super(UpperTri, self).__init__()
+        self.diagonal_offset = diagonal_offset
 
-    if type(seq_len) == tf.compat.v1.Dimension:
-      seq_len = seq_len.value
-      output_dim = output_dim.value
+    def call(self, inputs):
+        seq_len = inputs.shape[1]
+        output_dim = inputs.shape[-1]
 
-    triu_tup = np.triu_indices(seq_len, self.diagonal_offset)
-    triu_index = list(triu_tup[0]+ seq_len*triu_tup[1])
-    unroll_repr = tf.reshape(inputs, [-1, seq_len**2, output_dim])
-    return tf.gather(unroll_repr, triu_index, axis=1)
+        if type(seq_len) == tf.compat.v1.Dimension:
+            seq_len = seq_len.value
+            output_dim = output_dim.value
 
-  def get_config(self):
-    config = super().get_config().copy()
-    config['diagonal_offset'] = self.diagonal_offset
-    return config
+        triu_tup = np.triu_indices(seq_len, self.diagonal_offset)
+        triu_index = list(triu_tup[0] + seq_len * triu_tup[1])
+        unroll_repr = tf.reshape(inputs, [-1, seq_len ** 2, output_dim])
+        return tf.gather(unroll_repr, triu_index, axis=1)
+
+    def get_config(self):
+        config = super().get_config().copy()
+        config['diagonal_offset'] = self.diagonal_offset
+        return config
 
 
-def human_model(input_size, num_features, num_regions, hic_num, hic_size, bin_size, one_d_heads):
+def human_model(input_size, num_features, num_regions, hic_num, bin_size, hic_bin_size, one_d_heads):
     input_shape = (input_size, num_features)
     inputs = Input(shape=input_shape, dtype=tf.float32)
     x = inputs
-    resnet_output = resnet(x, input_size, bin_size)
-    our_resnet = Model(inputs, resnet_output, name="our_resnet")
+    output1d, output2d = resnet(x, input_size, bin_size, hic_bin_size)
+    our_resnet = Model(inputs, [output1d, output2d], name="our_resnet")
 
-    hic_input = Input(shape=(num_patches, num_filters))
-    hi = Conv1D(256, kernel_size=1, strides=1, name="hic_layer_1")(hic_input)
-    hx = LeakyReLU(alpha=leaky_alpha, name="hic_act")(hi)
-    hxp = tf.keras.layers.AveragePooling1D(pool_size=50)(hi)
+    seq_len = output2d.shape[-2]
+    features = output2d.shape[-1]
+    hic_input = Input(shape=(seq_len, features))
 
-    hx = tf.transpose(hx, [0, 2, 1])
-    hx = LocallyConnected1D(input_size // 10000, 1, name="hic_layer_2", activation=LeakyReLU(alpha=leaky_alpha))(hx)
-    hx = tf.transpose(hx, [0, 2, 1])
-
-    hx = tf.concat([hx, hxp], axis=-1)
-
-    hx = hx[..., 1:-1, :]
-
-    _, seq_len, features = hx.shape
+    hx = hic_input
 
     twod1 = tf.tile(hx, [1, seq_len, 1])
     twod1 = tf.reshape(twod1, [-1, seq_len, seq_len, features])
     twod2 = tf.transpose(twod1, [0, 2, 1, 3])
     twod = tf.concat([twod1, twod2], axis=-1)
 
+    twod = DepthwiseConv2D(kernel_size=9, name="hic_dw", padding="same")(twod)
+
+    twod = twod[..., 5:-5, 5:-5, :]
+
     triu = UpperTri()(twod)
-    hx = Conv1D(4096, kernel_size=1, strides=1, name="hic_pointwise", activation=LeakyReLU(alpha=leaky_alpha))(triu)
+    hx = Conv1D(4096, kernel_size=1, strides=1, name="hic_pointwise", activation=tf.nn.gelu)(triu)
     hx = Conv1D(hic_num, kernel_size=1, strides=1, name="hic_last_conv1d")(hx)
     hx = tf.transpose(hx, [0, 2, 1])
     our_hic = Model(hic_input, hx, name="our_hic")
 
     all_heads = []
+    outs = our_resnet(inputs)
     for key in one_d_heads.keys():
-        new_head = make_head(len(one_d_heads[key]), num_regions, "our_" + key)
-        all_heads.append(new_head(our_resnet(inputs)))
-    all_heads.append(our_hic(our_resnet(inputs)))
+        new_head = make_head(len(one_d_heads[key]), num_regions, output1d, "our_" + key)
+        all_heads.append(new_head(outs[0]))
+    all_heads.append(our_hic(outs[1]))
 
     our_model = Model(inputs, all_heads, name="our_model")
     # print("\nModel constructed")
@@ -83,24 +77,22 @@ def human_model(input_size, num_features, num_regions, hic_num, hic_size, bin_si
     return our_model
 
 
-def make_head(track_num, num_regions, name):
-    head_input = Input(shape=(num_patches, num_filters))
+def make_head(track_num, num_regions, output1d, name):
+    seq_len = output1d.shape[-2]
+    features = output1d.shape[-1]
+    head_input = Input(shape=(seq_len, features))
     x = head_input
 
-    # x = tf.transpose(x, [0, 2, 1])
-    # # x = Conv1D(num_regions, kernel_size=1, strides=1, use_bias=False, name="regions_projection")(x)
-    # x = Dense(input_size // 100, activation=tf.nn.gelu, name="regions_projection")(x)
-    # x = tf.transpose(x, [0, 2, 1])
+    x = DepthwiseConv1D(kernel_size=9, strides=1, name=name + "_dw", activation=tf.nn.gelu, padding="same")(x)
 
     trim = (x.shape[-2] - num_regions) // 2
     x = x[..., trim:-trim, :]
 
-    x = Dropout(dropout_rate, input_shape=(num_regions, num_filters))(x)
     filter_num = 2048
-    # if track_num > 5000:
-    #     filter_num *= 2
-    x = Conv1D(filter_num, kernel_size=1, strides=1, name=name + "_pointwise", activation=LeakyReLU(alpha=leaky_alpha))(x)
-    outputs = Conv1D(track_num, kernel_size=1, strides=1, name=name+"_last_conv1d")(x)
+    if name == "our_expression":
+        filter_num *= 2
+    x = Conv1D(filter_num, kernel_size=1, strides=1, name=name + "_pointwise", activation=tf.nn.gelu)(x)
+    outputs = Conv1D(track_num, kernel_size=1, strides=1, name=name + "_last_conv1d")(x)
     outputs = tf.transpose(outputs, [0, 2, 1])
     # print(outputs)
     head_output = outputs
@@ -121,94 +113,93 @@ def small_model(input_size, num_features, num_regions, cell_num, bin_size):
     # print(our_model.summary())
     return our_model
 
+# from https://github.com/deepmind/deepmind-research/blob/master/enformer/enformer.py
+def exponential_linspace_int(start, end, num, divisible_by=1):
+  """Exponentially increasing values of integers."""
+  def _round(x):
+    return int(np.round(x / divisible_by) * divisible_by)
 
-def resnet_layer(inputs,
-                 num_filters=16,
-                 kernel_size=7,
-                 strides=1,
-                 activation=True,
-                 name="rl_"):
-    conv = Conv1D(num_filters,
-                  kernel_size=kernel_size,
-                  strides=strides,
-                  padding="same",
-                  name=name + "conv1d")
+  base = np.exp(np.log(end / start) / (num - 1))
+  return [_round(start * base**i) for i in range(num)]
 
-    x = inputs
-    if activation:
-        x = LeakyReLU(alpha=leaky_alpha, name=name + "act")(x)
-    x = conv(x)
-    return x
-
-
-def resnet(input_x, input_size, bin_size):
+def resnet(input_x, input_size, bin_size, hic_bin_size):
     # Initial number of filters
-    num_filters = 384
+    num_filters = 128
+    mlp_start_block = 6
+    mlp_hidden_dim_reduction = 8
+    mlp_size = 256
 
     # First convolutional layer. Since it is first, it is not preceded by activation and batch normalization
-    patchify_val = 3
-    x = resnet_layer(inputs=input_x,
-                     num_filters=num_filters,
-                     activation=False,
-                     strides=patchify_val,
-                     kernel_size=15,
-                     name="rl_1_")
+    patchify_val = 4
+    x = Conv1D(num_filters,
+               strides=patchify_val,
+               kernel_size=patchify_val,
+               name="rl_1_")(input_x)
+    x = LayerNormalization()(x)
     current_len = input_size // patchify_val
     # Instantiate the stack of residual units
-    num_blocks = 7
+    num_blocks = 14
+    filter_nums = exponential_linspace_int(num_filters, 1024, 6, divisible_by=64)
     for block in range(num_blocks):
         cname = "rl_" + str(block) + "_"
         strides = 1
         y = x
-        # at block num_blocks - 1 final resolution is reached
-        if block != num_blocks - 1:
-            num_filters = int(num_filters * 1.15)
-        activation = True
         if block != 0:
             # Downsample
-            strides = 2
-            current_len = math.ceil(current_len / 2)
-            if block == num_blocks - 1:
-                current_len = input_size // bin_size
-            if block > 4:
-                y = LeakyReLU(alpha=leaky_alpha, name="dwn_" + str(block))(y)
-                y = tf.transpose(y, [0, 2, 1])
-                # Replace by conv maybe
-                y = Dense(current_len, activation=LeakyReLU(alpha=leaky_alpha),
-                          name="regions_projection_" + str(block))(y)
-                y = tf.transpose(y, [0, 2, 1])
-                activation = False
+            if block < mlp_start_block:
+                strides = 2
+            elif block < mlp_start_block + 4:
+                strides = 1
             else:
-                y = resnet_layer(inputs=y,
-                                 num_filters=num_filters,
-                                 strides=strides,
-                                 name="regions_projection_" + str(block))
+                strides = 3
+                if mlp_hidden_dim_reduction > 1:
+                    mlp_hidden_dim_reduction = mlp_hidden_dim_reduction / 2
+            if strides > 1:
+                current_len = math.ceil(current_len / strides)
+                y = LayerNormalization()(y)
+                y = DepthwiseConv1D(kernel_size=strides,
+                                    strides=strides,
+                                    padding="same",
+                                    name="downsample_" + str(block))(y)
 
-        # Wide basic block with two CNN layers.
-        y = resnet_layer(inputs=y,
-                         num_filters=num_filters,
-                         activation=activation,
-                         name=cname + "1_")
-        y = Dropout(dropout_rate)(y)
-        y = resnet_layer(inputs=y,
-                         num_filters=num_filters,
-                         name=cname + "2_")
-        if block != num_blocks - 1:
-            # linear projection residual shortcut connection to match changed dims
-            x = resnet_layer(inputs=x,
-                             num_filters=num_filters,
-                             strides=strides,
-                             activation=False,
-                             name=cname + "3_")
+        if block < mlp_start_block:
+            num_filters = filter_nums[block]
+
+        if block >= mlp_start_block:
+            y1 = y[..., :-mlp_size]
         else:
-            x = tf.transpose(x, [0, 2, 1])
-            x = Conv1D(input_size // bin_size, kernel_size=1, name="linear_regions_projection_" + str(block))(x)
-            x = tf.transpose(x, [0, 2, 1])
-        x = Add()([x, y])
+            y1 = y
+        y1 = DepthwiseConv1D(kernel_size=9, name="depthwise_" + str(block), padding="same")(y1)
+        if block >= mlp_start_block:
+            y2 = y[..., -mlp_size:]
+            y2 = tf.transpose(y2, [0, 2, 1])
+            hd = current_len // mlp_hidden_dim_reduction
+            y2 = Dense(hd, activation=tf.nn.gelu, name="mlp_1_" + str(block))(y2)
+            y2 = Dense(current_len, name="mlp_2_" + str(block))(y2)
+            y2 = tf.transpose(y2, [0, 2, 1])
+            y = tf.concat([y1, y2], axis=-1)
+        else:
+            y = y1
+        y = LayerNormalization()(y)
+        # Wide basic block with two CNN layers.
+        y = Conv1D(4 * num_filters,
+                   kernel_size=1, padding="same",
+                   name=cname + "1_")(y)
+        y = tf.keras.layers.Activation(tf.nn.gelu)(y)
+        y = Conv1D(num_filters, kernel_size=1, padding="same",
+                   name=cname + "2_")(y)
 
-    # final activation
-    x = LeakyReLU(alpha=leaky_alpha, name="res_act_final")(x)
-    return x
+        # linear projection residual shortcut connection
+        x = Conv1D(num_filters,
+                   kernel_size=1,
+                   strides=strides,
+                   padding="same",
+                   name=cname + "3_")(x)
+
+        x = Add()([x, y])
+        if block == mlp_start_block + 4 - 1:
+            output_1d = LayerNormalization()(x)
+    return output_1d, LayerNormalization()(x)
 
 
 def wrap(input_sequences, output_scores, bs):
@@ -271,57 +262,23 @@ def batch_predict(model, seqs):
             predictions = np.concatenate((predictions, p1), dtype=np.float32)
     return predictions
 
+
 # taken from https://github.com/shtoneyan/gopher/blob/main/gopher/losses.py
 class pearsonr_mse(tf.keras.losses.Loss):
     def __init__(self, name="pearsonr_mse", **kwargs):
         super().__init__(name=name)
         self.reduction = tf.keras.losses.Reduction.SUM
+
     def call(self, y_true, y_pred):
-        #multinomial part of loss function
+        # multinomial part of loss function
         pr_loss = basenjipearsonr()
         mse_loss = tf.keras.losses.MeanSquaredError(reduction=tf.keras.losses.Reduction.SUM)
-        #sum with weight
+        # sum with weight
         total_loss = 0.0001 * mse_loss(y_true, y_pred) + 0.001 * pr_loss(y_true, y_pred)
         return total_loss
 
-class mse(tf.keras.losses.Loss):
-    def __init__(self, name="mse", **kwargs):
-        super().__init__(name=name)
-        self.reduction = tf.keras.losses.Reduction.SUM
 
-    def call(self, y_true, y_pred):
-        return tf.keras.losses.MSE(y_true,y_pred)
-
-class pearsonr_poisson(tf.keras.losses.Loss):
-    def __init__(self, name="pearsonr_poisson", **kwargs):
-        super().__init__(name=name)
-        self.alpha = kwargs.get('loss_params')
-        self.reduction = tf.keras.losses.Reduction.SUM
-        if not self.alpha:
-            print('ALPHA SET TO DEFAULT VALUE!')
-            self.alpha = 0.1
-    def call(self, y_true, y_pred):
-        #multinomial part of loss function
-        pr_loss = basenjipearsonr()
-        pr = pr_loss(y_true, y_pred)
-        #poisson part
-        poiss_loss = poisson()
-        poiss = poiss_loss(y_true, y_pred)
-        #sum with weight
-        total_loss = (2*pr*poiss)/(pr+poiss)
-        return total_loss
-
-
-class poisson(tf.keras.losses.Loss):
-    def __init__(self, name="poisson", **kwargs):
-        super().__init__(name=name)
-        self.reduction = tf.keras.losses.Reduction.SUM
-
-    def call(self, y_true, y_pred):
-        return tf.keras.losses.poisson(y_true, y_pred)
-
-
-class basenjipearsonr (tf.keras.losses.Loss):
+class basenjipearsonr(tf.keras.losses.Loss):
     def __init__(self, name="basenjipearsonr", **kwargs):
         super().__init__(name=name)
         self.reduction = tf.keras.losses.Reduction.SUM
@@ -330,13 +287,13 @@ class basenjipearsonr (tf.keras.losses.Loss):
     def call(self, y_true, y_pred):
         # y_true = tf.transpose(y_true, [0, 2, 1])
         # y_pred = tf.transpose(y_pred, [0, 2, 1])
-        product = tf.reduce_sum(tf.multiply(y_true, y_pred), axis=[0,1])
-        true_sum = tf.reduce_sum(y_true, axis=[0,1])
-        true_sumsq = tf.reduce_sum(tf.math.square(y_true), axis=[0,1])
-        pred_sum = tf.reduce_sum(y_pred, axis=[0,1])
-        pred_sumsq = tf.reduce_sum(tf.math.square(y_pred), axis=[0,1])
+        product = tf.reduce_sum(tf.multiply(y_true, y_pred), axis=[0, 1])
+        true_sum = tf.reduce_sum(y_true, axis=[0, 1])
+        true_sumsq = tf.reduce_sum(tf.math.square(y_true), axis=[0, 1])
+        pred_sum = tf.reduce_sum(y_pred, axis=[0, 1])
+        pred_sumsq = tf.reduce_sum(tf.math.square(y_pred), axis=[0, 1])
         count = tf.ones_like(y_true)
-        count = tf.reduce_sum(count, axis=[0,1])
+        count = tf.reduce_sum(count, axis=[0, 1])
         true_mean = tf.divide(true_sum, count)
         true_mean2 = tf.math.square(true_mean)
         pred_mean = tf.divide(pred_sum, count)
@@ -350,9 +307,8 @@ class basenjipearsonr (tf.keras.losses.Loss):
 
         true_var = true_sumsq - tf.multiply(count, true_mean2)
         pred_var = pred_sumsq - tf.multiply(count, pred_mean2)
-        m1 = tf.math.sqrt(tf.clip_by_value(true_var, self.epsilon, tf.math.reduce_max(true_var)))
-        m2 = tf.math.sqrt(tf.clip_by_value(pred_var, self.epsilon, tf.math.reduce_max(pred_var)))
-        tp_var = tf.multiply(m1, m2)
+
+        tp_var = tf.multiply(true_var, pred_var)
         correlation = tf.divide(covariance, tp_var + self.epsilon)
         correlation = tf.clip_by_value(correlation, -1, 1)
         correlation = tf.where(tf.math.is_nan(correlation), tf.zeros_like(correlation), correlation)

@@ -6,27 +6,26 @@ import pathlib
 
 class MainParams:
     def __init__(self):
-        self.input_size = 420200
+        self.input_size = 1036800
         self.half_size = int(self.input_size / 2)
-        self.bin_size = 200
-        self.hic_bin_size = 10000
-        self.num_hic_bins = 40
-        self.half_size_hic = 200000
-        self.num_bins = 1001
-        self.half_num_regions = int(self.num_bins / 2)
-        self.mid_bin = math.floor(self.num_bins / 2)
-        self.BATCH_SIZE = 1
-        self.GLOBAL_BATCH_SIZE = 4 * self.BATCH_SIZE
-        self.predict_batch_size = 4 * 2 * self.BATCH_SIZE
+        self.bin_size = 128
+        self.hic_bin_size = 10368
+        self.num_hic_bins = 90
+        self.half_size_hic = (self.num_hic_bins // 2) * self.hic_bin_size
+        self.num_bins = 4000
+        self.half_num_regions = self.num_bins // 2
+        self.mid_bin = self.num_bins // 2
+        self.BATCH_SIZE = 2
+        self.GLOBAL_BATCH_SIZE = 8 * self.BATCH_SIZE
+        self.predict_batch_size = 8 * 2 * self.BATCH_SIZE
         self.w_step = 50
-        self.STEPS_PER_EPOCH = 200
-        self.num_epochs = 1
-        self.hic_track_size = 1
+        self.STEPS_PER_EPOCH = 50
+        self.num_epochs = 1000
         self.num_features = 4
         self.shift_speed = 2000000
         self.initial_shift = 250 # +- 50k
-        self.hic_size = 780
-        self.species = ["hg38", "mm10", "macFas5", "calJac4", "rheMac8", "canFam3", "oviAri4", "rn6"]
+        # self.species = ["hg38", "mm10", "macFas5", "calJac4", "rheMac8", "canFam3", "oviAri4", "rn6"]
+        self.species = ["hg38"]
         self.script_folder = pathlib.Path(__file__).parent.resolve()
         folders = open(str(self.script_folder) + "/../data_dirs").read().strip().split("\n")
         self.data_folder = folders[0]

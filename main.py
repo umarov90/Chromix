@@ -5,6 +5,7 @@ import joblib
 import gc
 import random
 import time
+import pandas as pd
 import numpy as np
 import common as cm
 from pathlib import Path
@@ -47,7 +48,7 @@ def run_epoch(last_proc, fit_epochs, head_id):
         start = info[1] - (info[1] % p.bin_size) - p.half_size + shift_bins * p.bin_size
         extra = start + p.input_size - len(one_hot[info[0]])
         # Validation set!
-        # if info[0] == "chr1":
+        # if info[0] != "chr5" or not 139615843 < info[1] < 141668489: # or not 139615843 < info[1] < 141668489
         #     shifts.append(None)
         #     continue
         if start < 0 or extra > 0:
@@ -215,7 +216,7 @@ def train_step(head, head_name, input_sequences, all_outputs, fit_epochs, hic_nu
         # print(datetime.now().strftime('[%H:%M:%S] ') + "Loading the model")
         with strategy.scope():
             if human_training:
-                our_model = mo.human_model(p.input_size, p.num_features, p.num_bins, hic_num, p.hic_size, p.bin_size,
+                our_model = mo.human_model(p.input_size, p.num_features, p.num_bins, hic_num, p.bin_size,p.hic_bin_size,
                                            head)
             else:
                 our_model = mo.small_model(p.input_size, p.num_features, p.num_bins, len(head), p.bin_size)
@@ -262,10 +263,10 @@ def train_step(head, head_name, input_sequences, all_outputs, fit_epochs, hic_nu
                         (key, val) = line.split()
                         loss_weights[key] = float(val)
                 losses = {
-                    "our_expression": mo.pearsonr_mse(),
+                    "our_expression": "mse",
                     "our_epigenome": "mse",
                     "our_conservation": "mse",
-                    "our_hic": "msle",
+                    "our_hic": "mse",
                 }
                 our_model.compile(optimizer=optimizer, loss=losses, loss_weights=loss_weights)
             else:
@@ -342,26 +343,26 @@ def check_perf(mp_q):
     try:
         strategy = tf.distribute.MultiWorkerMirroredStrategy()
         with strategy.scope():
-            our_model = mo.human_model(p.input_size, p.num_features, p.num_bins, hic_num, p.hic_size, p.bin_size,
+            our_model = mo.human_model(p.input_size, p.num_features, p.num_bins, hic_num, p.bin_size, p.hic_bin_size,
                                        heads["hg38"])
             our_model.get_layer("our_resnet").set_weights(joblib.load(p.model_path + "_res"))
             our_model.get_layer("our_expression").set_weights(joblib.load(p.model_path + "_expression_hg38"))
             our_model.get_layer("our_epigenome").set_weights(joblib.load(p.model_path + "_epigenome"))
             our_model.get_layer("our_hic").set_weights(joblib.load(p.model_path + "_hic"))
             our_model.get_layer("our_conservation").set_weights(joblib.load(p.model_path + "_conservation"))
-        train_eval_chr = "chr1"
+        train_eval_chr = "chr5"
         train_eval_chr_info = []
         for info in train_info:
-            if info[0] == train_eval_chr:
+            if info[0] == train_eval_chr and 139615843 < info[1] < 141668489:
                 train_eval_chr_info.append(info)
         print(f"Training set {len(train_eval_chr_info)}")
-        # training_spearman = evaluation.eval_perf(p, our_model, heads["hg38"], train_eval_chr_info,
-        #                                          False, current_epoch, "train", one_hot)
-        training_spearman = 0
+        training_spearman = evaluation.eval_perf(p, our_model, heads["hg38"], train_eval_chr_info,
+                                                 False, current_epoch, "train", one_hot)
+        # training_spearman = 0
         test_eval_chr_info = []
         for info in test_info:
-            if info[0] == "chr11":
-                test_eval_chr_info.append(info)
+            # if info[0] == "chr11":
+            test_eval_chr_info.append(info)
         print(f"Test set {len(test_eval_chr_info)}")
         test_spearman = evaluation.eval_perf(p, our_model, heads["hg38"], test_eval_chr_info,
                                              True, current_epoch, "test", one_hot)
@@ -412,11 +413,17 @@ if __name__ == '__main__':
         for specie in p.species:
             shuffled_tracks = random.sample(track_names_col[specie], len(track_names_col[specie]))
             if specie == "hg38":
+                meta = pd.read_csv("data/ML_all_track.metadata.2022053017.tsv", sep="\t")
                 new_head = {}
-                new_head["expression"] = [x for x in shuffled_tracks if x.startswith(("CAGE", "RAMPAGE", "NETCAGE"))]
+                new_head["expression"] = [x for x in shuffled_tracks if
+                                          meta.loc[meta['file_name'] == x].iloc[0]["technology"].startswith(
+                                              ("CAGE", "RAMPAGE", "NETCAGE"))]
                 new_head["epigenome"] = [x for x in shuffled_tracks if
-                                         x.startswith(("DNase", "ATAC", "Histone_ChIP", "TF_ChIP"))]
-                new_head["conservation"] = [x for x in shuffled_tracks if x.startswith(("Conservation"))]
+                                         meta.loc[meta['file_name'] == x].iloc[0]["technology"].startswith(
+                                             ("DNase", "ATAC", "Histone_ChIP", "TF_ChIP"))]
+                new_head["conservation"] = [x for x in shuffled_tracks if
+                                            meta.loc[meta['file_name'] == x].iloc[0]["value"].startswith(
+                                                ("conservation"))]
             else:
                 new_head = shuffled_tracks
                 # new_head = [x for x in new_head if not x.startswith("sc")]
@@ -430,38 +437,38 @@ if __name__ == '__main__':
         else:
             print(f"Number of tracks in head {head_key}: {len(heads[head_key])}")
 
-    # import model as mo
-    # our_model = mo.human_model(p.input_size, p.num_features, p.num_bins, 56, p.hic_size, p.bin_size, heads["hg38"])
-
     hic_keys = parser.parse_hic(p)
     hic_num = len(hic_keys)
     print(f"hic {hic_num}")
 
+    # import model as mo
+    # our_model = mo.human_model(p.input_size, p.num_features, p.num_bins, 56, p.bin_size, p.hic_bin_size, heads["hg38"])
+
     hic_lr = 0.0001
     expression_lr = 0.0001
-    conservation_lr = 0.0008
-    epigenome_lr = 0.0004
+    conservation_lr = 0.0001
+    epigenome_lr = 0.0001
     resnet_lr = 0.00001
-    optimizers = {"our_resnet": tf.keras.optimizers.Adam(learning_rate=resnet_lr, clipnorm=0.001),
-                  "our_expression": tf.keras.optimizers.Adam(learning_rate=expression_lr, clipnorm=0.001),
-                  "our_epigenome": tf.keras.optimizers.Adam(learning_rate=epigenome_lr, clipnorm=0.001),
-                  "our_conservation": tf.keras.optimizers.Adam(learning_rate=conservation_lr, clipnorm=0.001),
-                  "our_hic": tf.keras.optimizers.Adam(learning_rate=hic_lr, clipnorm=0.001), }
+    optimizers = {"our_resnet": tfa.optimizers.AdamW(learning_rate=resnet_lr, weight_decay=1e-8, clipnorm=0.0001),
+                  "our_expression": tf.keras.optimizers.Adam(learning_rate=expression_lr),
+                  "our_epigenome": tf.keras.optimizers.Adam(learning_rate=epigenome_lr),
+                  "our_conservation": tf.keras.optimizers.Adam(learning_rate=conservation_lr),
+                  "our_hic": tf.keras.optimizers.Adam(learning_rate=hic_lr), }
     mp_q = mp.Queue()
 
     print("Training starting")
     start_epoch = 0
-    fit_epochs = 2
+    fit_epochs = 20
     try:
         for current_epoch in range(start_epoch, p.num_epochs, 1):
-            if current_epoch % 2 == 0:
-                head_id = 0
-            else:
-                head_id = 1 + (current_epoch - math.ceil(current_epoch / 2)) % (len(heads) - 1)
+            # if current_epoch % 2 == 0:
+            #     head_id = 0
+            # else:
+            #     head_id = 1 + (current_epoch - math.ceil(current_epoch / 2)) % (len(heads) - 1)
             # Only human to test HIC and CON!
             head_id = 0
             if head_id == 0:
-                p.STEPS_PER_EPOCH = 100
+                p.STEPS_PER_EPOCH = 80
                 fit_epochs = 2
             elif head_id == 1:
                 p.STEPS_PER_EPOCH = 400
