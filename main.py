@@ -293,13 +293,14 @@ def train_step(head, head_name, input_sequences, all_outputs, fit_epochs, hic_nu
                     print("loading conservation optimizer")
                     optimizers["our_conservation"].set_weights(joblib.load(p.model_path + "_opt_conservation"))
 
-                optimizers["our_resnet"].learning_rate = resnet_lr
-                # optimizers["our_resnet"].weight_decay = resnet_wd
-                optimizers["our_expression"].learning_rate = expression_lr
+                optimizers["our_resnet"].learning_rate.assign(resnet_lr)
+                optimizers["our_resnet"].weight_decay.assign(resnet_wd)
+                optimizers["our_resnet"].clipnorm = resnet_clipnorm
+                optimizers["our_expression"].learning_rate.assign(expression_lr)
                 if human_training:
-                    optimizers["our_hic"].learning_rate = hic_lr
-                    optimizers["our_epigenome"].learning_rate = epigenome_lr
-                    optimizers["our_conservation"].learning_rate = conservation_lr
+                    optimizers["our_hic"].learning_rate.assign(hic_lr)
+                    optimizers["our_epigenome"].learning_rate.assign(epigenome_lr)
+                    optimizers["our_conservation"].learning_rate.assign(conservation_lr)
 
     except Exception as e:
         traceback.print_exc()
@@ -449,7 +450,9 @@ if __name__ == '__main__':
     conservation_lr = 0.0001
     epigenome_lr = 0.0001
     resnet_lr = 0.00001
-    optimizers = {"our_resnet": tfa.optimizers.AdamW(learning_rate=resnet_lr, weight_decay=1e-8, clipnorm=0.0001),
+    resnet_wd = 1e-7
+    resnet_clipnorm = 0.001
+    optimizers = {"our_resnet": tfa.optimizers.AdamW(learning_rate=resnet_lr, weight_decay=resnet_wd, clipnorm=resnet_clipnorm),
                   "our_expression": tf.keras.optimizers.Adam(learning_rate=expression_lr),
                   "our_epigenome": tf.keras.optimizers.Adam(learning_rate=epigenome_lr),
                   "our_conservation": tf.keras.optimizers.Adam(learning_rate=conservation_lr),
@@ -468,8 +471,8 @@ if __name__ == '__main__':
             # Only human to test HIC and CON!
             head_id = 0
             if head_id == 0:
-                p.STEPS_PER_EPOCH = 80
-                fit_epochs = 2
+                p.STEPS_PER_EPOCH = 50
+                fit_epochs = 3
             elif head_id == 1:
                 p.STEPS_PER_EPOCH = 400
                 fit_epochs = 2
