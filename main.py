@@ -436,7 +436,7 @@ if __name__ == '__main__':
     conservation_lr = 0.0001
     epigenome_lr = 0.0001
     resnet_lr = 0.00001
-    resnet_wd = 1e-7
+    resnet_wd = 1e-6
     resnet_clipnorm = 0.001
     optimizers = {
         "our_resnet": tfa.optimizers.AdamW(learning_rate=resnet_lr, weight_decay=resnet_wd, clipnorm=resnet_clipnorm),
@@ -451,20 +451,17 @@ if __name__ == '__main__':
     fit_epochs = 20
     try:
         for current_epoch in range(start_epoch, p.num_epochs, 1):
-            # if current_epoch % 2 == 0:
-            #     head_id = 0
-            # else:
-            #     head_id = 1 + (current_epoch - math.ceil(current_epoch / 2)) % (len(heads) - 1)
-            # Only human to test HIC and CON!
-            head_id = 0
-            if head_id == 0:
-                p.STEPS_PER_EPOCH = 10
-                fit_epochs = 2
-            elif head_id == 1:
-                p.STEPS_PER_EPOCH = 400
-                fit_epochs = 2
+            if current_epoch % 2 == 0:
+                head_id = 0
             else:
-                p.STEPS_PER_EPOCH = 1000
+                head_id = 1 + (current_epoch - math.ceil(current_epoch / 2)) % (len(heads) - 1)
+            # Only human to test HIC and CON!
+            # head_id = 0
+            if head_id == 0:
+                p.STEPS_PER_EPOCH = 30
+                fit_epochs = 3
+            else:
+                p.STEPS_PER_EPOCH = 200
                 fit_epochs = 1
 
             # check_perf(mp_q)

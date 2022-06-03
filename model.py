@@ -10,14 +10,14 @@ import numpy as np
 
 
 def make_model(input_size, num_features, num_regions, hic_num, one_d_heads):
-    input_shape = (input_size, num_features)
-    inputs = Input(shape=input_shape, dtype=tf.float32)
+    inputs = Input(shape=(input_size, num_features), dtype=tf.float32)
     x = inputs
     output1d = resnet(x, input_size, hic_num)
     our_resnet = Model(inputs, output1d, name="our_resnet")
     outs = our_resnet(inputs)
 
     if hic_num > 0:
+        # Make hic head
         seq_len = output1d.shape[-2]
         features = output1d.shape[-1]
         hic_input = Input(shape=(seq_len, features))
@@ -84,20 +84,19 @@ def resnet(input_x, input_size, hic_num):
     num_filters = 128
     mlp_start_block = 6
     mlp_hidden_dim_reduction = 8
-
-    # Patchify layer
+    num_blocks = 10
     patchify_val = 4
+    filter_nums = exponential_linspace_int(num_filters, 1024, 6, divisible_by=64)
+    # Patchify layer
     x = Conv1D(num_filters,
                strides=patchify_val,
                kernel_size=patchify_val,
-               name="rl_1_")(input_x)
+               name="patchify")(input_x)
     x = LayerNormalization()(x)
     current_len = input_size // patchify_val
     # Instantiate the stack of residual units
-    num_blocks = 10
-    filter_nums = exponential_linspace_int(num_filters, 1024, 6, divisible_by=64)
     for block in range(num_blocks):
-        cname = "rl_" + str(block) + "_"
+        cname = "body_block_" + str(block) + "_"
         strides = 1
         y = x
         if block != 0:
@@ -112,20 +111,20 @@ def resnet(input_x, input_size, hic_num):
                 y = DepthwiseConv1D(kernel_size=strides,
                                     strides=strides,
                                     padding="same",
-                                    name="downsample_" + str(block))(y)
+                                    name=cname + "downsample")(y)
 
         if block < mlp_start_block:
             num_filters = filter_nums[block]
 
         y1 = y
-        y1 = DepthwiseConv1D(kernel_size=9, name="depthwise_" + str(block), padding="same")(y1)
+        y1 = DepthwiseConv1D(kernel_size=9, name=cname + "depthwise", padding="same")(y1)
         # Spatial MLP for long range interactions
         if block >= mlp_start_block and hic_num > 0:
             y2 = y
             y2 = tf.transpose(y2, [0, 2, 1])
             hd = current_len // mlp_hidden_dim_reduction
-            y2 = Dense(hd, activation=tf.nn.gelu, name="mlp_1_" + str(block))(y2)
-            y2 = Dense(current_len, name="mlp_2_" + str(block))(y2)
+            y2 = Dense(hd, activation=tf.nn.gelu, name=cname + "mlp_1")(y2)
+            y2 = Dense(current_len, name=cname + "mlp_2")(y2)
             y2 = tf.transpose(y2, [0, 2, 1])
             y = y1 + y2
         else:
@@ -134,17 +133,17 @@ def resnet(input_x, input_size, hic_num):
         # Pointwise to mix the channels
         y = Conv1D(4 * num_filters,
                    kernel_size=1, padding="same",
-                   name=cname + "1_")(y)
+                   name=cname + "pointwise_1")(y)
         y = tf.keras.layers.Activation(tf.nn.gelu)(y)
         y = Conv1D(num_filters, kernel_size=1, padding="same",
-                   name=cname + "2_")(y)
+                   name=cname + "pointwise_2")(y)
 
         # linear projection residual shortcut connection
         x = Conv1D(num_filters,
                    kernel_size=1,
                    strides=strides,
                    padding="same",
-                   name=cname + "3_")(x)
+                   name=cname + "linear_projection")(x)
 
         x = Add()([x, y])
     return LayerNormalization()(x)
@@ -154,7 +153,7 @@ def hic_resnet(x):
     num_blocks = 4
     num_filters = 1024
     for block in range(num_blocks):
-        cname = "hic_rl_" + str(block) + "_"
+        cname = "hic_block_" + str(block) + "_"
         strides = 1
         y = x
         if block != 0:
@@ -164,16 +163,16 @@ def hic_resnet(x):
             y = DepthwiseConv1D(kernel_size=strides,
                                 strides=strides,
                                 padding="same",
-                                name="hic_downsample_" + str(block))(y)
+                                name=cname + "downsample")(y)
         seq_len = y.shape[-2]
         y1 = y
-        y1 = DepthwiseConv1D(kernel_size=9, name="hic_depthwise_" + str(block), padding="same")(y1)
+        y1 = DepthwiseConv1D(kernel_size=9, name=cname + "depthwise", padding="same")(y1)
 
         # Spatial MLP for long range interactions
         y2 = y
         y2 = tf.transpose(y2, [0, 2, 1])
-        y2 = Dense(seq_len, activation=tf.nn.gelu, name="mlp_1_" + str(block))(y2)
-        y2 = Dense(seq_len, name="mlp_2_" + str(block))(y2)
+        y2 = Dense(seq_len, activation=tf.nn.gelu, name=cname + "mlp_1")(y2)
+        y2 = Dense(seq_len, name=cname + "mlp_2")(y2)
         y2 = tf.transpose(y2, [0, 2, 1])
         y = y1 + y2
 
@@ -181,17 +180,17 @@ def hic_resnet(x):
         # Pointwise to mix the channels
         y = Conv1D(4 * num_filters,
                    kernel_size=1, padding="same",
-                   name=cname + "1_")(y)
+                   name=cname + "pointwise_1")(y)
         y = tf.keras.layers.Activation(tf.nn.gelu)(y)
         y = Conv1D(num_filters, kernel_size=1, padding="same",
-                   name=cname + "2_")(y)
+                   name=cname + "pointwise_2")(y)
 
         # linear projection residual shortcut connection
         x = Conv1D(num_filters,
                    kernel_size=1,
                    strides=strides,
                    padding="same",
-                   name=cname + "3_")(x)
+                   name=cname + "linear_projection")(x)
 
         x = Add()([x, y])
     return LayerNormalization()(x)

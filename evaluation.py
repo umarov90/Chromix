@@ -9,6 +9,7 @@ import math
 import visualization as viz
 import common as cm
 import parse_data as parser
+import pandas as pd
 
 
 def eval_perf(p, our_model, head, eval_infos, should_draw, current_epoch, label, one_hot):
@@ -77,7 +78,7 @@ def eval_perf(p, our_model, head, eval_infos, should_draw, current_epoch, label,
 
     start_val = {}
     track_inds_bed = []
-
+    meta = pd.read_csv("data/ML_all_track.metadata.2022053017.tsv", sep="\t")
     for i, track in enumerate(eval_track_names):
         if "CNhs13920" in track or "CNhs13224" in track:
             track_inds_bed.append(i)
@@ -150,8 +151,8 @@ def eval_perf(p, our_model, head, eval_infos, should_draw, current_epoch, label,
         b = []
         indices = []
         for v, track in enumerate(eval_track_names):
-            type = track[:track.find(".")]
-            if type != "CAGE" or "FANTOM5" not in track: # or "response" in track.lower() or "00" in track
+            track_type = meta.loc[meta['file_name'] == track].iloc[0]["technology"]
+            if track_type != "CAGE" or "FANTOM5" not in track: # or "response" in track.lower() or "00" in track
                 continue
             a.append(final_pred[gene][track])
             b.append(eval_gt[gene][track])
@@ -177,7 +178,7 @@ def eval_perf(p, our_model, head, eval_infos, should_draw, current_epoch, label,
     track_perf = {}
 
     for track in eval_track_names:
-        type = track[:track.find(".")]
+        track_type = meta.loc[meta['file_name'] == track].iloc[0]["technology"]
         a = []
         b = []
         for gene in protein_gene_set:
@@ -191,8 +192,8 @@ def eval_perf(p, our_model, head, eval_infos, should_draw, current_epoch, label,
         #     print(f"{track}\t{sc}")
         track_perf[track] = sc
         if pc is not None and sc is not None:
-            corrs_p.setdefault(type, []).append((pc, track))
-            corrs_s.setdefault(type, []).append((sc, track))
+            corrs_p.setdefault(track_type, []).append((pc, track))
+            corrs_s.setdefault(track_type, []).append((sc, track))
             all_track_spearman[track] = stats.spearmanr(a, b)[0]
 
     with open("all_track_spearman.csv", "w+") as myfile:
@@ -229,7 +230,7 @@ def eval_perf(p, our_model, head, eval_infos, should_draw, current_epoch, label,
     track_perf = {}
     print(f"Number of TSS: {len(eval_gt_tss[eval_track_names[0]])}")
     for track in eval_track_names:
-        type = track[:track.find(".")]
+        track_type = meta.loc[meta['file_name'] == track].iloc[0]["technology"]
         a = eval_gt_tss[track]
         b = final_pred_tss[track]
         a = np.nan_to_num(a, neginf=0, posinf=0)
@@ -238,8 +239,8 @@ def eval_perf(p, our_model, head, eval_infos, should_draw, current_epoch, label,
         sc = stats.spearmanr(a, b)[0]
         track_perf[track] = pc
         if pc is not None and sc is not None:
-            corrs_p.setdefault(type, []).append((pc, track))
-            corrs_s.setdefault(type, []).append((sc, track))
+            corrs_p.setdefault(track_type, []).append((pc, track))
+            corrs_s.setdefault(track_type, []).append((sc, track))
             all_track_spearman[track] = stats.spearmanr(a, b)[0]
 
     with open("all_track_spearman_tss.csv", "w+") as myfile:

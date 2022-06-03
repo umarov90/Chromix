@@ -24,8 +24,8 @@ class MainParams:
         self.num_features = 4
         self.shift_speed = 2000000
         self.initial_shift = 80 # 400 # +- 50k
-        # self.species = ["hg38", "mm10", "macFas5", "calJac4", "rheMac8", "canFam3", "oviAri4", "rn6"]
-        self.species = ["hg38"]
+        self.species = ["hg38", "mm10", "macFas5", "calJac4", "rheMac8", "canFam3", "oviAri4", "rn6"]
+        # self.species = ["hg38"]
         self.script_folder = pathlib.Path(__file__).parent.resolve()
         folders = open(str(self.script_folder) + "/../data_dirs").read().strip().split("\n")
         self.data_folder = folders[0]

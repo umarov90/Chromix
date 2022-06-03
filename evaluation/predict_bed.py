@@ -3,10 +3,10 @@ from main_params import MainParams
 import joblib
 import tensorflow as tf
 import numpy as np
+import parse_data as parser
 
-
+compute_correlation = True
 head_name = "hg38"
-
 p = MainParams()
 heads = joblib.load("pickle/heads.gz")
 head = heads[head_name]
@@ -25,16 +25,18 @@ one_hot = joblib.load(f"pickle/{head_name}_one_hot.gz")
 
 strategy = tf.distribute.MultiWorkerMirroredStrategy()
 with strategy.scope():
-    our_model = mo.small_model(p.input_size, p.num_features, p.num_bins, len(head), p.bin_size)
+    our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, 0, head)
     our_model.get_layer("our_resnet").set_weights(joblib.load(p.model_path + "_res"))
     our_model.get_layer("our_expression").set_weights(joblib.load(p.model_path + "_expression_" + head_name))
 
 all_start_vals = {}
+corrs = []
 for chrom in ["chr11"]:#one_hot.keys():
     print(f"\nPredicting {chrom} +++++++++++++++++++++++")
     start_val = {}
     batch = []
     starts_for_bins = []
+    output_scores_info = []
     for expression_region in range(0, len(one_hot[chrom]), p.bin_size * p.num_bins):
         start = expression_region - p.half_size + (p.num_bins * p.bin_size) // 2
         extra = start + p.input_size - len(one_hot[chrom])
@@ -48,6 +50,8 @@ for chrom in ["chr11"]:#one_hot.keys():
             ns = one_hot[chrom][start:start + p.input_size]
         batch.append(ns[:, :-1])
         starts_for_bins.append(expression_region)
+        start_bin = expression_region // p.bin_size
+        output_scores_info.append([chrom, start_bin, start_bin + p.num_bins])
         if len(batch) > p.w_step or expression_region + p.bin_size * p.num_bins > len(one_hot[chrom]):
             print(expression_region, end=" ")
             batch = np.asarray(batch, dtype=bool)
@@ -59,10 +63,28 @@ for chrom in ["chr11"]:#one_hot.keys():
                     for t in track_inds_bed:
                         track = head[t]
                         start_val.setdefault(track, {})[start2] = locus[t][b]
+
+            if compute_correlation:
+                output_expression = parser.par_load_data(output_scores_info, head["expression"], p)
+
+                x = pred
+                y = output_expression
+
+                x_m = x - np.mean(x, axis=1)[:, None]
+                y_m = y - np.mean(y, axis=1)[:, None]
+
+                X = np.sum(x_m ** 2, axis=1)
+                Y = np.sum(y_m ** 2, axis=1)
+
+                corr = np.dot(x_m, y_m.T) / np.sqrt(np.dot(X[:, None], Y[None]))
+
+            output_scores_info = []
             starts_for_bins = []
             batch = []
     all_start_vals[chrom] = start_val
 
+if compute_correlation:
+    print("Average correlation: " + str(np.mean([corrs])))
 
 print("Saving bed files")
 for track in start_val.keys():
