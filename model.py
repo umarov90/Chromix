@@ -280,59 +280,6 @@ def batch_predict_effect(model, seqs1, seqs2):
     return predictions
 
 
-# taken from https://github.com/shtoneyan/gopher/blob/main/gopher/losses.py
-class pearsonr_mse(tf.keras.losses.Loss):
-    def __init__(self, name="pearsonr_mse", **kwargs):
-        super().__init__(name=name)
-        self.reduction = tf.keras.losses.Reduction.SUM
-
-    def call(self, y_true, y_pred):
-        # multinomial part of loss function
-        pr_loss = basenjipearsonr()
-        mse_loss = tf.keras.losses.MeanSquaredError(reduction=tf.keras.losses.Reduction.SUM)
-        # sum with weight
-        total_loss = 0.0001 * mse_loss(y_true, y_pred) + 0.001 * pr_loss(y_true, y_pred)
-        return total_loss
-
-
-class basenjipearsonr(tf.keras.losses.Loss):
-    def __init__(self, name="basenjipearsonr", **kwargs):
-        super().__init__(name=name)
-        self.reduction = tf.keras.losses.Reduction.SUM
-        self.epsilon = 0.000001
-
-    def call(self, y_true, y_pred):
-        # y_true = tf.transpose(y_true, [0, 2, 1])
-        # y_pred = tf.transpose(y_pred, [0, 2, 1])
-        product = tf.reduce_sum(tf.multiply(y_true, y_pred), axis=[0, 1])
-        true_sum = tf.reduce_sum(y_true, axis=[0, 1])
-        true_sumsq = tf.reduce_sum(tf.math.square(y_true), axis=[0, 1])
-        pred_sum = tf.reduce_sum(y_pred, axis=[0, 1])
-        pred_sumsq = tf.reduce_sum(tf.math.square(y_pred), axis=[0, 1])
-        count = tf.ones_like(y_true)
-        count = tf.reduce_sum(count, axis=[0, 1])
-        true_mean = tf.divide(true_sum, count)
-        true_mean2 = tf.math.square(true_mean)
-        pred_mean = tf.divide(pred_sum, count)
-        pred_mean2 = tf.math.square(pred_mean)
-
-        term1 = product
-        term2 = -tf.multiply(true_mean, pred_sum)
-        term3 = -tf.multiply(pred_mean, true_sum)
-        term4 = tf.multiply(count, tf.multiply(true_mean, pred_mean))
-        covariance = term1 + term2 + term3 + term4
-
-        true_var = true_sumsq - tf.multiply(count, true_mean2)
-        pred_var = pred_sumsq - tf.multiply(count, pred_mean2)
-
-        tp_var = tf.multiply(true_var, pred_var)
-        correlation = tf.divide(covariance, tp_var + self.epsilon)
-        correlation = tf.clip_by_value(correlation, -1, 1)
-        correlation = tf.where(tf.math.is_nan(correlation), tf.zeros_like(correlation), correlation)
-        correlation = 1 - correlation
-        return tf.reduce_mean(correlation)
-
-
 # from https://github.com/deepmind/deepmind-research/blob/master/enformer/enformer.py
 def exponential_linspace_int(start, end, num, divisible_by=1):
   """Exponentially increasing values of integers."""

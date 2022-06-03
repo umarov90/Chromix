@@ -28,6 +28,12 @@ logging.getLogger("tensorflow").setLevel(logging.ERROR)
 matplotlib.use("agg")
 
 
+# physical_devices = tf.config.experimental.list_physical_devices('GPU')
+# assert len(physical_devices) > 0, "Not enough GPU hardware devices available"
+# for device in physical_devices:
+#     tf.config.experimental.set_memory_growth(device, True)
+
+
 def load_old_weights():
     our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, hic_num, heads["hg38"])
     our_model_old = tf.keras.models.load_model(p.model_folder + "our_model_small.h5")
@@ -55,25 +61,23 @@ def load_old_weights():
     safe_save(our_model.get_layer("our_conservation").get_weights(), p.model_path + "_conservation")
 
 
-def run_epoch(last_proc, fit_epochs, head_id):
+def get_data_and_train(last_proc, fit_epochs, head_id):
     print(datetime.now().strftime('[%H:%M:%S] ') + "Epoch " + str(current_epoch) + " " + p.species[head_id])
     if hic_num > 0:
         training_regions = joblib.load(f"{p.pickle_folder}{p.species[head_id]}_regions.gz")
     else:
         training_regions = joblib.load(f"{p.pickle_folder}train_info.gz")
     one_hot = joblib.load(f"{p.pickle_folder}{p.species[head_id]}_one_hot.gz")
-    shuffled_info = random.sample(training_regions, len(training_regions))
+    # training regions are shuffled each iteration
+    shuffled_regions_info = random.sample(training_regions, len(training_regions))
     input_sequences = []
     output_scores_info = []
     shifts = []
-    # print(datetime.now().strftime('[%H:%M:%S] ') + "Preparing sequences")
-    # pick training regions
-    for i, info in enumerate(shuffled_info):
+    picked_regions = []
+    for i, info in enumerate(shuffled_regions_info):
         if len(input_sequences) >= p.GLOBAL_BATCH_SIZE * p.STEPS_PER_EPOCH:
             break
-        if i % 500 == 0:
-            print(i, end=" ")
-            gc.collect()
+        # Don't use chrY, chrM etc
         if info[0] not in one_hot.keys():
             continue
         shift_bins = random.randint(-int(current_epoch / p.shift_speed) - p.initial_shift,
@@ -85,16 +89,16 @@ def run_epoch(last_proc, fit_epochs, head_id):
         #     shifts.append(None)
         #     continue
         if start < 0 or extra > 0:
-            shifts.append(None)
             continue
         ns = one_hot[info[0]][start:start + p.input_size]
         if np.any(ns[:, -1]):
-            shifts.append(None)
+            # Test tss was encountered! Skipping
             continue
 
-        picked_training_regions.setdefault(p.species[head_id], []).append(
+        dry_run_regions.setdefault(p.species[head_id], []).append(
             f"{info[0]}\t{start}\t{start + p.input_size}\ttrain")
         shifts.append(shift_bins)
+        picked_regions.append(info)
         start_bin = int(info[1] / p.bin_size) - p.half_num_regions + shift_bins
         input_sequences.append(ns)
         output_scores_info.append([info[0], start_bin, start_bin + p.num_bins])
@@ -107,20 +111,14 @@ def run_epoch(last_proc, fit_epochs, head_id):
         output_expression = parser.par_load_data(output_scores_info, heads[p.species[head_id]], p)
     gc.collect()
     print("")
+    # half of sequences will be reverse-complemented
     half = len(input_sequences) // 2
+    # loading corresponding 2D data
     output_hic = []
-    # print(f"Shifts {len(shifts)}")
-    # print(datetime.now().strftime('[%H:%M:%S] ') + "Hi-C")
     if head_id == 0:
         for hi, key in enumerate(hic_keys):
-            # print(key, end=" ")
             hdf = joblib.load(p.parsed_hic_folder + key)
-            ni = 0
-            for i, info in enumerate(shuffled_info):
-                if i >= len(shifts):
-                    break
-                if shifts[i] is None:
-                    continue
+            for i, info in enumerate(picked_regions):
                 hd = hdf[info[0]]
                 hic_mat = np.zeros((p.num_hic_bins, p.num_hic_bins))
                 start_hic = int(info[1] - (info[1] % p.bin_size) - p.half_size_hic + shifts[i] * p.bin_size)
@@ -142,35 +140,26 @@ def run_epoch(last_proc, fit_epochs, head_id):
                 hic_mat[l1, l2] += hic_score
                 hic_mat = hic_mat + hic_mat.T - np.diag(np.diag(hic_mat))
                 hic_mat = gaussian_filter(hic_mat, sigma=1)
-                if ni < half:
+                if i < half:
                     hic_mat = np.rot90(hic_mat, k=2)
-                # if i == 0:
-                #     print(f"original {hic_mat.shape}")
                 hic_mat = hic_mat[np.triu_indices_from(hic_mat, k=1)]
-                # if i == 0:
-                #     print(f"triu {hic_mat.shape}")
-                # for hs in range(hic_track_size):
-                #     hic_slice = hic_mat[hs * num_regions: (hs + 1) * num_regions].copy()
-                # if len(hic_slice) != num_regions:
-                # hic_mat.resize(num_regions, refcheck=False)
                 if hi == 0:
                     output_hic.append([])
-                output_hic[ni].append(hic_mat)
-                ni += 1
+                output_hic[i].append(hic_mat)
             del hd
             del hdf
             gc.collect()
     output_hic = np.asarray(output_hic)
-    # print("")
-    # print(datetime.now().strftime('[%H:%M:%S] ') + "Problems: " + str(err))
     gc.collect()
     print_memory()
     input_sequences = np.asarray(input_sequences, dtype=bool)
 
+    # reverse-complement
     with mp.Pool(8) as pool:
         rc_arr = pool.map(change_seq, input_sequences[:half])
     input_sequences[:half] = rc_arr
 
+    # for reverse-complement sequences, the 1D output is flipped
     for i in range(half):
         output_expression[i] = np.flip(output_expression[i], axis=1)
         if p.species[head_id] == "hg38":
@@ -203,7 +192,7 @@ def run_epoch(last_proc, fit_epochs, head_id):
     # joblib.dump([input_sequences, all_outputs], f"{p.pickle_folder}run.gz", compress=3)
     # argss = joblib.load(f"{p.pickle_folder}run.gz")
     # p = mp.Process(target=train_step, args=(argss[0][:400], argss[1][:400], argss[2][:400], fit_epochs, head_id,))
-    proc = mp.Process(target=train_step, args=(
+    proc = mp.Process(target=make_model_and_train, args=(
         heads[p.species[head_id]], p.species[head_id], input_sequences, all_outputs, fit_epochs, hic_num, mp_q,))
     proc.start()
     return proc
@@ -216,21 +205,18 @@ def safe_save(thing, place):
     os.rename(place + "_temp", place)
 
 
-def train_step(head, head_name, input_sequences, all_outputs, fit_epochs, hic_num, mp_q):
+def make_model_and_train(head, head_name, input_sequences, all_outputs, fit_epochs, hic_num, mp_q):
+    print(f"=== Training with head {head_name} ===")
     try:
-        # physical_devices = tf.config.experimental.list_physical_devices('GPU')
-        # assert len(physical_devices) > 0, "Not enough GPU hardware devices available"
-        # for device in physical_devices:
-        #     tf.config.experimental.set_memory_growth(device, True)
         if head_name == "hg38":
             train_data = mo.wrap_for_human_training(input_sequences, all_outputs, p.GLOBAL_BATCH_SIZE)
-            out_dict = {"our_expression": [np.zeros_like(all_outputs["our_expression"][0])],
-                        "our_epigenome": [np.zeros_like(all_outputs["our_epigenome"][0])],
-                        "our_conservation": [np.zeros_like(all_outputs["our_conservation"][0])]}
+            zero_out_dict = {"our_expression": [np.zeros_like(all_outputs["our_expression"][0])],
+                             "our_epigenome": [np.zeros_like(all_outputs["our_epigenome"][0])],
+                             "our_conservation": [np.zeros_like(all_outputs["our_conservation"][0])]}
             if hic_num > 0:
-                out_dict["our_hic"] = [np.zeros_like(all_outputs["our_hic"][0])]
+                zero_out_dict["our_hic"] = [np.zeros_like(all_outputs["our_hic"][0])]
             zero_data = mo.wrap_for_human_training([np.zeros_like(input_sequences[0])],
-                                                   out_dict,
+                                                   zero_out_dict,
                                                    p.GLOBAL_BATCH_SIZE)
         else:
             train_data = mo.wrap(input_sequences, all_outputs["our_expression"], p.GLOBAL_BATCH_SIZE)
@@ -241,10 +227,9 @@ def train_step(head, head_name, input_sequences, all_outputs, fit_epochs, hic_nu
         del all_outputs
         gc.collect()
         strategy = tf.distribute.MultiWorkerMirroredStrategy()
-        # print(datetime.now().strftime('[%H:%M:%S] ') + "Loading the model")
         with strategy.scope():
             our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, hic_num, head)
-            # Loading model weights
+            # loading model weights
             if os.path.exists(p.model_path + "_res"):
                 our_model.get_layer("our_resnet").set_weights(joblib.load(p.model_path + "_res"))
             if os.path.exists(p.model_path + "_expression_" + head_name):
@@ -256,18 +241,8 @@ def train_step(head, head_name, input_sequences, all_outputs, fit_epochs, hic_nu
                 our_model.get_layer("our_hic").set_weights(joblib.load(p.model_path + "_hic"))
             if head_name == "hg38" and os.path.exists(p.model_path + "_conservation"):
                 our_model.get_layer("our_conservation").set_weights(joblib.load(p.model_path + "_conservation"))
-            print(f"=== Training with head {head_name} ===")
 
-            # resnet_wd = 0.0000001
-            # cap_e = min(current_epoch, 40)
-            # transformer_lr = 0.0000005 + cap_e * 0.0000025
-            # tfa.optimizers.AdamW
-            # optimizers = [
-            #     tf.keras.optimizers.Adam(learning_rate=resnet_lr),
-            #     tfa.optimizers.AdamW(learning_rate=transformer_lr, weight_decay=transformer_wd),
-            #     tf.keras.optimizers.Adam(learning_rate=expression_lr)
-            # ]
-
+            # preparing the main optimizer
             optimizers_and_layers = [(optimizers["our_resnet"], our_model.get_layer("our_resnet")),
                                      (optimizers["our_expression"], our_model.get_layer("our_expression"))
                                      ]
@@ -280,7 +255,7 @@ def train_step(head, head_name, input_sequences, all_outputs, fit_epochs, hic_nu
             optimizer = tfa.optimizers.MultiOptimizer(optimizers_and_layers)
 
             # our_model.get_layer("our_resnet").trainable = False
-
+            # loading the loss weights and compiling the model
             if head_name == "hg38":
                 loss_weights = {}
                 with open(str(p.script_folder) + "/../loss_weights") as f:
@@ -300,6 +275,7 @@ def train_step(head, head_name, input_sequences, all_outputs, fit_epochs, hic_nu
             else:
                 our_model.compile(optimizer=optimizer, loss="mse")
             if current_epoch == start_epoch:
+                # loading the previous optimizer weights
                 our_model.fit(zero_data, steps_per_epoch=1, epochs=1)
                 if os.path.exists(p.model_path + "_opt_resnet"):
                     print("loading resnet optimizer")
@@ -331,7 +307,7 @@ def train_step(head, head_name, input_sequences, all_outputs, fit_epochs, hic_nu
                     optimizers["our_epigenome"].learning_rate.assign(epigenome_lr)
                     optimizers["our_conservation"].learning_rate.assign(conservation_lr)
 
-    except Exception as e:
+    except:
         traceback.print_exc()
         print(datetime.now().strftime('[%H:%M:%S] ') + "Error while compiling.")
         mp_q.put(None)
@@ -351,8 +327,8 @@ def train_step(head, head_name, input_sequences, all_outputs, fit_epochs, hic_nu
             safe_save(our_model.get_layer("our_epigenome").get_weights(), p.model_path + "_epigenome")
             safe_save(optimizers["our_conservation"].get_weights(), p.model_path + "_opt_conservation")
             safe_save(our_model.get_layer("our_conservation").get_weights(), p.model_path + "_conservation")
-    except Exception as e:
-        print(e)
+    except:
+        traceback.print_exc()
         print(datetime.now().strftime('[%H:%M:%S] ') + "Error while training.")
         mp_q.put(None)
         return None
@@ -364,26 +340,19 @@ def train_step(head, head_name, input_sequences, all_outputs, fit_epochs, hic_nu
 
 def check_perf(mp_q):
     print(datetime.now().strftime('[%H:%M:%S] ') + "Evaluating")
-    import tensorflow as tf
-    physical_devices = tf.config.experimental.list_physical_devices('GPU')
-    assert len(physical_devices) > 0, "Not enough GPU hardware devices available"
-    for device in physical_devices:
-        tf.config.experimental.set_memory_growth(device, True)
-    import model as mo
     one_hot = joblib.load(f"{p.pickle_folder}hg38_one_hot.gz")
     try:
         strategy = tf.distribute.MultiWorkerMirroredStrategy()
         with strategy.scope():
-            our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, hic_num, heads["hg38"])
+            our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, 0, heads["hg38"])
             our_model.get_layer("our_resnet").set_weights(joblib.load(p.model_path + "_res"))
             our_model.get_layer("our_expression").set_weights(joblib.load(p.model_path + "_expression_hg38"))
             our_model.get_layer("our_epigenome").set_weights(joblib.load(p.model_path + "_epigenome"))
-            our_model.get_layer("our_hic").set_weights(joblib.load(p.model_path + "_hic"))
             our_model.get_layer("our_conservation").set_weights(joblib.load(p.model_path + "_conservation"))
-        train_eval_chr = "chr5"
+        train_eval_chr = "chr1"
         train_eval_chr_info = []
         for info in train_info:
-            if info[0] == train_eval_chr and 139615843 < info[1] < 141668489:
+            if info[0] == train_eval_chr:  # and 139615843 < info[1] < 141668489
                 train_eval_chr_info.append(info)
         print(f"Training set {len(train_eval_chr_info)}")
         training_spearman = evaluation.eval_perf(p, our_model, heads["hg38"], train_eval_chr_info,
@@ -417,19 +386,8 @@ def change_seq(x):
 
 last_proc = None
 p = MainParams()
-picked_training_regions = {}
+dry_run_regions = {}
 if __name__ == '__main__':
-    # import model as mo
-    # import tensorflow as tf
-    # nl = mo.pearsonr_poisson()
-    #
-    # x = np.random.random((2, 4, 4))
-    # y = np.random.random((2, 4, 4))
-    #
-    # x = tf.convert_to_tensor(x, dtype=tf.float32)
-    # y = tf.convert_to_tensor(y, dtype=tf.float32)
-    # a = mo.loop_cor_loss(x, y)
-
     train_info, test_info, protein_coding = parser.parse_sequences(p)
     if Path(f"{p.pickle_folder}track_names_col.gz").is_file():
         track_names_col = joblib.load(f"{p.pickle_folder}track_names_col.gz")
@@ -444,19 +402,17 @@ if __name__ == '__main__':
             shuffled_tracks = random.sample(track_names_col[specie], len(track_names_col[specie]))
             if specie == "hg38":
                 meta = pd.read_csv("data/ML_all_track.metadata.2022053017.tsv", sep="\t")
-                new_head = {}
-                new_head["expression"] = [x for x in shuffled_tracks if
+                new_head = {"expression": [x for x in shuffled_tracks if
+                                           meta.loc[meta['file_name'] == x].iloc[0]["technology"].startswith(
+                                               ("CAGE", "RAMPAGE", "NETCAGE"))],
+                            "epigenome": [x for x in shuffled_tracks if
                                           meta.loc[meta['file_name'] == x].iloc[0]["technology"].startswith(
-                                              ("CAGE", "RAMPAGE", "NETCAGE"))]
-                new_head["epigenome"] = [x for x in shuffled_tracks if
-                                         meta.loc[meta['file_name'] == x].iloc[0]["technology"].startswith(
-                                             ("DNase", "ATAC", "Histone_ChIP", "TF_ChIP"))]
-                new_head["conservation"] = [x for x in shuffled_tracks if
-                                            meta.loc[meta['file_name'] == x].iloc[0]["value"].startswith(
-                                                ("conservation"))]
+                                              ("DNase", "ATAC", "Histone_ChIP", "TF_ChIP"))],
+                            "conservation": [x for x in shuffled_tracks if
+                                             meta.loc[meta['file_name'] == x].iloc[0]["value"].startswith(
+                                                 "conservation")]}
             else:
                 new_head = shuffled_tracks
-                # new_head = [x for x in new_head if not x.startswith("sc")]
             heads[specie] = new_head
         joblib.dump(heads, f"{p.pickle_folder}heads.gz", compress="lz4")
 
@@ -482,11 +438,12 @@ if __name__ == '__main__':
     resnet_lr = 0.00001
     resnet_wd = 1e-7
     resnet_clipnorm = 0.001
-    optimizers = {"our_resnet": tfa.optimizers.AdamW(learning_rate=resnet_lr, weight_decay=resnet_wd, clipnorm=resnet_clipnorm),
-                  "our_expression": tf.keras.optimizers.Adam(learning_rate=expression_lr),
-                  "our_epigenome": tf.keras.optimizers.Adam(learning_rate=epigenome_lr),
-                  "our_conservation": tf.keras.optimizers.Adam(learning_rate=conservation_lr),
-                  "our_hic": tf.keras.optimizers.Adam(learning_rate=hic_lr), }
+    optimizers = {
+        "our_resnet": tfa.optimizers.AdamW(learning_rate=resnet_lr, weight_decay=resnet_wd, clipnorm=resnet_clipnorm),
+        "our_expression": tf.keras.optimizers.Adam(learning_rate=expression_lr),
+        "our_epigenome": tf.keras.optimizers.Adam(learning_rate=epigenome_lr),
+        "our_conservation": tf.keras.optimizers.Adam(learning_rate=conservation_lr),
+        "our_hic": tf.keras.optimizers.Adam(learning_rate=hic_lr), }
     mp_q = mp.Queue()
 
     print("Training starting")
@@ -501,7 +458,7 @@ if __name__ == '__main__':
             # Only human to test HIC and CON!
             head_id = 0
             if head_id == 0:
-                p.STEPS_PER_EPOCH = 100
+                p.STEPS_PER_EPOCH = 10
                 fit_epochs = 2
             elif head_id == 1:
                 p.STEPS_PER_EPOCH = 400
@@ -512,7 +469,7 @@ if __name__ == '__main__':
 
             # check_perf(mp_q)
             # exit()
-            last_proc = run_epoch(last_proc, fit_epochs, head_id)
+            last_proc = get_data_and_train(last_proc, fit_epochs, head_id)
             if current_epoch % 1000 == 0 and current_epoch != 0:  # and current_epoch != 0:
                 print("Eval epoch")
                 print(mp_q.get())
@@ -525,6 +482,6 @@ if __name__ == '__main__':
     except Exception as e:
         traceback.print_exc()
 
-# for key in picked_training_regions.keys():
+# for key in dry_run_regions.keys():
 #     with open(f"dry/{key}_dry_test.bed", "w") as text_file:
-#         text_file.write("\n".join(picked_training_regions[key]))
+#         text_file.write("\n".join(dry_run_regions[key]))
