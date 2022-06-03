@@ -20,6 +20,7 @@ import evaluation
 from main_params import MainParams
 import tensorflow_addons as tfa
 import tensorflow as tf
+import model as mo
 from scipy.ndimage import gaussian_filter
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
@@ -27,9 +28,39 @@ logging.getLogger("tensorflow").setLevel(logging.ERROR)
 matplotlib.use("agg")
 
 
+def load_old_weights():
+    our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, hic_num, heads["hg38"])
+    our_model_old = tf.keras.models.load_model(p.model_folder + "our_model_small.h5")
+    print("model loaded")
+    for layer in our_model_old.get_layer("our_resnet").layers:
+        layer_name = layer.name
+        layer_weights = layer.weights
+        try:
+            our_model.get_layer("our_resnet").get_layer(layer_name).set_weights(layer_weights)
+        except:
+            print(layer_name)
+
+    for head_type in heads.keys():
+        for layer in our_model_old.get_layer(head_type).layers:
+            layer_name = layer.name
+            if "input" in layer_name:
+                continue
+            layer_weights = layer.weights
+            our_model.get_layer(head_type).get_layer(layer_name).set_weights(layer_weights)
+
+    safe_save(our_model.get_layer("our_resnet").get_weights(), p.model_path + "_res")
+    safe_save(our_model.get_layer("our_expression").get_weights(), p.model_path + "_expression_hg38")
+    safe_save(our_model.get_layer("our_hic").get_weights(), p.model_path + "_hic")
+    safe_save(our_model.get_layer("our_epigenome").get_weights(), p.model_path + "_epigenome")
+    safe_save(our_model.get_layer("our_conservation").get_weights(), p.model_path + "_conservation")
+
+
 def run_epoch(last_proc, fit_epochs, head_id):
     print(datetime.now().strftime('[%H:%M:%S] ') + "Epoch " + str(current_epoch) + " " + p.species[head_id])
-    training_regions = joblib.load(f"{p.pickle_folder}{p.species[head_id]}_regions.gz")
+    if hic_num > 0:
+        training_regions = joblib.load(f"{p.pickle_folder}{p.species[head_id]}_regions.gz")
+    else:
+        training_regions = joblib.load(f"{p.pickle_folder}train_info.gz")
     one_hot = joblib.load(f"{p.pickle_folder}{p.species[head_id]}_one_hot.gz")
     shuffled_info = random.sample(training_regions, len(training_regions))
     input_sequences = []
@@ -43,6 +74,8 @@ def run_epoch(last_proc, fit_epochs, head_id):
         if i % 500 == 0:
             print(i, end=" ")
             gc.collect()
+        if info[0] not in one_hot.keys():
+            continue
         shift_bins = random.randint(-int(current_epoch / p.shift_speed) - p.initial_shift,
                                     int(current_epoch / p.shift_speed) + p.initial_shift)
         start = info[1] - (info[1] % p.bin_size) - p.half_size + shift_bins * p.bin_size
@@ -140,15 +173,16 @@ def run_epoch(last_proc, fit_epochs, head_id):
 
     for i in range(half):
         output_expression[i] = np.flip(output_expression[i], axis=1)
-        if head_id == 0:
+        if p.species[head_id] == "hg38":
             output_epigenome[i] = np.flip(output_epigenome[i], axis=1)
             output_conservation[i] = np.flip(output_conservation[i], axis=1)
 
     all_outputs = {"our_expression": output_expression}
-    if head_id == 0:
+    if p.species[head_id] == "hg38":
         all_outputs["our_epigenome"] = output_epigenome
         all_outputs["our_conservation"] = output_conservation
-        all_outputs["our_hic"] = output_hic
+        if hic_num > 0:
+            all_outputs["our_hic"] = output_hic
     # Cut off the test TSS layer
     input_sequences = input_sequences[:, :, :-1]
     print(input_sequences.shape)
@@ -183,31 +217,25 @@ def safe_save(thing, place):
 
 
 def train_step(head, head_name, input_sequences, all_outputs, fit_epochs, hic_num, mp_q):
-    human_training = True
-    if head_name != "hg38" or hic_num == 0:
-        human_training = False
     try:
         # physical_devices = tf.config.experimental.list_physical_devices('GPU')
         # assert len(physical_devices) > 0, "Not enough GPU hardware devices available"
         # for device in physical_devices:
         #     tf.config.experimental.set_memory_growth(device, True)
-        import model as mo
-        if human_training:
+        if head_name == "hg38":
             train_data = mo.wrap_for_human_training(input_sequences, all_outputs, p.GLOBAL_BATCH_SIZE)
-            zero_fit_1 = np.zeros_like(input_sequences[0])
-            zero_fit_2 = np.zeros_like(all_outputs["our_expression"][0])
-            zero_fit_3 = np.zeros_like(all_outputs["our_epigenome"][0])
-            zero_fit_4 = np.zeros_like(all_outputs["our_conservation"][0])
-            zero_fit_5 = np.zeros_like(all_outputs["our_hic"][0])
-            zero_data = mo.wrap_for_human_training([zero_fit_1],
-                                                   {"our_expression": [zero_fit_2], "our_epigenome": [zero_fit_3],
-                                                    "our_conservation": [zero_fit_4], "our_hic": [zero_fit_5]},
+            out_dict = {"our_expression": [np.zeros_like(all_outputs["our_expression"][0])],
+                        "our_epigenome": [np.zeros_like(all_outputs["our_epigenome"][0])],
+                        "our_conservation": [np.zeros_like(all_outputs["our_conservation"][0])]}
+            if hic_num > 0:
+                out_dict["our_hic"] = [np.zeros_like(all_outputs["our_hic"][0])]
+            zero_data = mo.wrap_for_human_training([np.zeros_like(input_sequences[0])],
+                                                   out_dict,
                                                    p.GLOBAL_BATCH_SIZE)
         else:
             train_data = mo.wrap(input_sequences, all_outputs["our_expression"], p.GLOBAL_BATCH_SIZE)
-            zero_fit_1 = np.zeros_like(input_sequences[0])
-            zero_fit_2 = np.zeros_like(all_outputs["our_expression"][0])
-            zero_data = mo.wrap([zero_fit_1], [zero_fit_2], p.GLOBAL_BATCH_SIZE)
+            zero_data = mo.wrap([np.zeros_like(input_sequences[0])],
+                                [np.zeros_like(all_outputs["our_expression"][0])], p.GLOBAL_BATCH_SIZE)
 
         del input_sequences
         del all_outputs
@@ -215,22 +243,18 @@ def train_step(head, head_name, input_sequences, all_outputs, fit_epochs, hic_nu
         strategy = tf.distribute.MultiWorkerMirroredStrategy()
         # print(datetime.now().strftime('[%H:%M:%S] ') + "Loading the model")
         with strategy.scope():
-            if human_training:
-                our_model = mo.human_model(p.input_size, p.num_features, p.num_bins, hic_num, p.bin_size,p.hic_bin_size,
-                                           head)
-            else:
-                our_model = mo.small_model(p.input_size, p.num_features, p.num_bins, len(head), p.bin_size)
+            our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, hic_num, head)
             # Loading model weights
             if os.path.exists(p.model_path + "_res"):
                 our_model.get_layer("our_resnet").set_weights(joblib.load(p.model_path + "_res"))
             if os.path.exists(p.model_path + "_expression_" + head_name):
                 our_model.get_layer("our_expression").set_weights(
                     joblib.load(p.model_path + "_expression_" + head_name))
-            if human_training and os.path.exists(p.model_path + "_epigenome"):
+            if head_name == "hg38" and os.path.exists(p.model_path + "_epigenome"):
                 our_model.get_layer("our_epigenome").set_weights(joblib.load(p.model_path + "_epigenome"))
-            if human_training and os.path.exists(p.model_path + "_hic"):
+            if head_name == "hg38" and hic_num > 0 and os.path.exists(p.model_path + "_hic"):
                 our_model.get_layer("our_hic").set_weights(joblib.load(p.model_path + "_hic"))
-            if human_training and os.path.exists(p.model_path + "_conservation"):
+            if head_name == "hg38" and os.path.exists(p.model_path + "_conservation"):
                 our_model.get_layer("our_conservation").set_weights(joblib.load(p.model_path + "_conservation"))
             print(f"=== Training with head {head_name} ===")
 
@@ -247,8 +271,9 @@ def train_step(head, head_name, input_sequences, all_outputs, fit_epochs, hic_nu
             optimizers_and_layers = [(optimizers["our_resnet"], our_model.get_layer("our_resnet")),
                                      (optimizers["our_expression"], our_model.get_layer("our_expression"))
                                      ]
-            if human_training:
-                optimizers_and_layers.append((optimizers["our_hic"], our_model.get_layer("our_hic")))
+            if head_name == "hg38":
+                if hic_num > 0:
+                    optimizers_and_layers.append((optimizers["our_hic"], our_model.get_layer("our_hic")))
                 optimizers_and_layers.append((optimizers["our_epigenome"], our_model.get_layer("our_epigenome")))
                 optimizers_and_layers.append((optimizers["our_conservation"], our_model.get_layer("our_conservation")))
 
@@ -256,18 +281,21 @@ def train_step(head, head_name, input_sequences, all_outputs, fit_epochs, hic_nu
 
             # our_model.get_layer("our_resnet").trainable = False
 
-            if human_training:
+            if head_name == "hg38":
                 loss_weights = {}
                 with open(str(p.script_folder) + "/../loss_weights") as f:
                     for line in f:
                         (key, val) = line.split()
+                        if hic_num == 0 and key == "our_hic":
+                            continue
                         loss_weights[key] = float(val)
                 losses = {
                     "our_expression": "mse",
                     "our_epigenome": "mse",
                     "our_conservation": "mse",
-                    "our_hic": "mse",
                 }
+                if hic_num > 0:
+                    losses["our_hic"] = "mse"
                 our_model.compile(optimizer=optimizer, loss=losses, loss_weights=loss_weights)
             else:
                 our_model.compile(optimizer=optimizer, loss="mse")
@@ -281,15 +309,15 @@ def train_step(head, head_name, input_sequences, all_outputs, fit_epochs, hic_nu
                     print("loading expression optimizer")
                     optimizers["our_expression"].set_weights(joblib.load(p.model_path + "_opt_expression_" + head_name))
 
-                if human_training and os.path.exists(p.model_path + "_opt_hic"):
+                if head_name == "hg38" and hic_num > 0 and os.path.exists(p.model_path + "_opt_hic"):
                     print("loading hic optimizer")
                     optimizers["our_hic"].set_weights(joblib.load(p.model_path + "_opt_hic"))
 
-                if human_training and os.path.exists(p.model_path + "_opt_epigenome"):
+                if head_name == "hg38" and os.path.exists(p.model_path + "_opt_epigenome"):
                     print("loading epigenome optimizer")
                     optimizers["our_epigenome"].set_weights(joblib.load(p.model_path + "_opt_epigenome"))
 
-                if human_training and os.path.exists(p.model_path + "_opt_conservation"):
+                if head_name == "hg38" and os.path.exists(p.model_path + "_opt_conservation"):
                     print("loading conservation optimizer")
                     optimizers["our_conservation"].set_weights(joblib.load(p.model_path + "_opt_conservation"))
 
@@ -297,8 +325,9 @@ def train_step(head, head_name, input_sequences, all_outputs, fit_epochs, hic_nu
                 optimizers["our_resnet"].weight_decay.assign(resnet_wd)
                 optimizers["our_resnet"].clipnorm = resnet_clipnorm
                 optimizers["our_expression"].learning_rate.assign(expression_lr)
-                if human_training:
-                    optimizers["our_hic"].learning_rate.assign(hic_lr)
+                if head_name == "hg38":
+                    if hic_num > 0:
+                        optimizers["our_hic"].learning_rate.assign(hic_lr)
                     optimizers["our_epigenome"].learning_rate.assign(epigenome_lr)
                     optimizers["our_conservation"].learning_rate.assign(conservation_lr)
 
@@ -314,9 +343,10 @@ def train_step(head, head_name, input_sequences, all_outputs, fit_epochs, hic_nu
         safe_save(optimizers["our_resnet"].get_weights(), p.model_path + "_opt_resnet")
         safe_save(our_model.get_layer("our_expression").get_weights(), p.model_path + "_expression_" + head_name)
         safe_save(optimizers["our_expression"].get_weights(), p.model_path + "_opt_expression_" + head_name)
-        if human_training:
-            safe_save(optimizers["our_hic"].get_weights(), p.model_path + "_opt_hic")
-            safe_save(our_model.get_layer("our_hic").get_weights(), p.model_path + "_hic")
+        if head_name == "hg38":
+            if hic_num > 0:
+                safe_save(optimizers["our_hic"].get_weights(), p.model_path + "_opt_hic")
+                safe_save(our_model.get_layer("our_hic").get_weights(), p.model_path + "_hic")
             safe_save(optimizers["our_epigenome"].get_weights(), p.model_path + "_opt_epigenome")
             safe_save(our_model.get_layer("our_epigenome").get_weights(), p.model_path + "_epigenome")
             safe_save(optimizers["our_conservation"].get_weights(), p.model_path + "_opt_conservation")
@@ -344,8 +374,7 @@ def check_perf(mp_q):
     try:
         strategy = tf.distribute.MultiWorkerMirroredStrategy()
         with strategy.scope():
-            our_model = mo.human_model(p.input_size, p.num_features, p.num_bins, hic_num, p.bin_size, p.hic_bin_size,
-                                       heads["hg38"])
+            our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, hic_num, heads["hg38"])
             our_model.get_layer("our_resnet").set_weights(joblib.load(p.model_path + "_res"))
             our_model.get_layer("our_expression").set_weights(joblib.load(p.model_path + "_expression_hg38"))
             our_model.get_layer("our_epigenome").set_weights(joblib.load(p.model_path + "_epigenome"))
@@ -438,12 +467,13 @@ if __name__ == '__main__':
         else:
             print(f"Number of tracks in head {head_key}: {len(heads[head_key])}")
 
-    hic_keys = parser.parse_hic(p)
+    # hic_keys = parser.parse_hic(p)
+    hic_keys = []
     hic_num = len(hic_keys)
     print(f"hic {hic_num}")
 
     # import model as mo
-    # our_model = mo.human_model(p.input_size, p.num_features, p.num_bins, 56, p.bin_size, p.hic_bin_size, heads["hg38"])
+    # our_model = mo.human_model(p.input_size, p.num_features, p.num_bins, 56, heads["hg38"])
 
     hic_lr = 0.0001
     expression_lr = 0.0001
@@ -471,8 +501,8 @@ if __name__ == '__main__':
             # Only human to test HIC and CON!
             head_id = 0
             if head_id == 0:
-                p.STEPS_PER_EPOCH = 50
-                fit_epochs = 3
+                p.STEPS_PER_EPOCH = 100
+                fit_epochs = 2
             elif head_id == 1:
                 p.STEPS_PER_EPOCH = 400
                 fit_epochs = 2

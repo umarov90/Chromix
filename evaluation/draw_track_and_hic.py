@@ -38,9 +38,9 @@ for track in head_tracks:
 
 strategy = tf.distribute.MultiWorkerMirroredStrategy()
 with strategy.scope():
-    our_model = mo.human_model(p.input_size, p.num_features, p.num_bins,
-                               len(head_tracks), len(hic_keys), p.hic_size,
-                               p.bin_size)
+    our_model = mo.make_model(p.input_size, p.num_features, p.num_bins,
+                              len(head_tracks), len(hic_keys), p.hic_size,
+                              p.bin_size)
     our_model.get_layer("our_resnet").set_weights(joblib.load(p.model_path + "_res"))
     our_model.get_layer("our_expression").set_weights(joblib.load(p.model_path + "_expression"))
     our_model.get_layer("our_hic").set_weights(joblib.load(p.model_path + "_hic"))
