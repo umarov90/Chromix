@@ -10,7 +10,7 @@ import numpy as np
 
 
 def make_model(input_size, num_features, num_regions, hic_num, one_d_heads):
-    inputs = Input(shape=(input_size, num_features), dtype=tf.float32)
+    inputs = Input(shape=(input_size, num_features))
     x = inputs
     output1d = resnet(x, input_size, hic_num)
     our_resnet = Model(inputs, output1d, name="our_resnet")
@@ -37,6 +37,7 @@ def make_model(input_size, num_features, num_regions, hic_num, one_d_heads):
         hx = Conv1D(4096, kernel_size=1, strides=1, name="hic_pointwise", activation=tf.nn.gelu)(triu)
         hx = Conv1D(hic_num, kernel_size=1, strides=1, name="hic_last_conv1d")(hx)
         hx = tf.transpose(hx, [0, 2, 1])
+        hx = Activation('linear', dtype='float32')(hx)
         our_hic = Model(hic_input, hx, name="our_hic")
 
     all_heads = []
@@ -74,8 +75,7 @@ def make_head(track_num, num_regions, output1d, name):
     x = Conv1D(filter_num, kernel_size=1, strides=1, name=name + "_pointwise", activation=tf.nn.gelu)(x)
     outputs = Conv1D(track_num, kernel_size=1, strides=1, name=name + "_last_conv1d")(x)
     outputs = tf.transpose(outputs, [0, 2, 1])
-    # print(outputs)
-    head_output = outputs
+    head_output = Activation('linear', dtype='float32')(outputs)
     return Model(head_input, head_output, name=name)
 
 
@@ -92,7 +92,7 @@ def resnet(input_x, input_size, hic_num):
                strides=patchify_val,
                kernel_size=patchify_val,
                name="patchify")(input_x)
-    x = LayerNormalization()(x)
+    x = LayerNormalization(dtype=tf.float32)(x)
     current_len = input_size // patchify_val
     # Instantiate the stack of residual units
     for block in range(num_blocks):
@@ -107,7 +107,7 @@ def resnet(input_x, input_size, hic_num):
                 strides = 1
             if strides > 1:
                 current_len = math.ceil(current_len / strides)
-                y = LayerNormalization()(y)
+                y = LayerNormalization(dtype=tf.float32)(y)
                 y = DepthwiseConv1D(kernel_size=strides,
                                     strides=strides,
                                     padding="same",
@@ -129,7 +129,7 @@ def resnet(input_x, input_size, hic_num):
             y = y1 + y2
         else:
             y = y1
-        y = LayerNormalization()(y)
+        y = LayerNormalization(dtype=tf.float32)(y)
         # Pointwise to mix the channels
         y = Conv1D(4 * num_filters,
                    kernel_size=1, padding="same",
@@ -146,7 +146,7 @@ def resnet(input_x, input_size, hic_num):
                    name=cname + "linear_projection")(x)
 
         x = Add()([x, y])
-    return LayerNormalization()(x)
+    return LayerNormalization(dtype=tf.float32)(x)
 
 
 def hic_resnet(x):
@@ -159,7 +159,7 @@ def hic_resnet(x):
         if block != 0:
             # Downsample
             strides = 3
-            y = LayerNormalization()(y)
+            y = LayerNormalization(dtype=tf.float32)(y)
             y = DepthwiseConv1D(kernel_size=strides,
                                 strides=strides,
                                 padding="same",
@@ -176,7 +176,7 @@ def hic_resnet(x):
         y2 = tf.transpose(y2, [0, 2, 1])
         y = y1 + y2
 
-        y = LayerNormalization()(y)
+        y = LayerNormalization(dtype=tf.float32)(y)
         # Pointwise to mix the channels
         y = Conv1D(4 * num_filters,
                    kernel_size=1, padding="same",
@@ -193,7 +193,7 @@ def hic_resnet(x):
                    name=cname + "linear_projection")(x)
 
         x = Add()([x, y])
-    return LayerNormalization()(x)
+    return LayerNormalization(dtype=tf.float32)(x)
 
 
 def wrap(input_sequences, output_scores, bs):

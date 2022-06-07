@@ -79,9 +79,12 @@ def eval_perf(p, our_model, head, eval_infos, should_draw, current_epoch, label,
     start_val = {}
     track_inds_bed = []
     meta = pd.read_csv("data/ML_all_track.metadata.2022053017.tsv", sep="\t")
-    for i, track in enumerate(eval_track_names):
-        if "CNhs13920" in track or "CNhs13224" in track:
-            track_inds_bed.append(i)
+    track_types = {}
+    for track in eval_track_names:
+        track_types[track] = meta.loc[meta['file_name'] == track].iloc[0]["technology"]
+    # for i, track in enumerate(eval_track_names):
+    #     if "CNhs13920" in track or "CNhs13224" in track:
+    #         track_inds_bed.append(i)
     print(f"Number of tracks for bed: {len(track_inds_bed)}")
     final_pred = {}
     gene_positions = {}
@@ -98,19 +101,19 @@ def eval_perf(p, our_model, head, eval_infos, should_draw, current_epoch, label,
         if w == 0:
             predictions = p2
         else:
-            predictions = np.concatenate((predictions, p2), dtype=np.float32)
+            predictions = np.concatenate((predictions, p2), dtype=np.float16)
         predictions_for_bed = p1
 
-        print(" -bed ", end="")
-        for c, locus in enumerate(predictions_for_bed):
-            ind = w + c
-            mid = eval_infos[ind][1] - p.half_num_regions * p.bin_size - (eval_infos[ind][1] % p.bin_size)
-            for b in range(p.num_bins):
-                start = mid + b * p.bin_size
-                for t in track_inds_bed:
-                    track = eval_track_names[t]
-                    start_val.setdefault(track, {}).setdefault(eval_infos[ind][0], {}).setdefault(start, []).append(locus[t][b])
-        print(" bed- ", end="")
+        # print(" -bed ", end="")
+        # for c, locus in enumerate(predictions_for_bed):
+        #     ind = w + c
+        #     mid = eval_infos[ind][1] - p.half_num_regions * p.bin_size - (eval_infos[ind][1] % p.bin_size)
+        #     for b in range(p.num_bins):
+        #         start = mid + b * p.bin_size
+        #         for t in track_inds_bed:
+        #             track = eval_track_names[t]
+        #             start_val.setdefault(track, {}).setdefault(eval_infos[ind][0], {}).setdefault(start, []).append(locus[t][b])
+        # print(" bed- ", end="")
         p1 = None
         p2 = None
         predictions_for_bed = None
@@ -133,15 +136,15 @@ def eval_perf(p, our_model, head, eval_infos, should_draw, current_epoch, label,
     # pickle.dump(final_pred, open(f"{p.pickle_folder}/final_pred_testt.gz", "wb"), protocol=pickle.HIGHEST_PROTOCOL)
     # final_pred = pickle.load(open(f"{p.pickle_folder}/final_pred_testt.gz", "rb"))
 
-    print("Saving bed files")
-    for track in start_val.keys():
-        with open("bed_output/OUR_" + track + ".bedGraph", 'w+') as f:
-            for chrom in start_val[track].keys():
-                for start in start_val[track][chrom].keys():
-                    start_val[track][chrom][start] = np.max(start_val[track][chrom][start])  # MAX can be better on the test set!
-                for start in sorted(start_val[track][chrom].keys()):
-                    f.write(f"{chrom}\t{start}\t{start + p.bin_size}\t{start_val[track][chrom][start]}")
-                    f.write("\n")
+    # print("Saving bed files")
+    # for track in start_val.keys():
+    #     with open("bed_output/OUR_" + track + ".bedGraph", 'w+') as f:
+    #         for chrom in start_val[track].keys():
+    #             for start in start_val[track][chrom].keys():
+    #                 start_val[track][chrom][start] = np.max(start_val[track][chrom][start])  # MAX can be better on the test set!
+    #             for start in sorted(start_val[track][chrom].keys()):
+    #                 f.write(f"{chrom}\t{start}\t{start + p.bin_size}\t{start_val[track][chrom][start]}")
+    #                 f.write("\n")
 
     corr_p = []
     corr_s = []
@@ -151,8 +154,7 @@ def eval_perf(p, our_model, head, eval_infos, should_draw, current_epoch, label,
         b = []
         indices = []
         for v, track in enumerate(eval_track_names):
-            track_type = meta.loc[meta['file_name'] == track].iloc[0]["technology"]
-            if track_type != "CAGE" or "FANTOM5" not in track: # or "response" in track.lower() or "00" in track
+            if track_types[track] != "CAGE" or "FANTOM5" not in track:
                 continue
             a.append(final_pred[gene][track])
             b.append(eval_gt[gene][track])
@@ -178,7 +180,6 @@ def eval_perf(p, our_model, head, eval_infos, should_draw, current_epoch, label,
     track_perf = {}
 
     for track in eval_track_names:
-        track_type = meta.loc[meta['file_name'] == track].iloc[0]["technology"]
         a = []
         b = []
         for gene in protein_gene_set:
@@ -192,8 +193,8 @@ def eval_perf(p, our_model, head, eval_infos, should_draw, current_epoch, label,
         #     print(f"{track}\t{sc}")
         track_perf[track] = sc
         if pc is not None and sc is not None:
-            corrs_p.setdefault(track_type, []).append((pc, track))
-            corrs_s.setdefault(track_type, []).append((sc, track))
+            corrs_p.setdefault(track_types[track], []).append((pc, track))
+            corrs_s.setdefault(track_types[track], []).append((sc, track))
             all_track_spearman[track] = stats.spearmanr(a, b)[0]
 
     with open("all_track_spearman.csv", "w+") as myfile:
@@ -230,7 +231,6 @@ def eval_perf(p, our_model, head, eval_infos, should_draw, current_epoch, label,
     track_perf = {}
     print(f"Number of TSS: {len(eval_gt_tss[eval_track_names[0]])}")
     for track in eval_track_names:
-        track_type = meta.loc[meta['file_name'] == track].iloc[0]["technology"]
         a = eval_gt_tss[track]
         b = final_pred_tss[track]
         a = np.nan_to_num(a, neginf=0, posinf=0)
@@ -239,8 +239,8 @@ def eval_perf(p, our_model, head, eval_infos, should_draw, current_epoch, label,
         sc = stats.spearmanr(a, b)[0]
         track_perf[track] = pc
         if pc is not None and sc is not None:
-            corrs_p.setdefault(track_type, []).append((pc, track))
-            corrs_s.setdefault(track_type, []).append((sc, track))
+            corrs_p.setdefault(track_types[track], []).append((pc, track))
+            corrs_s.setdefault(track_types[track], []).append((sc, track))
             all_track_spearman[track] = stats.spearmanr(a, b)[0]
 
     with open("all_track_spearman_tss.csv", "w+") as myfile:

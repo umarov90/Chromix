@@ -155,15 +155,16 @@ def parse_some_tracks(q, some_tracks, ga, bin_size, tracks_folder, meta):
             else:
                 meta_row = None
             gast = copy.deepcopy(ga)
-            dtypes = {"chr": str, "start": int, "end": int, "score": float}
-            df = pd.read_csv(fn, delim_whitespace=True, names=["chr", "start", "end", "score"],
-                             dtype=dtypes, header=None, index_col=False)
-            if df['start'].iloc[0] % 64 != 0:
-                print(f"not 64 {track}")
-                sys.exit()
+            df = pd.read_csv(fn, delim_whitespace=True, header=None, index_col=False)
+            if len(df.columns) == 4:
+                df = df.rename(columns={0: "chr", 1: "start", 2: "end", 3: "score"})
+                df["mid"] = (df["start"] + (df["end"] - df["start"]) / 2) / bin_size
+            else:
+                df = df.rename(columns={0: "chr", 1: "start", 2: "end", 3: "id", 4: "score", 5: "strand"})
+                df["mid"] = df["start"] / bin_size
+            df[["start", "end", "score", "mid"]] = df[["start", "end", "score", "mid"]].astype(int)
+            df = df[["chr", "start", "end", "score", "mid"]]
             chrd = list(df["chr"].unique())
-            df["mid"] = (df["start"] + (df["end"] - df["start"]) / 2) / bin_size
-            df = df.astype({"mid": int})
 
             # group the scores over `key` and gather them in a list
             grouped_scores = df.groupby("chr").agg(list)
@@ -210,7 +211,7 @@ def parse_some_tracks(q, some_tracks, ga, bin_size, tracks_folder, meta):
                 if not (meta_row is None or meta_row["value"] == "RNA"):
                     gast[key] = gast[key] / max_val  # np.clip(gast[key], 0, scale_val) / scale_val
                 gast[key] = gaussian_filter(gast[key], sigma=0.5)
-                gast[key] = gast[key].astype(np.float32)
+                gast[key] = gast[key].astype(np.float16)
             joblib.dump(gast, main.p.parsed_tracks_folder + track, compress="lz4")
             # pickle.dump(gast, open(main.p.parsed_tracks_folder + track, "wb"), protocol=pickle.HIGHEST_PROTOCOL)
             print(f"Parsed {track}. Max value: {max_val}.")
@@ -336,7 +337,7 @@ def parse_one_track(ga, bin_size, fn):
 
 
 def load_data(mp_q, p, tracks, scores, t, t_end):
-    scores_after_loading = np.zeros((len(scores), t_end - t, p.num_bins), dtype=np.float32)
+    scores_after_loading = np.zeros((len(scores), t_end - t, p.num_bins), dtype=np.float16)
     for i, track_name in enumerate(tracks):
         parsed_track = joblib.load(p.parsed_tracks_folder + track_name)
         for j in range(len(scores)):
@@ -346,7 +347,7 @@ def load_data(mp_q, p, tracks, scores, t, t_end):
 
 
 def load_data_sum(mp_q, p, tracks, scores, t, t_end):
-    scores_after_loading = np.zeros((len(scores), t_end - t), dtype=np.float32)
+    scores_after_loading = np.zeros((len(scores), t_end - t), dtype=np.float16)
     for i, track_name in enumerate(tracks):
         parsed_track = joblib.load(p.parsed_tracks_folder + track_name)
         for j in range(len(scores)):
@@ -385,4 +386,4 @@ def par_load_data(output_scores_info, tracks, p):
         output_scores.append(joblib.load(f"{p.temp_folder}data{t}"))
 
     gc.collect()
-    return np.concatenate(output_scores, axis=1, dtype=np.float32)
+    return np.concatenate(output_scores, axis=1, dtype=np.float16)

@@ -1,5 +1,7 @@
-import math
 import os
+os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+os.environ["CUDA_VISIBLE_DEVICES"] = '1,2,3'
+import math
 import logging
 import joblib
 import gc
@@ -26,12 +28,6 @@ from scipy.ndimage import gaussian_filter
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 logging.getLogger("tensorflow").setLevel(logging.ERROR)
 matplotlib.use("agg")
-
-
-# physical_devices = tf.config.experimental.list_physical_devices('GPU')
-# assert len(physical_devices) > 0, "Not enough GPU hardware devices available"
-# for device in physical_devices:
-#     tf.config.experimental.set_memory_growth(device, True)
 
 
 def load_old_weights():
@@ -63,7 +59,7 @@ def load_old_weights():
 
 def get_data_and_train(last_proc, fit_epochs, head_id):
     print(datetime.now().strftime('[%H:%M:%S] ') + "Epoch " + str(current_epoch) + " " + p.species[head_id])
-    if hic_num > 0:
+    if head_id != 0 or hic_num > 0:
         training_regions = joblib.load(f"{p.pickle_folder}{p.species[head_id]}_regions.gz")
     else:
         training_regions = joblib.load(f"{p.pickle_folder}train_info.gz")
@@ -222,7 +218,6 @@ def make_model_and_train(head, head_name, input_sequences, all_outputs, fit_epoc
             train_data = mo.wrap(input_sequences, all_outputs["our_expression"], p.GLOBAL_BATCH_SIZE)
             zero_data = mo.wrap([np.zeros_like(input_sequences[0])],
                                 [np.zeros_like(all_outputs["our_expression"][0])], p.GLOBAL_BATCH_SIZE)
-
         del input_sequences
         del all_outputs
         gc.collect()
@@ -265,7 +260,7 @@ def make_model_and_train(head, head_name, input_sequences, all_outputs, fit_epoc
                             continue
                         loss_weights[key] = float(val)
                 losses = {
-                    "our_expression": "mse",
+                    "our_expression": "mse", # poisson
                     "our_epigenome": "mse",
                     "our_conservation": "mse",
                 }
@@ -273,7 +268,7 @@ def make_model_and_train(head, head_name, input_sequences, all_outputs, fit_epoc
                     losses["our_hic"] = "mse"
                 our_model.compile(optimizer=optimizer, loss=losses, loss_weights=loss_weights)
             else:
-                our_model.compile(optimizer=optimizer, loss="mse")
+                our_model.compile(optimizer=optimizer, loss="mse") # poisson
             if current_epoch == start_epoch:
                 # loading the previous optimizer weights
                 our_model.fit(zero_data, steps_per_epoch=1, epochs=1)
@@ -300,6 +295,7 @@ def make_model_and_train(head, head_name, input_sequences, all_outputs, fit_epoc
                 optimizers["our_resnet"].learning_rate.assign(resnet_lr)
                 optimizers["our_resnet"].weight_decay.assign(resnet_wd)
                 optimizers["our_resnet"].clipnorm = resnet_clipnorm
+                # optimizers["use_ema"].clipnorm = use_ema
                 optimizers["our_expression"].learning_rate.assign(expression_lr)
                 if head_name == "hg38":
                     if hic_num > 0:
@@ -364,7 +360,7 @@ def check_perf(mp_q):
             test_eval_chr_info.append(info)
         print(f"Test set {len(test_eval_chr_info)}")
         test_spearman = evaluation.eval_perf(p, our_model, heads["hg38"], test_eval_chr_info,
-                                             True, current_epoch, "test", one_hot)
+                                             False, current_epoch, "test", one_hot)
         with open(p.model_name + "_history.csv", "a+") as myfile:
             myfile.write(f"{training_spearman},{test_spearman}")
             myfile.write("\n")
@@ -428,22 +424,21 @@ if __name__ == '__main__':
     hic_num = len(hic_keys)
     print(f"hic {hic_num}")
 
-    # import model as mo
-    # our_model = mo.human_model(p.input_size, p.num_features, p.num_bins, 56, heads["hg38"])
-
     hic_lr = 0.0001
     expression_lr = 0.0001
     conservation_lr = 0.0001
     epigenome_lr = 0.0001
     resnet_lr = 0.00001
-    resnet_wd = 1e-6
+    resnet_wd = 0.00004
     resnet_clipnorm = 0.001
+    # use_ema = True # Turn off during final training
     optimizers = {
         "our_resnet": tfa.optimizers.AdamW(learning_rate=resnet_lr, weight_decay=resnet_wd, clipnorm=resnet_clipnorm),
         "our_expression": tf.keras.optimizers.Adam(learning_rate=expression_lr),
         "our_epigenome": tf.keras.optimizers.Adam(learning_rate=epigenome_lr),
         "our_conservation": tf.keras.optimizers.Adam(learning_rate=conservation_lr),
         "our_hic": tf.keras.optimizers.Adam(learning_rate=hic_lr), }
+
     mp_q = mp.Queue()
 
     print("Training starting")
@@ -455,19 +450,17 @@ if __name__ == '__main__':
                 head_id = 0
             else:
                 head_id = 1 + (current_epoch - math.ceil(current_epoch / 2)) % (len(heads) - 1)
-            # Only human to test HIC and CON!
-            # head_id = 0
             if head_id == 0:
-                p.STEPS_PER_EPOCH = 30
-                fit_epochs = 3
+                p.STEPS_PER_EPOCH = 50
+                fit_epochs = 2
             else:
-                p.STEPS_PER_EPOCH = 200
+                p.STEPS_PER_EPOCH = 100
                 fit_epochs = 1
 
             # check_perf(mp_q)
             # exit()
             last_proc = get_data_and_train(last_proc, fit_epochs, head_id)
-            if current_epoch % 1000 == 0 and current_epoch != 0:  # and current_epoch != 0:
+            if current_epoch % 40 == 0 and current_epoch != 0:  # and current_epoch != 0:
                 print("Eval epoch")
                 print(mp_q.get())
                 last_proc.join()
