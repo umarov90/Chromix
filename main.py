@@ -1,6 +1,6 @@
 import os
-os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-os.environ["CUDA_VISIBLE_DEVICES"] = '1,2,3'
+# os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+# os.environ["CUDA_VISIBLE_DEVICES"] = '1,2,3'
 import math
 import logging
 import joblib
@@ -224,22 +224,9 @@ def make_model_and_train(head, head_name, input_sequences, all_outputs, fit_epoc
         strategy = tf.distribute.MultiWorkerMirroredStrategy()
         with strategy.scope():
             our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, hic_num, head)
-            # loading model weights
-            if os.path.exists(p.model_path + "_res"):
-                our_model.get_layer("our_resnet").set_weights(joblib.load(p.model_path + "_res"))
-            if os.path.exists(p.model_path + "_expression_" + head_name):
-                our_model.get_layer("our_expression").set_weights(
-                    joblib.load(p.model_path + "_expression_" + head_name))
-            if head_name == "hg38" and os.path.exists(p.model_path + "_epigenome"):
-                our_model.get_layer("our_epigenome").set_weights(joblib.load(p.model_path + "_epigenome"))
-            if head_name == "hg38" and hic_num > 0 and os.path.exists(p.model_path + "_hic"):
-                our_model.get_layer("our_hic").set_weights(joblib.load(p.model_path + "_hic"))
-            if head_name == "hg38" and os.path.exists(p.model_path + "_conservation"):
-                our_model.get_layer("our_conservation").set_weights(joblib.load(p.model_path + "_conservation"))
-
             # preparing the main optimizer
             optimizers_and_layers = [(optimizers["our_resnet"], our_model.get_layer("our_resnet")),
-                                     (optimizers["our_expression"], our_model.get_layer("our_expression"))
+                                     (optimizers_expression[head_name][0], our_model.get_layer("our_expression"))
                                      ]
             if head_name == "hg38":
                 if hic_num > 0:
@@ -260,7 +247,7 @@ def make_model_and_train(head, head_name, input_sequences, all_outputs, fit_epoc
                             continue
                         loss_weights[key] = float(val)
                 losses = {
-                    "our_expression": "mse", # poisson
+                    "our_expression": "mse",
                     "our_epigenome": "mse",
                     "our_conservation": "mse",
                 }
@@ -268,41 +255,51 @@ def make_model_and_train(head, head_name, input_sequences, all_outputs, fit_epoc
                     losses["our_hic"] = "mse"
                 our_model.compile(optimizer=optimizer, loss=losses, loss_weights=loss_weights)
             else:
-                our_model.compile(optimizer=optimizer, loss="mse") # poisson
-            if current_epoch == start_epoch:
+                our_model.compile(optimizer=optimizer, loss="mse")
+            if optimizers_expression[head_name][1] == 0 and start_epoch != 0:
                 # loading the previous optimizer weights
                 our_model.fit(zero_data, steps_per_epoch=1, epochs=1)
+                if os.path.exists(p.model_path + "_opt_expression_" + head_name):
+                    print("loading expression optimizer")
+                    optimizers_expression[head_name][0].set_weights(joblib.load(p.model_path + "_opt_expression_" + head_name))
+                optimizers_expression[head_name][0].learning_rate.assign(expression_lr)
                 if os.path.exists(p.model_path + "_opt_resnet"):
                     print("loading resnet optimizer")
                     optimizers["our_resnet"].set_weights(joblib.load(p.model_path + "_opt_resnet"))
-
-                if os.path.exists(p.model_path + "_opt_expression_" + head_name):
-                    print("loading expression optimizer")
-                    optimizers["our_expression"].set_weights(joblib.load(p.model_path + "_opt_expression_" + head_name))
-
-                if head_name == "hg38" and hic_num > 0 and os.path.exists(p.model_path + "_opt_hic"):
-                    print("loading hic optimizer")
-                    optimizers["our_hic"].set_weights(joblib.load(p.model_path + "_opt_hic"))
-
-                if head_name == "hg38" and os.path.exists(p.model_path + "_opt_epigenome"):
-                    print("loading epigenome optimizer")
-                    optimizers["our_epigenome"].set_weights(joblib.load(p.model_path + "_opt_epigenome"))
-
-                if head_name == "hg38" and os.path.exists(p.model_path + "_opt_conservation"):
-                    print("loading conservation optimizer")
-                    optimizers["our_conservation"].set_weights(joblib.load(p.model_path + "_opt_conservation"))
-
-                optimizers["our_resnet"].learning_rate.assign(resnet_lr)
-                optimizers["our_resnet"].weight_decay.assign(resnet_wd)
-                optimizers["our_resnet"].clipnorm = resnet_clipnorm
-                # optimizers["use_ema"].clipnorm = use_ema
-                optimizers["our_expression"].learning_rate.assign(expression_lr)
+                    optimizers["our_resnet"].learning_rate.assign(resnet_lr)
+                    optimizers["our_resnet"].weight_decay.assign(resnet_wd)
+                    optimizers["our_resnet"].clipnorm = resnet_clipnorm
+                    # optimizers["use_ema"].clipnorm = use_ema
                 if head_name == "hg38":
-                    if hic_num > 0:
+                    if hic_num > 0 and os.path.exists(p.model_path + "_opt_hic"):
+                        print("loading hic optimizer")
+                        optimizers["our_hic"].set_weights(joblib.load(p.model_path + "_opt_hic"))
                         optimizers["our_hic"].learning_rate.assign(hic_lr)
-                    optimizers["our_epigenome"].learning_rate.assign(epigenome_lr)
-                    optimizers["our_conservation"].learning_rate.assign(conservation_lr)
 
+                    if os.path.exists(p.model_path + "_opt_epigenome"):
+                        print("loading epigenome optimizer")
+                        optimizers["our_epigenome"].set_weights(joblib.load(p.model_path + "_opt_epigenome"))
+                        optimizers["our_epigenome"].learning_rate.assign(epigenome_lr)
+
+                    if os.path.exists(p.model_path + "_opt_conservation"):
+                        print("loading conservation optimizer")
+                        optimizers["our_conservation"].set_weights(joblib.load(p.model_path + "_opt_conservation"))
+                        optimizers["our_conservation"].learning_rate.assign(conservation_lr)
+                optimizers_expression[head_name][1] = 1
+            print(optimizers_expression[head_name][0])
+            # loading model weights
+            if os.path.exists(p.model_path + "_res"):
+                our_model.get_layer("our_resnet").set_weights(joblib.load(p.model_path + "_res"))
+            if os.path.exists(p.model_path + "_expression_" + head_name):
+                our_model.get_layer("our_expression").set_weights(
+                    joblib.load(p.model_path + "_expression_" + head_name))
+            if head_name == "hg38" and os.path.exists(p.model_path + "_epigenome"):
+                our_model.get_layer("our_epigenome").set_weights(joblib.load(p.model_path + "_epigenome"))
+            if head_name == "hg38" and hic_num > 0 and os.path.exists(p.model_path + "_hic"):
+                our_model.get_layer("our_hic").set_weights(joblib.load(p.model_path + "_hic"))
+            if head_name == "hg38" and os.path.exists(p.model_path + "_conservation"):
+                our_model.get_layer("our_conservation").set_weights(
+                    joblib.load(p.model_path + "_conservation"))
     except:
         traceback.print_exc()
         print(datetime.now().strftime('[%H:%M:%S] ') + "Error while compiling.")
@@ -314,7 +311,7 @@ def make_model_and_train(head, head_name, input_sequences, all_outputs, fit_epoc
         safe_save(our_model.get_layer("our_resnet").get_weights(), p.model_path + "_res")
         safe_save(optimizers["our_resnet"].get_weights(), p.model_path + "_opt_resnet")
         safe_save(our_model.get_layer("our_expression").get_weights(), p.model_path + "_expression_" + head_name)
-        safe_save(optimizers["our_expression"].get_weights(), p.model_path + "_opt_expression_" + head_name)
+        safe_save(optimizers_expression[head_name][0].get_weights(), p.model_path + "_opt_expression_" + head_name)
         if head_name == "hg38":
             if hic_num > 0:
                 safe_save(optimizers["our_hic"].get_weights(), p.model_path + "_opt_hic")
@@ -434,15 +431,18 @@ if __name__ == '__main__':
     # use_ema = True # Turn off during final training
     optimizers = {
         "our_resnet": tfa.optimizers.AdamW(learning_rate=resnet_lr, weight_decay=resnet_wd, clipnorm=resnet_clipnorm),
-        "our_expression": tf.keras.optimizers.Adam(learning_rate=expression_lr),
         "our_epigenome": tf.keras.optimizers.Adam(learning_rate=epigenome_lr),
         "our_conservation": tf.keras.optimizers.Adam(learning_rate=conservation_lr),
         "our_hic": tf.keras.optimizers.Adam(learning_rate=hic_lr), }
 
+    optimizers_expression = {}
+    for specie in p.species:
+        optimizers_expression[specie] = [tf.keras.optimizers.Adam(learning_rate=expression_lr), 0]
+    print(optimizers_expression["hg38"][0])
     mp_q = mp.Queue()
 
     print("Training starting")
-    start_epoch = 0
+    start_epoch = 2
     fit_epochs = 20
     try:
         for current_epoch in range(start_epoch, p.num_epochs, 1):
@@ -460,7 +460,7 @@ if __name__ == '__main__':
             # check_perf(mp_q)
             # exit()
             last_proc = get_data_and_train(last_proc, fit_epochs, head_id)
-            if current_epoch % 40 == 0 and current_epoch != 0:  # and current_epoch != 0:
+            if current_epoch % 20 == 0 and current_epoch != 0:  # and current_epoch != 0:
                 print("Eval epoch")
                 print(mp_q.get())
                 last_proc.join()

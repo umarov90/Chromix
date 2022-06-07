@@ -70,12 +70,14 @@ def make_head(track_num, num_regions, output1d, name):
     x = x[..., trim:-trim, :]
 
     filter_num = 2048
+    activation = "linear"
     if name == "our_expression":
+        # activation = "softplus"
         filter_num *= 2
     x = Conv1D(filter_num, kernel_size=1, strides=1, name=name + "_pointwise", activation=tf.nn.gelu)(x)
     outputs = Conv1D(track_num, kernel_size=1, strides=1, name=name + "_last_conv1d")(x)
     outputs = tf.transpose(outputs, [0, 2, 1])
-    head_output = Activation('linear', dtype='float32')(outputs)
+    head_output = Activation(activation, dtype='float32')(outputs)
     return Model(head_input, head_output, name=name)
 
 

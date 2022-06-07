@@ -268,14 +268,11 @@ def parse_sequences(p):
             continue
         print(sp)
         genome, ga = cm.parse_genome(f"data/species/{sp}/genome.fa", p.bin_size)
-        regions = pd.read_csv(f"data/species/{sp}/windows.bed", sep="\t",
-                                    index_col=False, names=["chrom", "start", "end"])
-        regions["mid"] = (regions["start"] + (regions["end"] - regions["start"]) / 2)
-        chromosomes = regions['chrom'].unique().tolist()
-        chromosomes = [chrom for chrom in chromosomes if re.match("chr([0-9]*|X)$", chrom)]
-        regions = regions.astype({"mid": int})
-        regions = regions[regions['chrom'].isin(chromosomes)]
-        regions = regions[['chrom', 'mid']].values.tolist()
+        chromosomes = [chrom for chrom in genome.keys() if re.match("chr([0-9]*|X)$", chrom)]
+        regions = []
+        for chrom in chromosomes:
+            for i in range(0, len(genome[chrom]), 40000):
+                regions.append([chrom, i])
 
         exclude = pd.read_csv(f"data/species/{sp}/exclude.bed", sep="\t", index_col=False,
                                     names=["chrom", "start", "end", "geneID", "score", "strand"])
