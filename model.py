@@ -85,7 +85,7 @@ def resnet(input_x, input_size, hic_num):
     # Initial number of filters
     num_filters = 128
     mlp_start_block = 6
-    mlp_hidden_dim_reduction = 8
+    mlp_hidden_dim_reduction = 4
     num_blocks = 10
     patchify_val = 4
     filter_nums = exponential_linspace_int(num_filters, 1024, 6, divisible_by=64)

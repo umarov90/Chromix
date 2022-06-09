@@ -211,13 +211,15 @@ def make_model_and_train(head, head_name, input_sequences, all_outputs, fit_epoc
                              "our_conservation": [np.zeros_like(all_outputs["our_conservation"][0])]}
             if hic_num > 0:
                 zero_out_dict["our_hic"] = [np.zeros_like(all_outputs["our_hic"][0])]
-            zero_data = mo.wrap_for_human_training([np.zeros_like(input_sequences[0])],
-                                                   zero_out_dict,
-                                                   p.GLOBAL_BATCH_SIZE)
+            if current_epoch == start_epoch:
+                zero_data = mo.wrap_for_human_training([np.zeros_like(input_sequences[0])],
+                                                       zero_out_dict,
+                                                       p.GLOBAL_BATCH_SIZE)
         else:
             train_data = mo.wrap(input_sequences, all_outputs["our_expression"], p.GLOBAL_BATCH_SIZE)
-            zero_data = mo.wrap([np.zeros_like(input_sequences[0])],
-                                [np.zeros_like(all_outputs["our_expression"][0])], p.GLOBAL_BATCH_SIZE)
+            if current_epoch == start_epoch:
+                zero_data = mo.wrap([np.zeros_like(input_sequences[0])],
+                                    [np.zeros_like(all_outputs["our_expression"][0])], p.GLOBAL_BATCH_SIZE)
         del input_sequences
         del all_outputs
         gc.collect()
@@ -225,21 +227,6 @@ def make_model_and_train(head, head_name, input_sequences, all_outputs, fit_epoc
         with strategy.scope():
             our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, hic_num, head)
             # preparing the main optimizer
-            hic_lr = 0.0001
-            expression_lr = 0.0001
-            conservation_lr = 0.0001
-            epigenome_lr = 0.0001
-            resnet_lr = 0.00001
-            resnet_wd = 0.000001
-            resnet_clipnorm = 0.001
-            # use_ema = True # Turn off during final training
-            optimizers = {
-                "our_resnet": tfa.optimizers.AdamW(learning_rate=resnet_lr, weight_decay=resnet_wd,
-                                                   clipnorm=resnet_clipnorm),
-                "our_expression": tf.keras.optimizers.Adam(learning_rate=expression_lr),
-                "our_epigenome": tf.keras.optimizers.Adam(learning_rate=epigenome_lr),
-                "our_conservation": tf.keras.optimizers.Adam(learning_rate=conservation_lr),
-                "our_hic": tf.keras.optimizers.Adam(learning_rate=hic_lr), }
             optimizers_and_layers = [(optimizers["our_resnet"], our_model.get_layer("our_resnet")),
                                      (optimizers["our_expression"], our_model.get_layer("our_expression"))]
             if head_name == "hg38":
@@ -263,12 +250,13 @@ def make_model_and_train(head, head_name, input_sequences, all_outputs, fit_epoc
                     "our_conservation": "mse",
                 }
                 if hic_num > 0:
-                    losses["our_hic"] = "mse"
+                    losses["our_hic"] = "msle"
                 our_model.compile(optimizer=optimizer, loss=losses, loss_weights=loss_weights)
             else:
                 our_model.compile(optimizer=optimizer, loss="mse")
             # need to init the optimizers
-            our_model.fit(zero_data, steps_per_epoch=1, epochs=1)
+            if current_epoch == start_epoch:
+                our_model.fit(zero_data, steps_per_epoch=1, epochs=1)
             # loading the previous optimizer weights
             if os.path.exists(p.model_path + "_opt_expression_" + head_name):
                 print("loading expression optimizer")
@@ -430,15 +418,30 @@ if __name__ == '__main__':
     hic_num = len(hic_keys)
     print(f"hic {hic_num}")
 
-    mp_q = mp.Queue()
+    hic_lr = 0.0001
+    expression_lr = 0.0001
+    conservation_lr = 0.0001
+    epigenome_lr = 0.0001
+    resnet_lr = 0.00001
+    resnet_wd = 0.0000001
+    resnet_clipnorm = 0.001
+    # use_ema = True # Turn off during final training
+    optimizers = {
+        "our_resnet": tfa.optimizers.AdamW(learning_rate=resnet_lr, weight_decay=resnet_wd,
+                                           clipnorm=resnet_clipnorm),
+        "our_expression": tf.keras.optimizers.Adam(learning_rate=expression_lr),
+        "our_epigenome": tf.keras.optimizers.Adam(learning_rate=epigenome_lr),
+        "our_conservation": tf.keras.optimizers.Adam(learning_rate=conservation_lr),
+        "our_hic": tf.keras.optimizers.Adam(learning_rate=hic_lr), }
 
+    mp_q = mp.Queue()
     print("Training starting")
     start_epoch = 0
     fit_epochs = 5
     try:
         for current_epoch in range(start_epoch, p.num_epochs, 1):
             head_id = 0
-            p.STEPS_PER_EPOCH = 80
+            p.STEPS_PER_EPOCH = 35
             # if current_epoch % 2 == 0:
             #     head_id = 0
             # else:
@@ -453,7 +456,7 @@ if __name__ == '__main__':
             # check_perf(mp_q)
             # exit()
             last_proc = get_data_and_train(last_proc, fit_epochs, head_id)
-            if current_epoch % 50 == 0 and current_epoch != 0:  # and current_epoch != 0:
+            if current_epoch % 5000 == 0 and current_epoch != 0:  # and current_epoch != 0:
                 print("Eval epoch")
                 print(mp_q.get())
                 last_proc.join()
