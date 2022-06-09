@@ -5,23 +5,23 @@ import tensorflow as tf
 import numpy as np
 import parse_data as parser
 
-compute_correlation = True
-head_name = "hg38"
+compute_correlation = False
+head_name = "rn6"
 p = MainParams()
-heads = joblib.load("pickle/heads.gz")
+heads = joblib.load(f"{p.pickle_folder}heads.gz")
 head = heads[head_name]
 if head_name == "hg38":
     head = head["expression"]
-track_inds_bed = []
+track_inds_bed = [0]
 
-with open('candidate_tracks.tsv') as f:
-    candidates_list = f.read().splitlines()
+# with open('candidate_tracks.tsv') as f:
+#     candidates_list = f.read().splitlines()
+#
+# for i, track in enumerate(head):
+#     if track in candidates_list:
+#         track_inds_bed.append(i)
 
-for i, track in enumerate(head):
-    if track in candidates_list:
-        track_inds_bed.append(i)
-
-one_hot = joblib.load(f"pickle/{head_name}_one_hot.gz")
+one_hot = joblib.load(f"{p.pickle_folder}{head_name}_one_hot.gz")
 
 strategy = tf.distribute.MultiWorkerMirroredStrategy()
 with strategy.scope():
@@ -31,7 +31,7 @@ with strategy.scope():
 
 all_start_vals = {}
 corrs = []
-for chrom in ["chr11"]:#one_hot.keys():
+for chrom in ["chr15"]:#one_hot.keys():
     print(f"\nPredicting {chrom} +++++++++++++++++++++++")
     start_val = {}
     batch = []
@@ -65,7 +65,7 @@ for chrom in ["chr11"]:#one_hot.keys():
                         start_val.setdefault(track, {})[start2] = locus[t][b]
 
             if compute_correlation:
-                output_expression = parser.par_load_data(output_scores_info, head["expression"], p)
+                output_expression = parser.par_load_data(output_scores_info, head, p)
 
                 x = pred
                 y = output_expression
