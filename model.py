@@ -132,7 +132,7 @@ def resnet(input_x, input_size, hic_num):
             y = y1 + y2
         else:
             y = y1
-        y = LayerNormalization(dtype=tf.float32)(y)
+        y = LayerNormalization(dtype=tf.float32)(y) #TODO: Remove or move to mlp block section
         # Pointwise to mix the channels
         y = Conv1D(4 * num_filters,
                    kernel_size=1, padding="same",
@@ -183,7 +183,7 @@ def hic_resnet(x):
         y2 = tf.transpose(y2, [0, 2, 1])
         y = y1 + y2
 
-        y = LayerNormalization(dtype=tf.float32)(y)
+        y = LayerNormalization(dtype=tf.float32)(y) #TODO: Remove or move to mlp block section
         # Pointwise to mix the channels
         y = Conv1D(4 * num_filters,
                    kernel_size=1, padding="same",

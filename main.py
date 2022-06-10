@@ -214,8 +214,6 @@ def safe_save(thing, place):
 
 
 def make_model_and_train(head, head_name, input_sequences, all_outputs, fit_epochs, hic_num, mp_q):
-    os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-    os.environ["CUDA_VISIBLE_DEVICES"] = '1,2,3'
     print(f"=== Training with head {head_name} ===")
     import tensorflow as tf
     # gpus = tf.config.experimental.list_physical_devices('GPU')
@@ -244,22 +242,27 @@ def make_model_and_train(head, head_name, input_sequences, all_outputs, fit_epoc
         strategy = tf.distribute.MultiWorkerMirroredStrategy()
         with strategy.scope():
             our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, hic_num, head)
-            if current_epoch < 10:
-                to_freeze = ["patchify"]
-                for block in range(6): #mlp_start_block = 6
-                    to_freeze.append("body_block_" + str(block) + "_")
-                for layer in our_model.get_layer("our_resnet"):
-                    if layer.name.startswith(tuple(to_freeze)):
-                        layer.trainable = False
-                print(our_model.summary())
+            # if current_epoch < 10:
+            #     to_freeze = ["patchify"]
+            #     for block in range(6): #mlp_start_block = 6
+            #         to_freeze.append("body_block_" + str(block) + "_")
+            #     for layer in our_model.get_layer("our_resnet").layers:
+            #         if layer.name.startswith(tuple(to_freeze)):
+            #             layer.trainable = False
+            #     print(our_model.summary())
+            # elif current_epoch == 10:
+            #     try:
+            #         os.remove(p.model_path + "_opt_resnet")
+            #     except OSError:
+            #         pass
             # preparing the main optimizer
             hic_lr = 0.0001
-            expression_lr = 0.0001
-            conservation_lr = 0.0001
-            epigenome_lr = 0.0001
-            resnet_lr = 0.00001
-            resnet_wd = 0.000001
-            resnet_clipnorm = 0.001
+            expression_lr = 0.00001
+            conservation_lr = 0.00001
+            epigenome_lr = 0.00001
+            resnet_lr = 0.000001
+            resnet_wd = 0.0000001
+            resnet_clipnorm = 0.0001
             # use_ema = True # Turn off during final training
             optimizers = {
                 "our_resnet": tfa.optimizers.AdamW(learning_rate=resnet_lr, weight_decay=resnet_wd,
@@ -291,7 +294,7 @@ def make_model_and_train(head, head_name, input_sequences, all_outputs, fit_epoc
                     "our_conservation": "mse",
                 }
                 if hic_num > 0:
-                    losses["our_hic"] = "msle"
+                    losses["our_hic"] = "mse"
                 our_model.compile(optimizer=optimizer, loss=losses, loss_weights=loss_weights)
             else:
                 our_model.compile(optimizer=optimizer, loss="mse")
@@ -462,7 +465,7 @@ if __name__ == '__main__':
     # import model as mo
     # our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, hic_num, heads["hg38"])
 
-    load_old_weights()
+    # load_old_weights()
     # exit()
     mp_q = mp.Queue()
     print("Training starting")
@@ -471,7 +474,6 @@ if __name__ == '__main__':
     try:
         for current_epoch in range(start_epoch, p.num_epochs, 1):
             head_id = 0
-            p.STEPS_PER_EPOCH = 40
             # if current_epoch % 2 == 0:
             #     head_id = 0
             # else:

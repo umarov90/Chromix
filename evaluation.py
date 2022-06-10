@@ -11,11 +11,19 @@ import common as cm
 import parse_data as parser
 import pandas as pd
 from numba import jit
+import model as mo
 
 
 @jit(nopython=True)
+def average_values(final_pred, eval_track_names):
+    for i, gene in enumerate(final_pred.keys()):
+        if i % 10 == 0:
+            print(i, end=" ")
+        for track in eval_track_names:
+            final_pred[gene][track] = np.mean(final_pred[gene][track])
+
+
 def eval_perf(p, our_model, head, eval_infos, should_draw, current_epoch, label, one_hot):
-    import model as mo
     eval_track_names = []
     for key in head.keys():
         eval_track_names += head[key]
@@ -130,11 +138,7 @@ def eval_perf(p, our_model, head, eval_infos, should_draw, current_epoch, label,
             # Grouping TSS into genes
             final_pred[eval_infos[i][2]].setdefault(track, []).append(predictions[i][it])
             final_pred_tss.setdefault(track, []).append(predictions[i][it])
-    for i, gene in enumerate(final_pred.keys()):
-        if i % 10 == 0:
-            print(i, end=" ")
-        for track in eval_track_names:
-            final_pred[gene][track] = np.mean(final_pred[gene][track])
+    average_values(final_pred, eval_track_names)
     # pickle.dump(final_pred, open(f"{p.pickle_folder}/final_pred_testt.gz", "wb"), protocol=pickle.HIGHEST_PROTOCOL)
     # final_pred = pickle.load(open(f"{p.pickle_folder}/final_pred_testt.gz", "rb"))
 
