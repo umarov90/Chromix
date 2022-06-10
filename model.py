@@ -9,21 +9,22 @@ from tensorflow.keras.models import Model
 import numpy as np
 
 
-def make_model(input_size, num_features, num_regions, hic_num, one_d_heads):
+def make_model(input_size, num_features, num_regions, hic_num, one_d_heads, use_hic=True):
     inputs = Input(shape=(input_size, num_features))
     x = inputs
     output1d = resnet(x, input_size, hic_num)
     our_resnet = Model(inputs, output1d, name="our_resnet")
     outs = our_resnet(inputs)
 
-    if hic_num > 0:
+    if hic_num > 0 and use_hic:
         # Make hic head
         seq_len = output1d.shape[-2]
         features = output1d.shape[-1]
         hic_input = Input(shape=(seq_len, features))
 
         hx = hic_resnet(hic_input)
-
+        seq_len = hx.shape[-2]
+        features = hx.shape[-1]
         twod1 = tf.tile(hx, [1, seq_len, 1])
         twod1 = tf.reshape(twod1, [-1, seq_len, seq_len, features])
         twod2 = tf.transpose(twod1, [0, 2, 1, 3])
@@ -49,7 +50,7 @@ def make_model(input_size, num_features, num_regions, hic_num, one_d_heads):
         new_head = make_head(len(one_d_heads), num_regions, output1d, "our_expression")
         all_heads.append(new_head(outs))
 
-    if hic_num > 0:
+    if hic_num > 0 and use_hic:
         all_heads.append(our_hic(outs))
 
     our_model = Model(inputs, all_heads, name="our_model")
@@ -152,8 +153,9 @@ def resnet(input_x, input_size, hic_num):
 
 
 def hic_resnet(x):
-    num_blocks = 4
+    num_blocks = 5
     num_filters = 1024
+    mlp_hidden_dim_reduction = 4
     for block in range(num_blocks):
         cname = "hic_block_" + str(block) + "_"
         strides = 1
@@ -166,6 +168,8 @@ def hic_resnet(x):
                                 strides=strides,
                                 padding="same",
                                 name=cname + "downsample")(y)
+            if mlp_hidden_dim_reduction > 1:
+                mlp_hidden_dim_reduction = mlp_hidden_dim_reduction // 2
         seq_len = y.shape[-2]
         y1 = y
         y1 = DepthwiseConv1D(kernel_size=9, name=cname + "depthwise", padding="same")(y1)
@@ -173,7 +177,8 @@ def hic_resnet(x):
         # Spatial MLP for long range interactions
         y2 = y
         y2 = tf.transpose(y2, [0, 2, 1])
-        y2 = Dense(seq_len, activation=tf.nn.gelu, name=cname + "mlp_1")(y2)
+        hd = seq_len // mlp_hidden_dim_reduction
+        y2 = Dense(hd, activation=tf.nn.gelu, name=cname + "mlp_1")(y2)
         y2 = Dense(seq_len, name=cname + "mlp_2")(y2)
         y2 = tf.transpose(y2, [0, 2, 1])
         y = y1 + y2

@@ -361,6 +361,7 @@ def par_load_data(output_scores_info, tracks, p):
     ps = []
     start = 0
     nproc = min(mp.cpu_count(), len(tracks))
+    print(nproc)
     step_size = len(tracks) // nproc
     end = len(tracks)
     if len(output_scores_info[0]) == 3:

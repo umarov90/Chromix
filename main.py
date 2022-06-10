@@ -1,6 +1,6 @@
 import os
-# os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-# os.environ["CUDA_VISIBLE_DEVICES"] = '1,2,3'
+os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+os.environ["CUDA_VISIBLE_DEVICES"] = '1,2,3'
 import math
 import logging
 import joblib
@@ -20,9 +20,6 @@ import traceback
 import multiprocessing as mp
 import evaluation
 from main_params import MainParams
-import tensorflow_addons as tfa
-import tensorflow as tf
-import model as mo
 from scipy.ndimage import gaussian_filter
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
@@ -31,8 +28,20 @@ matplotlib.use("agg")
 
 
 def load_old_weights():
+    import model as mo
     our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, hic_num, heads["hg38"])
-    our_model_old = tf.keras.models.load_model(p.model_folder + "our_model_small.h5")
+    our_model.get_layer("our_resnet").set_weights(joblib.load(p.model_path + "_res"))
+    our_model.get_layer("our_expression").set_weights(joblib.load(p.model_path + "_expression_hg38"))
+    our_model.get_layer("our_epigenome").set_weights(joblib.load(p.model_path + "_epigenome"))
+    our_model.get_layer("our_conservation").set_weights(joblib.load(p.model_path + "_conservation"))
+    our_model.get_layer("our_hic").set_weights(joblib.load(p.model_path + "_hic"))
+
+    our_model_old = mo.make_model(12800, p.num_features, 50, 0, heads["hg38"])
+    our_model_old.get_layer("our_resnet").set_weights(joblib.load(p.model_folder + "our_model_small.h5" + "_res"))
+    our_model.get_layer("our_expression").set_weights(joblib.load(p.model_folder + "our_model_small.h5" + "_expression_hg38"))
+    our_model.get_layer("our_epigenome").set_weights(joblib.load(p.model_folder + "our_model_small.h5" + "_epigenome"))
+    our_model.get_layer("our_conservation").set_weights(joblib.load(p.model_folder + "our_model_small.h5" + "_conservation"))
+
     print("model loaded")
     for layer in our_model_old.get_layer("our_resnet").layers:
         layer_name = layer.name
@@ -42,19 +51,22 @@ def load_old_weights():
         except:
             print(layer_name)
 
-    for head_type in heads.keys():
+    for head_type in heads["hg38"].keys():
+        head_type = "our_" + head_type
         for layer in our_model_old.get_layer(head_type).layers:
             layer_name = layer.name
-            if "input" in layer_name:
-                continue
             layer_weights = layer.weights
-            our_model.get_layer(head_type).get_layer(layer_name).set_weights(layer_weights)
+            try:
+                our_model.get_layer(head_type).get_layer(layer_name).set_weights(layer_weights)
+            except:
+                print(layer_name)
 
     safe_save(our_model.get_layer("our_resnet").get_weights(), p.model_path + "_res")
     safe_save(our_model.get_layer("our_expression").get_weights(), p.model_path + "_expression_hg38")
     safe_save(our_model.get_layer("our_hic").get_weights(), p.model_path + "_hic")
     safe_save(our_model.get_layer("our_epigenome").get_weights(), p.model_path + "_epigenome")
     safe_save(our_model.get_layer("our_conservation").get_weights(), p.model_path + "_conservation")
+    print("new weights saved")
 
 
 def get_data_and_train(last_proc, fit_epochs, head_id):
@@ -202,7 +214,15 @@ def safe_save(thing, place):
 
 
 def make_model_and_train(head, head_name, input_sequences, all_outputs, fit_epochs, hic_num, mp_q):
+    os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+    os.environ["CUDA_VISIBLE_DEVICES"] = '1,2,3'
     print(f"=== Training with head {head_name} ===")
+    import tensorflow as tf
+    # gpus = tf.config.experimental.list_physical_devices('GPU')
+    # for gpu in gpus:
+    #     tf.config.experimental.set_memory_growth(gpu, True)
+    import tensorflow_addons as tfa
+    import model as mo
     try:
         if head_name == "hg38":
             train_data = mo.wrap_for_human_training(input_sequences, all_outputs, p.GLOBAL_BATCH_SIZE)
@@ -224,13 +244,21 @@ def make_model_and_train(head, head_name, input_sequences, all_outputs, fit_epoc
         strategy = tf.distribute.MultiWorkerMirroredStrategy()
         with strategy.scope():
             our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, hic_num, head)
+            if current_epoch < 10:
+                to_freeze = ["patchify"]
+                for block in range(6): #mlp_start_block = 6
+                    to_freeze.append("body_block_" + str(block) + "_")
+                for layer in our_model.get_layer("our_resnet"):
+                    if layer.name.startswith(tuple(to_freeze)):
+                        layer.trainable = False
+                print(our_model.summary())
             # preparing the main optimizer
             hic_lr = 0.0001
             expression_lr = 0.0001
             conservation_lr = 0.0001
             epigenome_lr = 0.0001
             resnet_lr = 0.00001
-            resnet_wd = 0.0000001
+            resnet_wd = 0.000001
             resnet_clipnorm = 0.001
             # use_ema = True # Turn off during final training
             optimizers = {
@@ -342,11 +370,13 @@ def make_model_and_train(head, head_name, input_sequences, all_outputs, fit_epoc
 
 def check_perf(mp_q):
     print(datetime.now().strftime('[%H:%M:%S] ') + "Evaluating")
+    import tensorflow as tf
+    import model as mo
     one_hot = joblib.load(f"{p.pickle_folder}hg38_one_hot.gz")
     try:
         strategy = tf.distribute.MultiWorkerMirroredStrategy()
         with strategy.scope():
-            our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, 0, heads["hg38"])
+            our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, hic_num, heads["hg38"], use_hic=False)
             our_model.get_layer("our_resnet").set_weights(joblib.load(p.model_path + "_res"))
             our_model.get_layer("our_expression").set_weights(joblib.load(p.model_path + "_expression_hg38"))
             our_model.get_layer("our_epigenome").set_weights(joblib.load(p.model_path + "_epigenome"))
@@ -362,7 +392,6 @@ def check_perf(mp_q):
         # training_spearman = 0
         test_eval_chr_info = []
         for info in test_info:
-            # if info[0] == "chr11":
             test_eval_chr_info.append(info)
         print(f"Test set {len(test_eval_chr_info)}")
         test_spearman = evaluation.eval_perf(p, our_model, heads["hg38"], test_eval_chr_info,
@@ -425,11 +454,16 @@ if __name__ == '__main__':
         else:
             print(f"Number of tracks in head {head_key}: {len(heads[head_key])}")
 
-    # hic_keys = parser.parse_hic(p)
-    hic_keys = []
+    hic_keys = parser.parse_hic(p)
+    # hic_keys = []
     hic_num = len(hic_keys)
     print(f"hic {hic_num}")
 
+    # import model as mo
+    # our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, hic_num, heads["hg38"])
+
+    load_old_weights()
+    # exit()
     mp_q = mp.Queue()
     print("Training starting")
     start_epoch = 0
@@ -437,7 +471,7 @@ if __name__ == '__main__':
     try:
         for current_epoch in range(start_epoch, p.num_epochs, 1):
             head_id = 0
-            p.STEPS_PER_EPOCH = 35
+            p.STEPS_PER_EPOCH = 40
             # if current_epoch % 2 == 0:
             #     head_id = 0
             # else:

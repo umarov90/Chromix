@@ -10,8 +10,10 @@ import visualization as viz
 import common as cm
 import parse_data as parser
 import pandas as pd
+from numba import jit
 
 
+@jit(nopython=True)
 def eval_perf(p, our_model, head, eval_infos, should_draw, current_epoch, label, one_hot):
     import model as mo
     eval_track_names = []
@@ -67,14 +69,14 @@ def eval_perf(p, our_model, head, eval_infos, should_draw, current_epoch, label,
         print(f"Lengths: {len(test_seq)} {len(eval_gt)}")
         gc.collect()
         print("Dumping the evaluation data")
-        joblib.dump(test_seq, f"{p.pickle_folder}/{label}_seq.gz", compress="lz4")
-        # pickle.dump(test_seq, open(f"{p.pickle_folder}/{chr_name}_seq.gz", "wb"), protocol=pickle.HIGHEST_PROTOCOL)
-        gc.collect()
-        # joblib.dump(eval_gt, f"{p.pickle_folder}/{chr_name}_eval_gt.gz", compress="lz4")
-        pickle.dump(eval_gt, open(f"{p.pickle_folder}/{label}_eval_gt.gz", "wb"), protocol=pickle.HIGHEST_PROTOCOL)
-        gc.collect()
-        # joblib.dump(eval_gt_tss, f"{p.pickle_folder}/{label}_eval_gt_tss.gz", compress="lz4")
-        pickle.dump(eval_gt_tss, open(f"{p.pickle_folder}/{label}_eval_gt_tss.gz", "wb"), protocol=pickle.HIGHEST_PROTOCOL)
+        # joblib.dump(test_seq, f"{p.pickle_folder}/{label}_seq.gz", compress="lz4")
+        # # pickle.dump(test_seq, open(f"{p.pickle_folder}/{chr_name}_seq.gz", "wb"), protocol=pickle.HIGHEST_PROTOCOL)
+        # gc.collect()
+        # # joblib.dump(eval_gt, f"{p.pickle_folder}/{chr_name}_eval_gt.gz", compress="lz4")
+        # pickle.dump(eval_gt, open(f"{p.pickle_folder}/{label}_eval_gt.gz", "wb"), protocol=pickle.HIGHEST_PROTOCOL)
+        # gc.collect()
+        # # joblib.dump(eval_gt_tss, f"{p.pickle_folder}/{label}_eval_gt_tss.gz", compress="lz4")
+        # pickle.dump(eval_gt_tss, open(f"{p.pickle_folder}/{label}_eval_gt_tss.gz", "wb"), protocol=pickle.HIGHEST_PROTOCOL)
 
     start_val = {}
     track_inds_bed = []
@@ -91,7 +93,7 @@ def eval_perf(p, our_model, head, eval_infos, should_draw, current_epoch, label,
     for i in range(len(eval_infos)):
         final_pred[eval_infos[i][2]] = {}
         gene_positions[eval_infos[i][2]] = eval_infos[i][0] + "\t" + str(eval_infos[i][1])
-
+    print("Predicting")
     # predictions = joblib.load("pred.gz")
     for w in range(0, len(test_seq), p.w_step):
         print(w, end=" ")

@@ -6,17 +6,17 @@ import pathlib
 
 class MainParams:
     def __init__(self):
-        self.input_size = 12800
+        self.input_size = 1036800 # 12800
         self.half_size = int(self.input_size / 2)
         self.bin_size = 128
         self.hic_bin_size = 10368
         self.num_hic_bins = 90
         self.half_size_hic = (self.num_hic_bins // 2) * self.hic_bin_size
-        self.num_bins = 50
+        self.num_bins = 2000 # 50
         self.half_num_regions = self.num_bins // 2
         self.mid_bin = self.num_bins // 2
-        self.BATCH_SIZE = 128
-        self.NUM_GPU = 8
+        self.BATCH_SIZE = 1
+        self.NUM_GPU = 3
         self.GLOBAL_BATCH_SIZE = self.NUM_GPU * self.BATCH_SIZE
         self.predict_batch_size = self.NUM_GPU * 2 * self.BATCH_SIZE
         self.w_step = 50
@@ -24,7 +24,7 @@ class MainParams:
         self.num_epochs = 1000
         self.num_features = 4
         self.shift_speed = 2000000
-        self.initial_shift = 80 # 400 # +- 50k
+        self.initial_shift = 0 # +- 50k
         # self.species = ["hg38", "mm10", "macFas5", "calJac4", "rheMac8", "canFam3", "oviAri4", "rn6"]
         self.species = ["hg38"]
         self.script_folder = pathlib.Path(__file__).parent.resolve()
@@ -36,7 +36,7 @@ class MainParams:
         self.model_folder = folders[3]
         self.temp_folder = folders[4]
         self.pickle_folder = folders[5]
-        self.model_name = "our_model_small.h5"
+        self.model_name = "our_model_big.h5" # "our_model_small.h5"
         self.model_path = self.model_folder + self.model_name
         self.figures_folder = "figures_1"
         self.tracks_folder = "/media/user/PASSPORT1/variants_100/tracks/"
