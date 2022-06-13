@@ -30,7 +30,7 @@ def make_model(input_size, num_features, num_regions, hic_num, one_d_heads, use_
         twod2 = tf.transpose(twod1, [0, 2, 1, 3])
         twod = tf.concat([twod1, twod2], axis=-1)
 
-        twod = DepthwiseConv2D(kernel_size=9, name="hic_dw", padding="same")(twod)
+        twod = DepthwiseConv2D(kernel_size=7, name="hic_dw", padding="same")(twod)
 
         twod = twod[..., 5:-5, 5:-5, :]
 
@@ -65,7 +65,7 @@ def make_head(track_num, num_regions, output1d, name):
     head_input = Input(shape=(seq_len, features))
     x = head_input
 
-    x = DepthwiseConv1D(kernel_size=9, strides=1, name=name + "_dw", activation=tf.nn.gelu, padding="same")(x)
+    x = DepthwiseConv1D(kernel_size=7, strides=1, name=name + "_dw", activation=tf.nn.gelu, padding="same")(x)
 
     trim = (x.shape[-2] - num_regions) // 2
     x = x[..., trim:-trim, :]
@@ -84,9 +84,9 @@ def make_head(track_num, num_regions, output1d, name):
 
 def resnet(input_x, input_size, hic_num):
     # Initial number of filters
-    num_filters = 128
+    num_filters = 512
     mlp_start_block = 6
-    mlp_hidden_dim_reduction = 4
+    mlp_hidden_dim_reduction = 8
     num_blocks = 10
     patchify_val = 4
     filter_nums = exponential_linspace_int(num_filters, 1024, 6, divisible_by=64)
@@ -120,7 +120,7 @@ def resnet(input_x, input_size, hic_num):
             num_filters = filter_nums[block]
 
         y1 = y
-        y1 = DepthwiseConv1D(kernel_size=9, name=cname + "depthwise", padding="same")(y1)
+        y1 = DepthwiseConv1D(kernel_size=7, name=cname + "depthwise", padding="same")(y1)
         # Spatial MLP for long range interactions
         if block >= mlp_start_block and hic_num > 0:
             y2 = y
@@ -155,14 +155,17 @@ def resnet(input_x, input_size, hic_num):
 def hic_resnet(x):
     num_blocks = 5
     num_filters = 1024
-    mlp_hidden_dim_reduction = 4
+    mlp_hidden_dim_reduction = 8
     for block in range(num_blocks):
         cname = "hic_block_" + str(block) + "_"
         strides = 1
         y = x
         if block != 0:
             # Downsample
-            strides = 3
+            if block < 3:
+                strides = 2
+            else:
+                strides = 3
             y = LayerNormalization(dtype=tf.float32)(y)
             y = DepthwiseConv1D(kernel_size=strides,
                                 strides=strides,
@@ -172,7 +175,7 @@ def hic_resnet(x):
                 mlp_hidden_dim_reduction = mlp_hidden_dim_reduction // 2
         seq_len = y.shape[-2]
         y1 = y
-        y1 = DepthwiseConv1D(kernel_size=9, name=cname + "depthwise", padding="same")(y1)
+        y1 = DepthwiseConv1D(kernel_size=7, name=cname + "depthwise", padding="same")(y1)
 
         # Spatial MLP for long range interactions
         y2 = y
@@ -284,6 +287,16 @@ def batch_predict_effect(model, seqs1, seqs2):
         else:
             predictions = np.concatenate((predictions, effect), dtype=np.float32)
     return predictions
+
+
+def special_mse(y_true, y_pred):
+    normal_mse = tf.keras.losses.MSE(y_true, y_pred)
+    y_pred_positive = tf.gather_nd(y_pred, tf.where(y_true>0))
+    y_true_positive = tf.gather_nd(y_true, tf.where(y_true>0))
+    non_zero_mse = tf.reduce_mean(tf.square(y_true_positive - y_pred_positive))
+    non_zero_mse = tf.where(tf.math.is_nan(non_zero_mse), tf.zeros_like(non_zero_mse), non_zero_mse)
+    return normal_mse + 0.2 * non_zero_mse
+
 
 
 # from https://github.com/deepmind/deepmind-research/blob/master/enformer/enformer.py

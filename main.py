@@ -1,13 +1,15 @@
 import os
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-os.environ["CUDA_VISIBLE_DEVICES"] = '1,2,3'
+# os.environ["CUDA_VISIBLE_DEVICES"] = '1,2,3'
 import math
 import logging
 import joblib
 import gc
 import random
 import time
-import pandas as pd
+# import pandas as pd
+# pip install modin[all]
+import modin.pandas as pd
 import numpy as np
 import common as cm
 from pathlib import Path
@@ -256,13 +258,13 @@ def make_model_and_train(head, head_name, input_sequences, all_outputs, fit_epoc
             #     except OSError:
             #         pass
             # preparing the main optimizer
-            hic_lr = 0.0001
-            expression_lr = 0.00001
-            conservation_lr = 0.00001
-            epigenome_lr = 0.00001
-            resnet_lr = 0.000001
+            hic_lr = 0.0004
+            expression_lr = 0.0004
+            conservation_lr = 0.0004
+            epigenome_lr = 0.0004
+            resnet_lr = 0.00001
             resnet_wd = 0.0000001
-            resnet_clipnorm = 0.0001
+            resnet_clipnorm = 0.001
             # use_ema = True # Turn off during final training
             optimizers = {
                 "our_resnet": tfa.optimizers.AdamW(learning_rate=resnet_lr, weight_decay=resnet_wd,
@@ -289,15 +291,15 @@ def make_model_and_train(head, head_name, input_sequences, all_outputs, fit_epoc
                             continue
                         loss_weights[key] = float(val)
                 losses = {
-                    "our_expression": "mse",
+                    "our_expression": mo.special_mse,
                     "our_epigenome": "mse",
                     "our_conservation": "mse",
                 }
                 if hic_num > 0:
-                    losses["our_hic"] = "mse"
+                    losses["our_hic"] = mo.special_mse
                 our_model.compile(optimizer=optimizer, loss=losses, loss_weights=loss_weights)
             else:
-                our_model.compile(optimizer=optimizer, loss="mse")
+                our_model.compile(optimizer=optimizer, loss=mo.special_mse)
             # need to init the optimizers
             our_model.fit(zero_data, steps_per_epoch=1, epochs=1)
             # loading the previous optimizer weights
@@ -395,6 +397,7 @@ def check_perf(mp_q):
         # training_spearman = 0
         test_eval_chr_info = []
         for info in test_info:
+            # if info[0] == "chr11":
             test_eval_chr_info.append(info)
         print(f"Test set {len(test_eval_chr_info)}")
         test_spearman = evaluation.eval_perf(p, our_model, heads["hg38"], test_eval_chr_info,
@@ -422,6 +425,8 @@ last_proc = None
 p = MainParams()
 dry_run_regions = {}
 if __name__ == '__main__':
+    import ray
+    ray.init()
     train_info, test_info, protein_coding = parser.parse_sequences(p)
     if Path(f"{p.pickle_folder}track_names_col.gz").is_file():
         track_names_col = joblib.load(f"{p.pickle_folder}track_names_col.gz")
@@ -457,8 +462,8 @@ if __name__ == '__main__':
         else:
             print(f"Number of tracks in head {head_key}: {len(heads[head_key])}")
 
-    hic_keys = parser.parse_hic(p)
-    # hic_keys = []
+    # hic_keys = parser.parse_hic(p)
+    hic_keys = []
     hic_num = len(hic_keys)
     print(f"hic {hic_num}")
 
@@ -473,17 +478,19 @@ if __name__ == '__main__':
     fit_epochs = 10
     try:
         for current_epoch in range(start_epoch, p.num_epochs, 1):
-            head_id = 0
-            # if current_epoch % 2 == 0:
-            #     head_id = 0
-            # else:
-            #     head_id = 1 + (current_epoch - math.ceil(current_epoch / 2)) % (len(heads) - 1)
-            # if head_id == 0:
-            #     p.STEPS_PER_EPOCH = 80
-            #     fit_epochs = 2
-            # else:
-            #     p.STEPS_PER_EPOCH = 160
-            #     fit_epochs = 1
+            # head_id = 0
+            # with open(str(p.script_folder) + "/../step_num") as f:
+            #     p.STEPS_PER_EPOCH = int(f.read())
+            if current_epoch % 2 == 0:
+                head_id = 0
+            else:
+                head_id = 1 + (current_epoch - math.ceil(current_epoch / 2)) % (len(heads) - 1)
+            if head_id == 0:
+                p.STEPS_PER_EPOCH = 80
+                fit_epochs = 4
+            else:
+                p.STEPS_PER_EPOCH = 160
+                fit_epochs = 2
 
             # check_perf(mp_q)
             # exit()

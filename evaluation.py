@@ -10,20 +10,10 @@ import visualization as viz
 import common as cm
 import parse_data as parser
 import pandas as pd
-from numba import jit
-import model as mo
-
-
-@jit(nopython=True)
-def average_values(final_pred, eval_track_names):
-    for i, gene in enumerate(final_pred.keys()):
-        if i % 10 == 0:
-            print(i, end=" ")
-        for track in eval_track_names:
-            final_pred[gene][track] = np.mean(final_pred[gene][track])
 
 
 def eval_perf(p, our_model, head, eval_infos, should_draw, current_epoch, label, one_hot):
+    import model as mo
     eval_track_names = []
     for key in head.keys():
         eval_track_names += head[key]
@@ -32,9 +22,6 @@ def eval_perf(p, our_model, head, eval_infos, should_draw, current_epoch, label,
         print(datetime.now().strftime('[%H:%M:%S] ') + "Loading sequences. ")
         test_seq = joblib.load(f"{p.pickle_folder}/{label}_seq.gz")
         print(datetime.now().strftime('[%H:%M:%S] ') + "Loading gt 1. ")
-        # eval_gt = joblib.load(f"{p.pickle_folder}/{chr_name}_eval_gt.gz")
-        eval_gt = pickle.load(open(f"{p.pickle_folder}/{label}_eval_gt.gz", "rb"))
-        print(datetime.now().strftime('[%H:%M:%S] ') + "Loading gt 2. ")
         # eval_gt_tss = joblib.load(f"{p.pickle_folder}/{label}_eval_gt_tss.gz")
         eval_gt_tss = pickle.load(open(f"{p.pickle_folder}/{label}_eval_gt_tss.gz", "rb"))
         print(datetime.now().strftime('[%H:%M:%S] ') + "Finished loading. ")
@@ -46,19 +33,12 @@ def eval_perf(p, our_model, head, eval_infos, should_draw, current_epoch, label,
         print("Loading ground truth tracks")
         gt = parser.par_load_data(load_info, eval_track_names, p)
         print("Extracting evaluation regions")
-        eval_gt = {}
         eval_gt_tss = {}
-        for i in range(len(eval_infos)):
-            eval_gt[eval_infos[i][2]] = {}
 
         for i, info in enumerate(eval_infos):
             for j, track in enumerate(eval_track_names):
                 eval_gt_tss.setdefault(track, []).append(gt[i, j])
-                eval_gt[info[2]].setdefault(track, []).append(gt[i, j])
 
-        for track in eval_track_names:
-            for gene in eval_gt.keys():
-                eval_gt[gene][track] = np.mean(eval_gt[gene][track])
         print("Extracting DNA regions")
         test_seq = []
         for info in eval_infos:
@@ -74,14 +54,11 @@ def eval_perf(p, our_model, head, eval_infos, should_draw, current_epoch, label,
                 ns = one_hot[info[0]][start:start + p.input_size]
             test_seq.append(ns[:, :-1])
         test_seq = np.asarray(test_seq, dtype=bool)
-        print(f"Lengths: {len(test_seq)} {len(eval_gt)}")
+        print(f"Length: {len(test_seq)}")
         gc.collect()
         print("Dumping the evaluation data")
         # joblib.dump(test_seq, f"{p.pickle_folder}/{label}_seq.gz", compress="lz4")
         # # pickle.dump(test_seq, open(f"{p.pickle_folder}/{chr_name}_seq.gz", "wb"), protocol=pickle.HIGHEST_PROTOCOL)
-        # gc.collect()
-        # # joblib.dump(eval_gt, f"{p.pickle_folder}/{chr_name}_eval_gt.gz", compress="lz4")
-        # pickle.dump(eval_gt, open(f"{p.pickle_folder}/{label}_eval_gt.gz", "wb"), protocol=pickle.HIGHEST_PROTOCOL)
         # gc.collect()
         # # joblib.dump(eval_gt_tss, f"{p.pickle_folder}/{label}_eval_gt_tss.gz", compress="lz4")
         # pickle.dump(eval_gt_tss, open(f"{p.pickle_folder}/{label}_eval_gt_tss.gz", "wb"), protocol=pickle.HIGHEST_PROTOCOL)
@@ -96,11 +73,6 @@ def eval_perf(p, our_model, head, eval_infos, should_draw, current_epoch, label,
     #     if "CNhs13920" in track or "CNhs13224" in track:
     #         track_inds_bed.append(i)
     print(f"Number of tracks for bed: {len(track_inds_bed)}")
-    final_pred = {}
-    gene_positions = {}
-    for i in range(len(eval_infos)):
-        final_pred[eval_infos[i][2]] = {}
-        gene_positions[eval_infos[i][2]] = eval_infos[i][0] + "\t" + str(eval_infos[i][1])
     print("Predicting")
     # predictions = joblib.load("pred.gz")
     for w in range(0, len(test_seq), p.w_step):
@@ -135,12 +107,7 @@ def eval_perf(p, our_model, head, eval_infos, should_draw, current_epoch, label,
         if not eval_infos[i][5]:
             protein_gene_set.append(eval_infos[i][2])
         for it, track in enumerate(eval_track_names):
-            # Grouping TSS into genes
-            final_pred[eval_infos[i][2]].setdefault(track, []).append(predictions[i][it])
             final_pred_tss.setdefault(track, []).append(predictions[i][it])
-    average_values(final_pred, eval_track_names)
-    # pickle.dump(final_pred, open(f"{p.pickle_folder}/final_pred_testt.gz", "wb"), protocol=pickle.HIGHEST_PROTOCOL)
-    # final_pred = pickle.load(open(f"{p.pickle_folder}/final_pred_testt.gz", "rb"))
 
     # print("Saving bed files")
     # for track in start_val.keys():
@@ -155,15 +122,15 @@ def eval_perf(p, our_model, head, eval_infos, should_draw, current_epoch, label,
     corr_p = []
     corr_s = []
     genes_performance = []
-    for gene in final_pred.keys():
+    for i in range(len(eval_infos)):
         a = []
         b = []
         indices = []
         for v, track in enumerate(eval_track_names):
             if track_types[track] != "CAGE" or "FANTOM5" not in track:
                 continue
-            a.append(final_pred[gene][track])
-            b.append(eval_gt[gene][track])
+            a.append(final_pred_tss[track][i])
+            b.append(eval_gt_tss[track][i])
             indices.append(v)
         a = np.nan_to_num(a, neginf=0, posinf=0)
         b = np.nan_to_num(b, neginf=0, posinf=0)
@@ -172,63 +139,12 @@ def eval_perf(p, our_model, head, eval_infos, should_draw, current_epoch, label,
         if not math.isnan(sc) and not math.isnan(pc):
             corr_p.append(pc)
             corr_s.append(sc)
-            genes_performance.append(f"{gene}\t{sc}\t{np.mean(b)}\t{np.std(b)}\t{eval_track_names[indices[np.argmin(a)]]}\t{eval_track_names[indices[np.argmax(a)]]}")
+            genes_performance.append(f"{eval_infos[i][2]}-{eval_infos[i][1]}\t{sc}\t{np.mean(b)}\t{np.std(b)}\t{eval_track_names[indices[np.argmin(a)]]}\t{eval_track_names[indices[np.argmax(a)]]}")
 
     print("")
     print(f"Across tracks {len(corr_p)} {np.mean(corr_p)} {np.mean(corr_s)}")
     with open("genes_performance.tsv", 'w+') as f:
         f.write('\n'.join(genes_performance))
-
-    print("Across Genes")
-    corrs_p = {}
-    corrs_s = {}
-    all_track_spearman = {}
-    track_perf = {}
-
-    for track in eval_track_names:
-        a = []
-        b = []
-        for gene in protein_gene_set:
-            a.append(final_pred[gene][track])
-            b.append(eval_gt[gene][track])
-        a = np.nan_to_num(a, neginf=0, posinf=0)
-        b = np.nan_to_num(b, neginf=0, posinf=0)
-        pc = stats.pearsonr(a, b)[0]
-        sc = stats.spearmanr(a, b)[0]
-        # if "hela" in track.lower():
-        #     print(f"{track}\t{sc}")
-        track_perf[track] = sc
-        if pc is not None and sc is not None:
-            corrs_p.setdefault(track_types[track], []).append((pc, track))
-            corrs_s.setdefault(track_types[track], []).append((sc, track))
-            all_track_spearman[track] = stats.spearmanr(a, b)[0]
-
-    with open("all_track_spearman.csv", "w+") as myfile:
-        for key in all_track_spearman.keys():
-            myfile.write(f"{key},{all_track_spearman[key]}")
-            myfile.write("\n")
-
-    for track_type in corrs_p.keys():
-        with open(f"all_track_spearman_{track_type}.csv", "w+") as myfile:
-            for ccc in corrs_s[track_type]:
-                myfile.write(f"{ccc[0]},{ccc[1]}")
-                myfile.write("\n")
-        type_pcc = [i[0] for i in corrs_p[track_type]]
-        print(f"{track_type} correlation : {np.mean(type_pcc)}"
-              f" {np.mean([i[0] for i in corrs_s[track_type]])} {len(type_pcc)}")
-
-    with open("result_cage_test.csv", "w+") as myfile:
-        for ccc in corrs_p["CAGE"]:
-            myfile.write(str(ccc[0]) + "," + str(ccc[1]))
-            myfile.write("\n")
-
-    with open("result.txt", "a+") as myfile:
-        myfile.write(datetime.now().strftime('[%H:%M:%S] ') + "\n")
-        for track_type in corrs_p.keys():
-            myfile.write(str(track_type) + "\t")
-        for track_type in corrs_p.keys():
-            myfile.write(str(np.mean([i[0] for i in corrs_p[track_type]])) + "\t")
-        myfile.write("\n")
 
     print("Across genes (TSS)")
     corrs_p = {}
@@ -265,7 +181,7 @@ def eval_perf(p, our_model, head, eval_infos, should_draw, current_epoch, label,
     return_result = np.mean([i[0] for i in corrs_s["CAGE"]])
 
     if should_draw:
-        viz.draw_regplots(eval_track_names, track_perf, final_pred, eval_gt,
+        viz.draw_regplots(eval_track_names, track_perf, final_pred_tss, eval_gt_tss,
                           f"{p.figures_folder}/plots/epoch_{current_epoch}")
 
     return return_result

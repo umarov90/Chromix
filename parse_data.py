@@ -30,7 +30,7 @@ def parse_hic(p):
         for filename in os.listdir(directory):
             try:
                 fn = os.path.join(directory, filename)
-                if not fn.endswith("10368nt.tsv.gz"):
+                if not fn.endswith("4608nt.tsv.gz"):
                     continue
                 t_name = filename
                 print(t_name)

@@ -127,11 +127,9 @@ def draw_regplots(track_names, track_perf, final_pred, eval_gt, fig_path):
             continue
         if track_perf[track] < 0.75:
             continue
-        a = []
-        b = []
-        for gene in final_pred.keys():
-            a.append(final_pred[gene][track])
-            b.append(eval_gt[gene][track])
+
+        a = final_pred[track]
+        b = eval_gt[track]
 
         fig, ax = plt.subplots(figsize=(6, 6))
         r, p = stats.spearmanr(a, b)
