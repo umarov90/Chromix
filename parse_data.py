@@ -34,13 +34,6 @@ def parse_hic(p):
                     continue
                 t_name = filename
                 print(t_name)
-                # if t_name not in ["hic_Ery.10kb.intra_chromosomal.interaction_table.tsv",
-                #                   "hic_HUVEC.10kb.intra_chromosomal.interaction_table.tsv",
-                #                   "hic_Islets.10kb.intra_chromosomal.interaction_table.tsv",
-                #                   "hic_SkMC.10kb.intra_chromosomal.interaction_table.tsv"]:
-                #     continue
-                # if Path(folder + t_name + "chr1").is_file():
-                #     continue
                 df = pd.read_csv(fn, sep="\t", index_col=False)
                 df.rename(columns={'hg38_chrom': 'chrom', 'hg38_bin_1_start': 'start1',
                                    'hg38_bin_2_start': 'start2', 'rlogP_max': 'score',
@@ -60,14 +53,15 @@ def parse_hic(p):
                 df.drop(df[df['start1'] - df['start2'] > p.input_size].index, inplace=True)
                 print(len(df))
 
-                m = df.loc[df['score'] != np.inf, 'score'].max()
+                df["score"] = np.log10(df["score"] + 1)
+                m = df["score"].max()
                 print("P Max is: " + str(m))
-                df['score'].replace(np.inf, m, inplace=True)
+                print("P Median is: " + str(df["score"].median()))
                 df["score"] = df["score"] / m
 
                 for chr in chrd:
                     joblib.dump(df.loc[df['chrom'] == chr].sort_values(by=['start1']),
-                                p.parsed_hic_folder + t_name + chr, compress="lz4")
+                                p.temp_folder + t_name + chr, compress="lz4")
                 print(t_name)
                 del df
                 gc.collect()
@@ -76,7 +70,6 @@ def parse_hic(p):
                 print(exc)
                 print(f"!!!!!!!!!!!!!!!{t_name}")
 
-        joblib.dump(hic_keys, f"{p.pickle_folder}hic_keys.gz", compress="lz4")
         chromosomes = ["chrX", "chrY"]
         for i in range(1, 23):
             chromosomes.append("chr" + str(i))
@@ -85,11 +78,12 @@ def parse_hic(p):
             hdf = {}
             for chr in chromosomes:
                 try:
-                    hdf[chr] = joblib.load(p.parsed_hic_folder + key + chr)
+                    hdf[chr] = joblib.load(p.temp_folder + key + chr)
                 except:
                     pass
             joblib.dump(hdf, p.parsed_hic_folder + key, compress="lz4")
             print(key)
+        joblib.dump(hic_keys, f"{p.pickle_folder}hic_keys.gz", compress="lz4")
         return hic_keys
 
 
@@ -162,7 +156,8 @@ def parse_some_tracks(q, some_tracks, ga, bin_size, tracks_folder, meta):
             else:
                 df = df.rename(columns={0: "chr", 1: "start", 2: "end", 3: "id", 4: "score", 5: "strand"})
                 df["mid"] = df["start"] / bin_size
-            df[["start", "end", "score", "mid"]] = df[["start", "end", "score", "mid"]].astype(int)
+            df[["start", "end", "mid"]] = df[["start", "end", "mid"]].astype(int)
+            df["score"] = df["score"].astype(float)
             df = df[["chr", "start", "end", "score", "mid"]]
             chrd = list(df["chr"].unique())
 
@@ -179,11 +174,9 @@ def parse_some_tracks(q, some_tracks, ga, bin_size, tracks_folder, meta):
                 gast[key][pos] += score
 
             max_val = -1
-            min_val = 0
             # all_vals = None
             library_size = 0
             for key in gast.keys():
-                min_val = min(np.min(gast[key]), min_val)
                 library_size += np.sum(gast[key])
             for key in gast.keys():
                 if meta_row is None:
@@ -193,7 +186,7 @@ def parse_some_tracks(q, some_tracks, ga, bin_size, tracks_folder, meta):
                 elif meta_row["value"] == "RNA":
                     gast[key] = np.log10(1000000 * (gast[key] / library_size) + 1)
                 elif meta_row["value"] == "conservation":
-                    gast[key] = gast[key] + abs(min_val)
+                    pass
                 else:
                     gast[key] = np.log10(gast[key] + 1)
                 max_val = max(np.max(gast[key]), max_val)
@@ -208,7 +201,7 @@ def parse_some_tracks(q, some_tracks, ga, bin_size, tracks_folder, meta):
             # if scale_val == 0:
             #     print(scale_val)
             for key in gast.keys():
-                if not (meta_row is None or meta_row["value"] == "RNA"):
+                if not (meta_row is None or meta_row["value"] == "RNA" or meta_row["value"] == "conservation"):
                     gast[key] = gast[key] / max_val  # np.clip(gast[key], 0, scale_val) / scale_val
                 gast[key] = gaussian_filter(gast[key], sigma=0.5)
                 gast[key] = gast[key].astype(np.float16)
@@ -299,38 +292,6 @@ def parse_sequences(p):
         gc.collect()
 
     return train_info, test_info, protein_coding
-
-
-def parse_one_track(ga, bin_size, fn):
-    gast = copy.deepcopy(ga)
-    dtypes = {"chr": str, "start": int, "end": int, "score": float}
-    df = pd.read_csv(fn, delim_whitespace=True, names=["chr", "start", "end", "score"],
-                     dtype=dtypes, header=None, index_col=False)
-
-    chrd = list(df["chr"].unique())
-    df["mid"] = (df["start"] + (df["end"] - df["start"]) / 2) / bin_size
-    df = df.astype({"mid": int})
-
-    # group the scores over `key` and gather them in a list
-    grouped_scores = df.groupby("chr").agg(list)
-
-    # for each key, value in the dictionary...
-    for key, val in gast.items():
-        if key not in chrd:
-            continue
-        # first lookup the positions to update and the corresponding scores
-        pos, score = grouped_scores.loc[key, ["mid", "score"]]
-        # fancy indexing
-        gast[key][pos] += score
-
-    max_val = -1
-    for key in gast.keys():
-        gast[key] = np.log(gast[key] + 1)
-        max_val = max(np.max(gast[key]), max_val)
-    for key in gast.keys():
-        gast[key] = gast[key] / max_val
-
-    return gast
 
 
 def load_data(mp_q, p, tracks, scores, t, t_end):

@@ -66,6 +66,8 @@ def eval_perf(p, our_model, head, eval_infos, should_draw, current_epoch, label,
     start_val = {}
     track_inds_bed = []
     meta = pd.read_csv("data/ML_all_track.metadata.2022053017.tsv", sep="\t")
+    cor_tracks = pd.read_csv("fantom_tracks.tsv", sep="\t").iloc[:, 0].tolist()
+    print(f"Number of correlation tracks: {len(cor_tracks)}")
     track_types = {}
     for track in eval_track_names:
         track_types[track] = meta.loc[meta['file_name'] == track].iloc[0]["technology"]
@@ -127,6 +129,8 @@ def eval_perf(p, our_model, head, eval_infos, should_draw, current_epoch, label,
         b = []
         indices = []
         for v, track in enumerate(eval_track_names):
+            if track not in cor_tracks:
+                continue
             if track_types[track] != "CAGE" or "FANTOM5" not in track:
                 continue
             a.append(final_pred_tss[track][i])

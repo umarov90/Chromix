@@ -38,11 +38,11 @@ def load_old_weights():
     our_model.get_layer("our_conservation").set_weights(joblib.load(p.model_path + "_conservation"))
     our_model.get_layer("our_hic").set_weights(joblib.load(p.model_path + "_hic"))
 
-    our_model_old = mo.make_model(12800, p.num_features, 50, 0, heads["hg38"])
-    our_model_old.get_layer("our_resnet").set_weights(joblib.load(p.model_folder + "our_model_small.h5" + "_res"))
-    our_model.get_layer("our_expression").set_weights(joblib.load(p.model_folder + "our_model_small.h5" + "_expression_hg38"))
-    our_model.get_layer("our_epigenome").set_weights(joblib.load(p.model_folder + "our_model_small.h5" + "_epigenome"))
-    our_model.get_layer("our_conservation").set_weights(joblib.load(p.model_folder + "our_model_small.h5" + "_conservation"))
+    our_model_old = mo.make_model(5120, p.num_features, 20, 0, heads["hg38"])
+    our_model_old.get_layer("our_resnet").set_weights(joblib.load(p.model_folder + "our_model_5120" + "_res"))
+    our_model.get_layer("our_expression").set_weights(joblib.load(p.model_folder + "our_model_5120" + "_expression_hg38"))
+    our_model.get_layer("our_epigenome").set_weights(joblib.load(p.model_folder + "our_model_5120" + "_epigenome"))
+    our_model.get_layer("our_conservation").set_weights(joblib.load(p.model_folder + "our_model_5120" + "_conservation"))
 
     print("model loaded")
     for layer in our_model_old.get_layer("our_resnet").layers:
@@ -94,10 +94,6 @@ def get_data_and_train(last_proc, fit_epochs, head_id):
                                     int(current_epoch / p.shift_speed) + p.initial_shift)
         start = info[1] - (info[1] % p.bin_size) - p.half_size + shift_bins * p.bin_size
         extra = start + p.input_size - len(one_hot[info[0]])
-        # Validation set!
-        # if info[0] != "chr5" or not 139615843 < info[1] < 141668489: # or not 139615843 < info[1] < 141668489
-        #     shifts.append(None)
-        #     continue
         if start < 0 or extra > 0:
             continue
         ns = one_hot[info[0]][start:start + p.input_size]
@@ -115,6 +111,8 @@ def get_data_and_train(last_proc, fit_epochs, head_id):
     print(datetime.now().strftime('[%H:%M:%S] ') + "Loading parsed tracks")
     if head_id == 0:
         output_expression = parser.par_load_data(output_scores_info, heads[p.species[head_id]]["expression"], p)
+        # a = np.max(output_expression, axis=-2)
+        # a = np.min(a, axis=0)
         output_epigenome = parser.par_load_data(output_scores_info, heads[p.species[head_id]]["epigenome"], p)
         output_conservation = parser.par_load_data(output_scores_info, heads[p.species[head_id]]["conservation"], p)
     else:
@@ -226,25 +224,23 @@ def make_model_and_train(head, head_name, input_sequences, all_outputs, fit_epoc
     try:
         if head_name == "hg38":
             train_data = mo.wrap_for_human_training(input_sequences, all_outputs, p.GLOBAL_BATCH_SIZE)
-            zero_out_dict = {"our_expression": [np.zeros_like(all_outputs["our_expression"][0])],
-                             "our_epigenome": [np.zeros_like(all_outputs["our_epigenome"][0])],
-                             "our_conservation": [np.zeros_like(all_outputs["our_conservation"][0])]}
-            if hic_num > 0:
-                zero_out_dict["our_hic"] = [np.zeros_like(all_outputs["our_hic"][0])]
-            zero_data = mo.wrap_for_human_training([np.zeros_like(input_sequences[0])],
-                                                   zero_out_dict,
-                                                   p.GLOBAL_BATCH_SIZE)
         else:
             train_data = mo.wrap(input_sequences, all_outputs["our_expression"], p.GLOBAL_BATCH_SIZE)
-            zero_data = mo.wrap([np.zeros_like(input_sequences[0])],
-                                [np.zeros_like(all_outputs["our_expression"][0])], p.GLOBAL_BATCH_SIZE)
         del input_sequences
         del all_outputs
         gc.collect()
         strategy = tf.distribute.MultiWorkerMirroredStrategy()
         with strategy.scope():
-            our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, hic_num, head)
-            # if current_epoch < 10:
+            our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, hic_num, head, use_hic=(head_name == "hg38"))
+            hic_lr = 0.0004
+            expression_lr = 0.0004
+            conservation_lr = 0.0004
+            epigenome_lr = 0.0004
+            resnet_lr = 0.00001
+            resnet_wd = 0.0
+            resnet_clipnorm = 0.001
+            # frozen_epochs = 5
+            # if current_epoch < frozen_epochs:
             #     to_freeze = ["patchify"]
             #     for block in range(6): #mlp_start_block = 6
             #         to_freeze.append("body_block_" + str(block) + "_")
@@ -252,20 +248,13 @@ def make_model_and_train(head, head_name, input_sequences, all_outputs, fit_epoc
             #         if layer.name.startswith(tuple(to_freeze)):
             #             layer.trainable = False
             #     print(our_model.summary())
-            # elif current_epoch == 10:
+            # elif current_epoch == frozen_epochs:
             #     try:
             #         os.remove(p.model_path + "_opt_resnet")
             #     except OSError:
             #         pass
+
             # preparing the main optimizer
-            hic_lr = 0.0004
-            expression_lr = 0.0004
-            conservation_lr = 0.0004
-            epigenome_lr = 0.0004
-            resnet_lr = 0.00001
-            resnet_wd = 0.0000001
-            resnet_clipnorm = 0.001
-            # use_ema = True # Turn off during final training
             optimizers = {
                 "our_resnet": tfa.optimizers.AdamW(learning_rate=resnet_lr, weight_decay=resnet_wd,
                                                    clipnorm=resnet_clipnorm),
@@ -291,17 +280,17 @@ def make_model_and_train(head, head_name, input_sequences, all_outputs, fit_epoc
                             continue
                         loss_weights[key] = float(val)
                 losses = {
-                    "our_expression": mo.special_mse,
+                    "our_expression": mo.fast_mse, # switch to mse_cor later cor_inds
                     "our_epigenome": "mse",
                     "our_conservation": "mse",
                 }
                 if hic_num > 0:
-                    losses["our_hic"] = mo.special_mse
+                    losses["our_hic"] = mo.fast_mse_hic
                 our_model.compile(optimizer=optimizer, loss=losses, loss_weights=loss_weights)
             else:
-                our_model.compile(optimizer=optimizer, loss=mo.special_mse)
+                our_model.compile(optimizer=optimizer, loss=mo.fast_mse)
             # need to init the optimizers
-            our_model.fit(zero_data, steps_per_epoch=1, epochs=1)
+            our_model.fit(train_data, steps_per_epoch=1, epochs=1)
             # loading the previous optimizer weights
             if os.path.exists(p.model_path + "_opt_expression_" + head_name):
                 print("loading expression optimizer")
@@ -386,7 +375,7 @@ def check_perf(mp_q):
             our_model.get_layer("our_expression").set_weights(joblib.load(p.model_path + "_expression_hg38"))
             our_model.get_layer("our_epigenome").set_weights(joblib.load(p.model_path + "_epigenome"))
             our_model.get_layer("our_conservation").set_weights(joblib.load(p.model_path + "_conservation"))
-        train_eval_chr = "chr1"
+        train_eval_chr = "chr8"
         train_eval_chr_info = []
         for info in train_info:
             if info[0] == train_eval_chr:  # and 139615843 < info[1] < 141668489
@@ -461,9 +450,41 @@ if __name__ == '__main__':
                 print(f"Number of tracks in head {head_key} {human_key}: {len(heads[head_key][human_key])}")
         else:
             print(f"Number of tracks in head {head_key}: {len(heads[head_key])}")
-
-    # hic_keys = parser.parse_hic(p)
-    hic_keys = []
+    # tracks_folder = p.tracks_folder + "hg38/"
+    # sizes = {}
+    # full_names = {}
+    # for filename in os.listdir(tracks_folder):
+    #     if "FANTOM5" in filename:
+    #         df = pd.read_csv(tracks_folder + filename, delim_whitespace=True, header=None, index_col=False)
+    #         df = df.rename(columns={0: "chr", 1: "start", 2: "end", 3: "score"})
+    #         lib_size = df['score'].sum()
+    #         sample_id = filename[filename.index("CNhs"):filename.index("CNhs") + 9]
+    #         sizes[sample_id] = lib_size
+    #         full_names[sample_id] = filename
+    # df = pd.read_csv("data/ontology.csv", sep="\t")
+    # ftracks = {}
+    # for i, row in df.iterrows():
+    #     if not row["term"] in ftracks.keys():
+    #         ftracks[row["term"]] = row["sample"]
+    #     elif sizes[row["sample"]] > sizes[ftracks[row["term"]]]:
+    #         ftracks[row["term"]] = row["sample"]
+    # print(len(ftracks.values()))
+    # for_cor = []
+    # for_cor_inds = []
+    # for val in ftracks.values():
+    #     for_cor.append(full_names[val])
+    # with open("fantom_tracks.tsv", 'w+') as f:
+    #     f.write('\n'.join(for_cor))
+    # for i, track in enumerate(heads["hg38"]["expression"]):
+    #     if track in for_cor:
+    #         for_cor_inds.append(str(i))
+    # print(len(for_cor_inds))
+    # with open("for_cor_inds.tsv", 'w+') as f:
+    #     f.write('\n'.join(for_cor_inds))
+    # exit()
+    cor_inds = pd.read_csv("for_cor_inds.tsv", sep="\t").iloc[:, 0].astype(int).tolist()
+    hic_keys = parser.parse_hic(p)
+    # hic_keys = []
     hic_num = len(hic_keys)
     print(f"hic {hic_num}")
 
@@ -478,24 +499,24 @@ if __name__ == '__main__':
     fit_epochs = 10
     try:
         for current_epoch in range(start_epoch, p.num_epochs, 1):
-            # head_id = 0
+            head_id = 0
             # with open(str(p.script_folder) + "/../step_num") as f:
             #     p.STEPS_PER_EPOCH = int(f.read())
-            if current_epoch % 2 == 0:
-                head_id = 0
-            else:
-                head_id = 1 + (current_epoch - math.ceil(current_epoch / 2)) % (len(heads) - 1)
+            # if current_epoch % 2 == 0:
+            #     head_id = 0
+            # else:
+            #     head_id = 1 + (current_epoch - math.ceil(current_epoch / 2)) % (len(heads) - 1)
             if head_id == 0:
-                p.STEPS_PER_EPOCH = 80
+                p.STEPS_PER_EPOCH = 250
                 fit_epochs = 4
             else:
-                p.STEPS_PER_EPOCH = 160
+                p.STEPS_PER_EPOCH = 600
                 fit_epochs = 2
 
             # check_perf(mp_q)
             # exit()
             last_proc = get_data_and_train(last_proc, fit_epochs, head_id)
-            if current_epoch % 5000 == 0 and current_epoch != 0:  # and current_epoch != 0:
+            if current_epoch % 40 == 0 and current_epoch != 0:  # and current_epoch != 0:
                 print("Eval epoch")
                 print(mp_q.get())
                 last_proc.join()

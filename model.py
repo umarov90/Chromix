@@ -5,14 +5,14 @@ from tensorflow.keras.layers import LeakyReLU, LayerNormalization, MultiHeadAtte
     Add, Embedding, Layer, Reshape, \
     Dense, Conv1D, Input, Flatten, Activation, BatchNormalization, LocallyConnected1D, DepthwiseConv1D, DepthwiseConv2D
 from tensorflow.keras.models import Model
-
+from keras import backend as K
 import numpy as np
 
 
 def make_model(input_size, num_features, num_regions, hic_num, one_d_heads, use_hic=True):
     inputs = Input(shape=(input_size, num_features))
     x = inputs
-    output1d = resnet(x, input_size, hic_num)
+    output1d = resnet(x, input_size)
     our_resnet = Model(inputs, output1d, name="our_resnet")
     outs = our_resnet(inputs)
 
@@ -82,7 +82,7 @@ def make_head(track_num, num_regions, output1d, name):
     return Model(head_input, head_output, name=name)
 
 
-def resnet(input_x, input_size, hic_num):
+def resnet(input_x, input_size):
     # Initial number of filters
     num_filters = 512
     mlp_start_block = 6
@@ -122,7 +122,7 @@ def resnet(input_x, input_size, hic_num):
         y1 = y
         y1 = DepthwiseConv1D(kernel_size=7, name=cname + "depthwise", padding="same")(y1)
         # Spatial MLP for long range interactions
-        if block >= mlp_start_block and hic_num > 0:
+        if block >= mlp_start_block:
             y2 = y
             y2 = tf.transpose(y2, [0, 2, 1])
             hd = current_len // mlp_hidden_dim_reduction
@@ -132,7 +132,7 @@ def resnet(input_x, input_size, hic_num):
             y = y1 + y2
         else:
             y = y1
-        y = LayerNormalization(dtype=tf.float32)(y) #TODO: Remove or move to mlp block section
+        y = LayerNormalization(dtype=tf.float32)(y)
         # Pointwise to mix the channels
         y = Conv1D(4 * num_filters,
                    kernel_size=1, padding="same",
@@ -291,13 +291,78 @@ def batch_predict_effect(model, seqs1, seqs2):
 
 def special_mse(y_true, y_pred):
     normal_mse = tf.keras.losses.MSE(y_true, y_pred)
+    y = y_pred[..., 9] + y_pred[..., 10] + y_pred[..., 11]
+    x = y_true[..., 9] + y_true[..., 10] + y_true[..., 11]
+
+    mx = tf.math.reduce_mean(x)
+    my = tf.math.reduce_mean(y)
+    xm, ym = x - mx, y - my
+    r_num = tf.math.reduce_mean(tf.multiply(xm, ym))
+    r_den = tf.math.reduce_std(xm) * tf.math.reduce_std(ym)
+    r = r_num / r_den
+
+    r = tf.math.maximum(tf.math.minimum(r, 1.0), -1.0)
+    cor = 1 - tf.math.square(r)
+
+    cor = tf.where(tf.math.is_nan(cor), tf.zeros_like(cor), cor)
+    return normal_mse + 0.5 * cor # 0.1
+
+
+def mse_plus_cor(tracks, small_peak=0.15):
+    def lossFunction(y_true, y_pred):
+        cor_axis = -2
+
+        x = list_slice(y_pred, tracks, 1)
+        y = list_slice(y_true, tracks, 1)
+
+        max_val = tf.math.reduce_max(y, axis=cor_axis, keepdims=True)
+        # print(max_val.shape, end="max_val\n ")
+
+        mx = tf.math.reduce_mean(x, axis=cor_axis, keepdims=True)
+        my = tf.math.reduce_mean(y, axis=cor_axis, keepdims=True)
+        xm, ym = x - mx, y - my
+        r_num = tf.math.reduce_mean(xm * ym, axis=cor_axis, keepdims=True)
+        r_den = tf.math.reduce_std(xm, axis=cor_axis, keepdims=True) * tf.math.reduce_std(ym, axis=cor_axis, keepdims=True)
+        r_den = r_den + 0.0000001
+        r = r_num / r_den
+
+        r = tf.math.maximum(tf.math.minimum(r, 1.0), -1.0)
+        cor = 1 - r
+        # reduce importance of low peaks correlations
+        cor = cor * tf.math.minimum(tf.math.square(max_val / small_peak), 1.0)
+        cor = tf.where(tf.math.is_nan(cor), tf.zeros_like(cor), cor)
+        # print(cor.shape, end="cor\n ")
+
+        total_loss = fast_mse(y_true, y_pred) + 0.02 * tf.math.reduce_mean(cor) # 0.02
+        # print(total_loss.shape, end="total_loss\n ")
+        return total_loss
+    return lossFunction
+
+
+@tf.function
+def fast_mse(y_true, y_pred):
+    normal_mse = tf.reduce_mean(tf.square(y_true - y_pred))
+    # print(normal_mse.shape, end="normal_mse\n ")
+    y_pred_positive = tf.gather_nd(y_pred, tf.where(y_true>0))
+    # print(y_pred_positive.shape, end="y_pred_positive\n ")
+    y_true_positive = tf.gather_nd(y_true, tf.where(y_true>0))
+    non_zero_mse = tf.reduce_mean(tf.square(y_true_positive - y_pred_positive))
+    # print(non_zero_mse.shape, end="non_zero_mse\n ")
+    non_zero_mse = tf.where(tf.math.is_nan(non_zero_mse), tf.zeros_like(non_zero_mse), non_zero_mse)
+    total_loss = normal_mse + 0.1 * non_zero_mse
+    # print(total_loss.shape, end="total_loss\n ")
+    return total_loss
+
+
+@tf.function
+def fast_mse_hic(y_true, y_pred):
+    normal_mse = tf.reduce_mean(tf.square(y_true - y_pred))
     y_pred_positive = tf.gather_nd(y_pred, tf.where(y_true>0))
     y_true_positive = tf.gather_nd(y_true, tf.where(y_true>0))
     non_zero_mse = tf.reduce_mean(tf.square(y_true_positive - y_pred_positive))
     non_zero_mse = tf.where(tf.math.is_nan(non_zero_mse), tf.zeros_like(non_zero_mse), non_zero_mse)
-    return normal_mse + 0.2 * non_zero_mse
-
-
+    total_loss = normal_mse + 0.2 * non_zero_mse
+    return total_loss
 
 # from https://github.com/deepmind/deepmind-research/blob/master/enformer/enformer.py
 def exponential_linspace_int(start, end, num, divisible_by=1):
@@ -334,3 +399,31 @@ class UpperTri(tf.keras.layers.Layer):
         config = super().get_config().copy()
         config['diagonal_offset'] = self.diagonal_offset
         return config
+
+# taken from https://stackoverflow.com/questions/46881006/slicing-tensor-with-list-tensorflow
+def list_slice(tensor, indices, axis):
+    """
+    Args
+    ----
+    tensor (Tensor) : input tensor to slice
+    indices ( [int] ) : list of indices of where to perform slices
+    axis (int) : the axis to perform the slice on
+    """
+
+    slices = []   
+
+    ## Set the shape of the output tensor. 
+    # Set any unknown dimensions to -1, so that reshape can infer it correctly. 
+    # Set the dimension in the slice direction to be 1, so that overall dimensions are preserved during the operation
+    shape = tensor.get_shape().as_list()
+    shape[shape==None] = -1
+    shape[axis] = 1
+
+    nd = len(shape)
+
+    for i in indices:   
+        _slice = [slice(None)]*nd
+        _slice[axis] = slice(i,i+1)
+        slices.append(tf.reshape(tensor[_slice], shape))
+
+    return tf.concat(slices, axis=axis)
