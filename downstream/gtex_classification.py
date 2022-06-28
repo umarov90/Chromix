@@ -6,7 +6,7 @@ import numpy as np
 import tensorflow as tf
 import matplotlib.pyplot as plt
 import attribution
-import logomaker
+# import logomaker
 from sklearn.cluster import KMeans
 import seaborn as sns
 import model as mo
@@ -15,6 +15,7 @@ import common as cm
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
 from sklearn import metrics
+from sklearn.decomposition import PCA
 
 TRACK_NUM = 40
 DISEASE_NUM = 200
@@ -28,21 +29,19 @@ def find_nearest(array, value):
 
 
 p = MainParams()
-script_folder = pathlib.Path(__file__).parent.resolve()
-folders = open(str(script_folder) + "/../data_dirs").read().strip().split("\n")
-os.chdir(folders[0])
-parsed_tracks_folder = folders[1]
-parsed_hic_folder = folders[2]
-model_folder = folders[3]
-heads = joblib.load("pickle/heads.gz")
-head_id = 0
-head_tracks = heads[head_id]
-one_hot = joblib.load("pickle/one_hot.gz")
+
+head_name = "hg38"
+heads = joblib.load(f"{p.pickle_folder}heads.gz")
+head = heads[head_name]
+one_hot = joblib.load(f"{p.pickle_folder}{head_name}_one_hot.gz")
 
 strategy = tf.distribute.MultiWorkerMirroredStrategy()
 with strategy.scope():
-    our_model = tf.keras.models.load_model(model_folder + p.model_name)
-    our_model.get_layer("our_head").set_weights(joblib.load(model_folder + p.model_name + "_head_" + str(head_id)))
+    our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, 0, head, use_hic=False)
+    our_model.get_layer("our_resnet").set_weights(joblib.load(p.model_path + "_res"))
+    our_model.get_layer("our_expression").set_weights(joblib.load(p.model_path + "_expression_" + head_name))
+    our_model.get_layer("our_epigenome").set_weights(joblib.load(p.model_path + "_epigenome"))
+    our_model.get_layer("our_conservation").set_weights(joblib.load(p.model_path + "_conservation"))
 
 vcf_names = set([])
 for filename in sorted(os.listdir(VCF_DIR)):
@@ -81,31 +80,40 @@ for name in vcf_names:
 
         Y_label.append(Y_label_orig[index])
         snp_pos = p.half_size + correction
-        seq1 = one_hot[row["chrom"]][start: start + p.input_size]
+        seq1 = one_hot[row["chrom"]][start: start + p.input_size][..., :-1]
         ref = seq1[snp_pos][["ACGT".index(row["ref"])]] # True
         alt1 = seq1[snp_pos][["ACGT".index(row["alt"])]] # False
         seqs1.append(seq1)
         seq2 = seq1.copy()
-        seq2[snp_pos] = [False, False, False, False, seq2[snp_pos][4]]
+        seq2[snp_pos] = [False, False, False, False]
         seq2[snp_pos][["ACGT".index(row["alt"])]] = True
         alt2 = seq2[snp_pos][["ACGT".index(row["alt"])]] # True
         seqs2.append(seq2)
 
     print(f"Predicting {len(seqs1)}")
-    vals1 = mo.batch_predict(our_model, np.asarray(seqs1))
-    print(f"Predicting {len(seqs2)}")
-    vals2 = mo.batch_predict(our_model, np.asarray(seqs2))
+    dif = mo.batch_predict_effect(p, our_model, np.asarray(seqs1), np.asarray(seqs2))
     print("Done")
-    dif = np.mean(vals1,  axis=-1) - np.mean(vals2,  axis=-1) # Combine max and mean for random forest?
-    # alt_prediction.mean(axis=1) - ref_prediction.mean(axis=1)
+    
 
     X_train, X_test, Y_train, Y_test = train_test_split(dif, np.asarray(Y_label), test_size=0.1, random_state=1)
     clf = RandomForestClassifier(random_state=0) # max_depth=100,
     clf.fit(X_train, Y_train)
     Y_pred = clf.predict(X_test)
     fpr, tpr, thresholds = metrics.roc_curve(Y_test, Y_pred, pos_label=1)
-    auc = metrics.auc(fpr, tpr)
-    print(f"{name} AUC: {auc}")
-    AUCs.append(auc)
+    auc1 = metrics.auc(fpr, tpr)
+    print(f"{name} AUC: {auc1}")
+
+
+    pca = PCA(n_components=100)
+    pca_data = pca.fit_transform(dif)
+    X_train, X_test, Y_train, Y_test = train_test_split(pca_data, np.asarray(Y_label), test_size=0.1, random_state=1)
+    clf = RandomForestClassifier(random_state=0) # max_depth=100,
+    clf.fit(X_train, Y_train)
+    Y_pred = clf.predict(X_test)
+    fpr, tpr, thresholds = metrics.roc_curve(Y_test, Y_pred, pos_label=1)
+    auc2 = metrics.auc(fpr, tpr)
+    print(f"{name} AUC: {auc2}")
+    AUCs.append(max(auc1, auc2))
+
 
 print(f"Average AUC: {np.mean(AUCs)}")

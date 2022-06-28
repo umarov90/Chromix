@@ -18,26 +18,20 @@ def make_model(input_size, num_features, num_regions, hic_num, one_d_heads, use_
 
     if hic_num > 0 and use_hic:
         # Make hic head
+        hic_size = 1225
         seq_len = output1d.shape[-2]
         features = output1d.shape[-1]
         hic_input = Input(shape=(seq_len, features))
 
-        hx = hic_resnet(hic_input)
-        seq_len = hx.shape[-2]
-        features = hx.shape[-1]
-        twod1 = tf.tile(hx, [1, seq_len, 1])
-        twod1 = tf.reshape(twod1, [-1, seq_len, seq_len, features])
-        twod2 = tf.transpose(twod1, [0, 2, 1, 3])
-        twod = tf.concat([twod1, twod2], axis=-1)
-
-        twod = DepthwiseConv2D(kernel_size=7, name="hic_dw", padding="same")(twod)
-
-        twod = twod[..., 5:-5, 5:-5, :]
-
-        triu = UpperTri()(twod)
-        hx = Conv1D(4096, kernel_size=1, strides=1, name="hic_pointwise", activation=tf.nn.gelu)(triu)
-        hx = Conv1D(hic_num, kernel_size=1, strides=1, name="hic_last_conv1d")(hx)
+        hx = hic_input
         hx = tf.transpose(hx, [0, 2, 1])
+        hx = Dense(4096, activation=tf.nn.gelu, name="hic_mlp_1")(hx)
+        hx = Dense(hic_size, name="hic_mlp_2")(hx)
+        hx = tf.transpose(hx, [0, 2, 1])
+        hx = Dense(4096, activation=tf.nn.gelu, name="hic_mlp_3")(hx)
+        hx = Dense(hic_num, name="hic_mlp_4")(hx)
+        hx = tf.transpose(hx, [0, 2, 1])
+
         hx = Activation('linear', dtype='float32')(hx)
         our_hic = Model(hic_input, hx, name="our_hic")
 
@@ -86,8 +80,8 @@ def resnet(input_x, input_size):
     # Initial number of filters
     num_filters = 512
     mlp_start_block = 6
-    mlp_hidden_dim_reduction = 8
-    num_blocks = 10
+    mlp_hidden_dim_reduction = 4
+    num_blocks = 8
     patchify_val = 4
     filter_nums = exponential_linspace_int(num_filters, 1024, 6, divisible_by=64)
     # Patchify layer
@@ -143,7 +137,7 @@ def resnet(input_x, input_size):
 
         # linear projection residual shortcut connection
         x = Conv1D(num_filters,
-                   kernel_size=1,
+                   kernel_size=7,
                    strides=strides,
                    padding="same",
                    name=cname + "linear_projection")(x)
@@ -197,7 +191,7 @@ def hic_resnet(x):
 
         # linear projection residual shortcut connection
         x = Conv1D(num_filters,
-                   kernel_size=1,
+                   kernel_size=7,
                    strides=strides,
                    padding="same",
                    name=cname + "linear_projection")(x)
@@ -247,12 +241,11 @@ def wrap2(input_sequences, bs):
         return train_data
 
 
-def batch_predict(model, seqs):
-    w_step = 500
-    predict_batch_size = 8
-    for w in range(0, len(seqs), w_step):
+def batch_predict(p, model, seqs):
+    for w in range(0, len(seqs), p.w_step):
         print(w, end=" ")
-        p1 = model.predict(wrap2(seqs[w:w + w_step], predict_batch_size))
+        pr = model.predict(wrap2(seqs[w:w + p.w_step], p.predict_batch_size))
+        p1 = np.concatenate((pr[0], pr[1], pr[2]), axis=1)
         # if len(hic_keys) > 0:
         #     p2 = p1[0][:, :, p.mid_bin - 1] + p1[0][:, :, p.mid_bin] + p1[0][:, :, p.mid_bin + 1]
         #     if w == 0:
@@ -263,17 +256,17 @@ def batch_predict(model, seqs):
         if w == 0:
             predictions = p1
         else:
-            predictions = np.concatenate((predictions, p1), dtype=np.float32)
+            predictions = np.concatenate((predictions, p1), dtype=np.float16)
     return predictions
 
 
-def batch_predict_effect(model, seqs1, seqs2):
-    w_step = 500
-    predict_batch_size = 8
-    for w in range(0, len(seqs1), w_step):
+def batch_predict_effect(p, model, seqs1, seqs2):
+    for w in range(0, len(seqs1), p.w_step):
         print(w, end=" ")
-        p1 = model.predict(wrap2(seqs1[w:w + w_step], predict_batch_size))
-        p2 = model.predict(wrap2(seqs2[w:w + w_step], predict_batch_size))
+        pr = model.predict(wrap2(seqs1[w:w + p.w_step], p.predict_batch_size))
+        p1 = np.concatenate((pr[0], pr[1], pr[2]), axis=1)
+        pr = model.predict(wrap2(seqs2[w:w + p.w_step], p.predict_batch_size))
+        p2 = np.concatenate((pr[0], pr[1], pr[2]), axis=1)
         # if len(hic_keys) > 0:
         #     p2 = p1[0][:, :, p.mid_bin - 1] + p1[0][:, :, p.mid_bin] + p1[0][:, :, p.mid_bin + 1]
         #     if w == 0:
@@ -281,11 +274,11 @@ def batch_predict_effect(model, seqs1, seqs2):
         #     else:
         #         predictions = np.concatenate((predictions, p2), dtype=np.float32)
         # else:
-        effect = np.mean(p1 - p2, axis=-1)
+        effect = np.max(np.abs(p1 - p2), axis=-1)
         if w == 0:
             predictions = effect
         else:
-            predictions = np.concatenate((predictions, effect), dtype=np.float32)
+            predictions = np.concatenate((predictions, effect), dtype=np.float16)
     return predictions
 
 
@@ -308,49 +301,54 @@ def special_mse(y_true, y_pred):
     return normal_mse + 0.5 * cor # 0.1
 
 
-def mse_plus_cor(tracks, small_peak=0.15):
+def mse_plus_cor(tracks, small_peak=0.05):
     def lossFunction(y_true, y_pred):
-        cor_axis = -2
+        cor_within_tracks = cor_loss(y_true, y_pred, cor_axis=-1)
 
-        x = list_slice(y_pred, tracks, 1)
-        y = list_slice(y_true, tracks, 1)
+        x = list_slice(y_pred, tracks, -2)
+        y = list_slice(y_true, tracks, -2)
 
-        max_val = tf.math.reduce_max(y, axis=cor_axis, keepdims=True)
-        # print(max_val.shape, end="max_val\n ")
-
-        mx = tf.math.reduce_mean(x, axis=cor_axis, keepdims=True)
-        my = tf.math.reduce_mean(y, axis=cor_axis, keepdims=True)
-        xm, ym = x - mx, y - my
-        r_num = tf.math.reduce_mean(xm * ym, axis=cor_axis, keepdims=True)
-        r_den = tf.math.reduce_std(xm, axis=cor_axis, keepdims=True) * tf.math.reduce_std(ym, axis=cor_axis, keepdims=True)
-        r_den = r_den + 0.0000001
-        r = r_num / r_den
-
-        r = tf.math.maximum(tf.math.minimum(r, 1.0), -1.0)
-        cor = 1 - r
+        max_val = tf.math.reduce_max(y, axis=-2, keepdims=True)
+        
+        cor_across_tracks = cor_loss(x, y, cor_axis=-2)
+        
         # reduce importance of low peaks correlations
-        cor = cor * tf.math.minimum(tf.math.square(max_val / small_peak), 1.0)
-        cor = tf.where(tf.math.is_nan(cor), tf.zeros_like(cor), cor)
-        # print(cor.shape, end="cor\n ")
+        cor_across_tracks = cor_across_tracks * tf.math.minimum(tf.math.square(max_val / small_peak), 1.0)
 
-        total_loss = fast_mse(y_true, y_pred) + 0.02 * tf.math.reduce_mean(cor) # 0.02
-        # print(total_loss.shape, end="total_loss\n ")
+        total_loss = fast_mse(y_true, y_pred) + 0.0001 * tf.math.reduce_mean(cor_across_tracks) + 0.0001 * tf.math.reduce_mean(cor_within_tracks)
+
         return total_loss
     return lossFunction
 
 
+def cor_loss(x, y, cor_axis):
+    mx = tf.math.reduce_mean(x, axis=cor_axis, keepdims=True)
+    my = tf.math.reduce_mean(y, axis=cor_axis, keepdims=True)
+    xm, ym = x - mx, y - my
+    r_num = tf.math.reduce_mean(xm * ym, axis=cor_axis, keepdims=True)
+    r_den = tf.math.reduce_std(xm, axis=cor_axis, keepdims=True) * tf.math.reduce_std(ym, axis=cor_axis, keepdims=True)
+    r_den = r_den + 0.0000001
+    r = r_num / r_den
+    r = tf.math.maximum(tf.math.minimum(r, 1.0), -1.0)
+    cor = 1 - r
+    cor = tf.where(tf.math.is_nan(cor), tf.zeros_like(cor), cor)
+    return cor
+
+
 @tf.function
 def fast_mse(y_true, y_pred):
-    normal_mse = tf.reduce_mean(tf.square(y_true - y_pred))
-    # print(normal_mse.shape, end="normal_mse\n ")
+    y_pred_negative = tf.gather_nd(y_pred, tf.where(y_true==0))
+    y_true_negative = tf.gather_nd(y_true, tf.where(y_true==0))
+    zero_mse = tf.reduce_mean(tf.square(y_pred_negative - y_true_negative))
+    zero_mse = tf.where(tf.math.is_nan(zero_mse), tf.zeros_like(zero_mse), zero_mse)
+
     y_pred_positive = tf.gather_nd(y_pred, tf.where(y_true>0))
-    # print(y_pred_positive.shape, end="y_pred_positive\n ")
     y_true_positive = tf.gather_nd(y_true, tf.where(y_true>0))
     non_zero_mse = tf.reduce_mean(tf.square(y_true_positive - y_pred_positive))
-    # print(non_zero_mse.shape, end="non_zero_mse\n ")
     non_zero_mse = tf.where(tf.math.is_nan(non_zero_mse), tf.zeros_like(non_zero_mse), non_zero_mse)
-    total_loss = normal_mse + 0.1 * non_zero_mse
-    # print(total_loss.shape, end="total_loss\n ")
+
+    total_loss = 0.9 * zero_mse  + 0.1 * non_zero_mse
+
     return total_loss
 
 

@@ -36,35 +36,22 @@ def recover_shape(v, size_X):
 
 eval_gt_full = []
 p = MainParams()
-w_step = 40
-predict_batch_size = 4
+head_name = "hg38"
 heads = joblib.load(f"{p.pickle_folder}heads.gz")
-head_tracks = heads["hg38"]
+head = heads[head_name]
 hic_keys = parser.parse_hic(p)
 hic_num = len(hic_keys)
 for k in hic_keys:
     print(k, end=", ")
-# hn = []
-# for h in [3, 7, 10, 15]:
-#     print(hic_keys[h])
-#     hn.append(hic_keys[h])
-# hn.append("hic_HeLa.10kb.intra_chromosomal.interaction_table.tsv")
-# hic_keys = hn
-# joblib.dump(hic_keys, "pickle/hic_keys.gz", compress=3)
 
-infos = joblib.load(f"{p.pickle_folder}test_info.gz")[100:1000]
-infos = infos[::20]
+infos = joblib.load(f"{p.pickle_folder}train_info.gz")[100:110]
+# infos = infos[::20]
 print(f"Number of positions: {len(infos)}")
 one_hot = joblib.load(f"{p.pickle_folder}hg38_one_hot.gz")
 strategy = tf.distribute.MultiWorkerMirroredStrategy()
 with strategy.scope():
-    our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, hic_num, p.bin_size, p.hic_bin_size,
-                              heads["hg38"])
-    our_model.get_layer("our_resnet").set_weights(joblib.load(p.model_path + "_res"))
-    our_model.get_layer("our_expression").set_weights(joblib.load(p.model_path + "_expression_hg38"))
-    our_model.get_layer("our_epigenome").set_weights(joblib.load(p.model_path + "_epigenome"))
+    our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, hic_num, head, use_hic=True)
     our_model.get_layer("our_hic").set_weights(joblib.load(p.model_path + "_hic"))
-    our_model.get_layer("our_conservation").set_weights(joblib.load(p.model_path + "_conservation"))
 
 hic_output = []
 for hi, key in enumerate(hic_keys):
@@ -119,9 +106,9 @@ for info in infos:
     test_seq.append(ns[:, :-1])
 
 test_seq = np.asarray(test_seq, dtype=bool)
-for w in range(0, len(test_seq), w_step):
+for w in range(0, len(test_seq), p.w_step):
     print(w, end=" ")
-    p1 = our_model.predict(mo.wrap2(test_seq[w:w + w_step], predict_batch_size))
+    p1 = our_model.predict(mo.wrap2(test_seq[w:w + p.w_step], p.predict_batch_size))
     if w == 0:
         predictions_hic = p1[3]
     else:

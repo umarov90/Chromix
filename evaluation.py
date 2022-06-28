@@ -81,7 +81,7 @@ def eval_perf(p, our_model, head, eval_infos, should_draw, current_epoch, label,
         print(w, end=" ")
         pr = our_model.predict(mo.wrap2(test_seq[w:w + p.w_step], p.predict_batch_size))
         p1 = np.concatenate((pr[0], pr[1], pr[2]), axis=1)
-        p2 = p1[:, :, p.mid_bin - 1] + p1[:, :, p.mid_bin] + p1[:, :, p.mid_bin + 1]
+        p2 = p1[:, :, p.mid_bin - 2] + p1[:, :, p.mid_bin - 1] + p1[:, :, p.mid_bin] + p1[:, :, p.mid_bin + 1] + p1[:, :, p.mid_bin + 2]
         if w == 0:
             predictions = p2
         else:

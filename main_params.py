@@ -15,7 +15,7 @@ class MainParams:
         self.num_bins = 1000 # 1000
         self.half_num_regions = self.num_bins // 2
         self.mid_bin = self.num_bins // 2
-        self.BATCH_SIZE = 1
+        self.BATCH_SIZE = 2
         self.NUM_GPU = 4
         self.GLOBAL_BATCH_SIZE = self.NUM_GPU * self.BATCH_SIZE
         self.predict_batch_size = self.NUM_GPU * 2 * self.BATCH_SIZE

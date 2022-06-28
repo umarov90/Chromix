@@ -175,16 +175,18 @@ def parse_some_tracks(q, some_tracks, ga, bin_size, tracks_folder, meta):
 
             max_val = -1
             # all_vals = None
-            library_size = 0
-            for key in gast.keys():
-                library_size += np.sum(gast[key])
+            # library_size = 0
+            # for key in gast.keys():
+            #     library_size += np.sum(gast[key])
             for key in gast.keys():
                 if meta_row is None:
-                    gast[key] = np.log10(1000000 * (gast[key] / library_size) + 1)
+                    # gast[key] = np.log10(1000000 * (gast[key] / library_size) + 1)
+                    gast[key] = np.log10(gast[key] + 1)
                 elif meta_row["technology"] == "scEnd5":
                     gast[key] = np.log10(np.exp(gast[key]))
                 elif meta_row["value"] == "RNA":
-                    gast[key] = np.log10(1000000 * (gast[key] / library_size) + 1)
+                    # gast[key] = np.log10(1000000 * (gast[key] / library_size) + 1)
+                    gast[key] = np.log10(gast[key] + 1)
                 elif meta_row["value"] == "conservation":
                     pass
                 else:
@@ -201,8 +203,8 @@ def parse_some_tracks(q, some_tracks, ga, bin_size, tracks_folder, meta):
             # if scale_val == 0:
             #     print(scale_val)
             for key in gast.keys():
-                if not (meta_row is None or meta_row["value"] == "RNA" or meta_row["value"] == "conservation"):
-                    gast[key] = gast[key] / max_val  # np.clip(gast[key], 0, scale_val) / scale_val
+                # if not (meta_row is None or meta_row["value"] == "RNA" or meta_row["value"] == "conservation"):
+                gast[key] = gast[key] / max_val  # np.clip(gast[key], 0, scale_val) / scale_val
                 gast[key] = gaussian_filter(gast[key], sigma=0.5)
                 gast[key] = gast[key].astype(np.float16)
             joblib.dump(gast, main.p.parsed_tracks_folder + track, compress="lz4")
@@ -274,17 +276,28 @@ def parse_sequences(p):
             pos = int(row["start"])
             exclude_dict.setdefault(row["chrom"], []).append(pos)
 
+        encode_blacklist = pd.read_csv(f"data/hg38-blacklist.v2.bed", sep="\t", index_col=False,
+                              names=["chrom", "start", "end", "reason"])
+        if sp == "hg38":
+            encode_blacklist_dict = {}
+            for index, row in encode_blacklist.iterrows():
+                encode_blacklist_dict.setdefault(row["chrom"], []).append([int(row["start"]), int(row["end"])])
+
         one_hot = {}
         for chromosome in chromosomes:
             print(chromosome)
             one_hot[chromosome] = cm.encode_seq(genome[chromosome])
-            tss_layer = np.zeros((len(one_hot[chromosome]), 1)).astype(bool)
+            exclude_layer = np.zeros((len(one_hot[chromosome]), 1)).astype(bool)
             print(len(one_hot[chromosome]))
             if chromosome in exclude_dict.keys():
                 for tss in exclude_dict[chromosome]:
-                    tss_layer[tss, 0] = True
-            print(f"{chromosome}: {np.sum(tss_layer)}")
-            one_hot[chromosome] = np.hstack([one_hot[chromosome], tss_layer])
+                    exclude_layer[tss, 0] = True
+            if sp == "hg38":
+                if chromosome in encode_blacklist_dict.keys():
+                    for region in encode_blacklist_dict[chromosome]:
+                        exclude_layer[region[0]:region[1], 0] = True
+            print(f"{chromosome}: {np.sum(exclude_layer)}")
+            one_hot[chromosome] = np.hstack([one_hot[chromosome], exclude_layer])
 
         joblib.dump(one_hot, f"{p.pickle_folder}{sp}_one_hot.gz", compress="lz4")
         joblib.dump(ga, f"{p.pickle_folder}{sp}_ga.gz", compress=3)
@@ -312,7 +325,7 @@ def load_data_sum(mp_q, p, tracks, scores, t, t_end):
             # 3 or 6 bins?
             pt = parsed_track[scores[j][0]]
             mid = int(scores[j][1])
-            scores_after_loading[j, i] = pt[mid - 1] + pt[mid] + pt[mid + 1]
+            scores_after_loading[j, i] = pt[mid - 2] + pt[mid - 1] + pt[mid] + pt[mid + 1] + pt[mid + 2]
     joblib.dump(scores_after_loading, f"{p.temp_folder}data{t}", compress="lz4")
     mp_q.put(None)
 
