@@ -221,7 +221,7 @@ def batch_predict_effect(p, model, seqs1, seqs2):
 
 def mse_plus_cor(y_true, y_pred):
     y_pred_positive = tf.gather_nd(y_pred, tf.where(y_true > 0))
-    print(f"Shape is {y_pred_positive.shape}")
+    # print(f"Shape is {y_pred_positive.shape}")
     y_true_positive = tf.gather_nd(y_true, tf.where(y_true > 0))
 
     cor = cor_loss(y_pred_positive, y_true_positive, -1)
@@ -233,6 +233,7 @@ def mse_plus_cor(y_true, y_pred):
 
 def cor_loss(x, y, cor_axis):
     mx = tf.math.reduce_mean(x, axis=cor_axis)
+    # print(f"Mean Shape is {mx.shape}")
     my = tf.math.reduce_mean(y, axis=cor_axis)
     xm, ym = x - mx, y - my
     r_num = tf.math.reduce_mean(xm * ym, axis=cor_axis)

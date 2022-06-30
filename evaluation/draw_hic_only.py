@@ -11,6 +11,7 @@ import parse_data as parser
 from scipy.ndimage.filters import gaussian_filter
 import cooler
 import pandas as pd
+import shutil
 from scipy import stats
 import random
 from mpl_toolkits.axisartist.grid_finder import DictFormatter
@@ -49,21 +50,23 @@ infos = []
 for info in train_info:
     if info[0] == train_eval_chr:
         infos.append(info)
-infos = infos[::200]
+infos = infos[::400]
 print(f"Number of positions: {len(infos)}")
 
 hic_output = []
 hic_output2 = []
 n_bins = 50
 nan_counts = {}
-good_hic = pd.read_csv("data/good_hic.tsv", sep="\t").iloc[:, 0].tolist()
+good_hic = pd.read_csv("data/good_hic.tsv", sep="\t", header=None).iloc[:, 0].tolist()
 directory = "hic"
 
 for i, info in enumerate(infos):
     hic_output.append([])
     hic_output2.append([])
 
-for filename in good_hic:
+for filename in good_hic: # os.listdir(directory)
+    if not filename.endswith(".mcool"):
+        continue
     c = cooler.Cooler("hic/" + filename + "::resolutions/5000")
     resolution = c.binsize
     print(filename)
@@ -75,10 +78,9 @@ for filename in good_hic:
         if start_hic < 0 or end_hic >= len(one_hot[info[0]]):
             continue
         hic_mat = c.matrix(balance=True, field="count").fetch(f'{info[0]}:{start_hic}-{end_hic}')
-        shape = hic_mat.shape
         # count = np.count_nonzero(np.isnan(hic_mat))
         # nan_counts[filename] = nan_counts[filename] + count if filename in nan_counts else count
-        # Filter by nan ratio
+
         hic_mat[np.isnan(hic_mat)] = 0
 
         hic_mat = hic_mat - np.diag(np.diag(hic_mat, k=1), k=1) - np.diag(np.diag(hic_mat, k=-1), k=-1) - np.diag(np.diag(hic_mat))
@@ -94,14 +96,13 @@ for filename in good_hic:
 
         hic_output[i].append(hic_mat)
         hic_output2[i].append(hic_mat2)
-print(shape)
 print("Drawing")
 # for key in nan_counts:
 #     print(f"{key}: {nan_counts[key]}")
 #
 # sorted_dict = {k: v for k, v in sorted(nan_counts.items(), key=lambda item: item[1])}
 # with open("good_hic.tsv", 'w+') as f:
-#     f.write('\n'.join(list(sorted_dict.keys())[:int(0.2 * len(sorted_dict.keys()))]))
+#     f.write('\n'.join(list(sorted_dict.keys())[:int(0.1 * len(sorted_dict.keys()))]))
 # exit()
 sns.set(font_scale=0.5)
 for n in range(len(hic_output)):

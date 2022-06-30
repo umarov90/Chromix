@@ -18,6 +18,7 @@ from multiprocessing import Pool, Manager
 import multiprocessing as mp
 from scipy.ndimage import gaussian_filter
 from sklearn.cluster import KMeans
+import cooler
 
 
 def parse_hic(p):
@@ -306,6 +307,58 @@ def par_load_data(output_scores_info, tracks, p):
     output_scores = []
     for t in range(start, end, step_size):
         output_scores.append(joblib.load(f"{p.temp_folder}data{t}"))
-
+    output_scores = np.concatenate(output_scores, axis=1, dtype=np.float16)
     gc.collect()
-    return np.concatenate(output_scores, axis=1, dtype=np.float16)
+    return output_scores
+
+
+def par_load_hic_data(hic_tracks, p, picked_regions, half, shifts):
+    mp_q = mp.Queue()
+    ps = []
+
+    nproc = min(mp.cpu_count(), len(picked_regions))
+    print(nproc)
+    step_size = len(picked_regions) // nproc
+    end = len(picked_regions)
+
+    for t in range(0, end, step_size):
+        t_end = min(t + step_size, end)
+        load_proc = mp.Process(target=load_hic_data,
+                               args=(mp_q, hic_tracks, picked_regions[t:t_end], t, p, half, shifts,))
+        load_proc.start()
+        ps.append(load_proc)
+
+    for load_proc in ps:
+        load_proc.join()
+    print(mp_q.get())
+
+    output_scores = []
+    for t in range(0, end, step_size):
+        output_scores.append(joblib.load(f"{p.temp_folder}hic_data{t}"))
+    output_scores = np.concatenate(output_scores, axis=0, dtype=np.float16)
+    gc.collect()
+    return output_scores
+
+
+def load_hic_data(mp_q, hic_tracks, picked_regions, t, p, half, shifts):
+    hic_data = []
+    for i in range(len(picked_regions)):
+        hic_data.append([])
+
+    for hic in hic_tracks:
+        c = cooler.Cooler("hic/" + hic + "::resolutions/5000")
+        for i, info in enumerate(picked_regions):
+            start_hic = int(info[1] - (info[1] % p.bin_size) - p.half_size_hic) + p.hic_bin_size // 2
+            if shifts is not None:
+                start_hic = start_hic + shifts[i] * p.bin_size
+            end_hic = start_hic + 2 * p.half_size_hic - p.hic_bin_size
+            hic_mat = c.matrix(balance=True, field="count").fetch(f'{info[0]}:{start_hic}-{end_hic}')
+            hic_mat[np.isnan(hic_mat)] = 0
+            hic_mat = hic_mat - np.diag(np.diag(hic_mat, k=1), k=1) - np.diag(np.diag(hic_mat, k=-1), k=-1) - np.diag(np.diag(hic_mat))
+            hic_mat = gaussian_filter(hic_mat, sigma=1)
+            if t + i < half:
+                hic_mat = np.rot90(hic_mat, k=2)
+            hic_mat = hic_mat[np.triu_indices_from(hic_mat, k=2)]
+            hic_data[i].append(hic_mat)
+    joblib.dump(hic_data, f"{p.temp_folder}hic_data{t}", compress="lz4")
+    mp_q.put(None)

@@ -128,24 +128,7 @@ def get_data_and_train(last_proc, fit_epochs, head_id):
     # half of sequences will be reverse-complemented
     half = len(input_sequences) // 2
     # loading corresponding 2D data
-    output_hic = []
-    if head_id == 0:
-        for i in range(len(picked_regions)):
-            output_hic.append([])
-        for hic in hic_keys:
-            c = cooler.Cooler("hic/" + hic + "::resolutions/2000")
-            for i, info in enumerate(picked_regions):
-                start_hic = int(info[1] - (info[1] % p.bin_size) - p.half_size_hic + shifts[i] * p.bin_size) + p.hic_bin_size // 2
-                end_hic = start_hic + 2 * p.half_size_hic - p.hic_bin_size
-                hic_mat = c.matrix(balance=True, field="count").fetch(f'{info[0]}:{start_hic}-{end_hic}')
-                hic_mat[np.isnan(hic_mat)] = 0
-                hic_mat = hic_mat - np.diag(np.diag(hic_mat, k=1), k=1) - np.diag(np.diag(hic_mat, k=-1), k=-1) - np.diag(np.diag(hic_mat))
-                hic_mat = gaussian_filter(hic_mat, sigma=1)
-                if i < half:
-                    hic_mat = np.rot90(hic_mat, k=2)
-                hic_mat = hic_mat[np.triu_indices_from(hic_mat, k=2)]
-                output_hic[i].append(hic_mat)
-    output_hic = np.asarray(output_hic)
+    output_hic = parser.par_load_hic_data(hic_keys, p, picked_regions, half, shifts)
     gc.collect()
     print_memory()
     input_sequences = np.asarray(input_sequences, dtype=bool)
@@ -454,9 +437,9 @@ if __name__ == '__main__':
     # with open("for_cor_inds.tsv", 'w+') as f:
     #     f.write('\n'.join(for_cor_inds))
     # exit()
-    cor_inds = pd.read_csv("for_cor_inds.tsv", sep="\t").iloc[:, 0].astype(int).tolist()
+    cor_inds = pd.read_csv("for_cor_inds.tsv", sep="\t", header=None).iloc[:, 0].astype(int).tolist()
     # hic_keys = parser.parse_hic(p)
-    hic_keys = pd.read_csv("data/good_hic.tsv", sep="\t").iloc[:, 0]
+    hic_keys = pd.read_csv("data/good_hic.tsv", sep="\t", header=None).iloc[:, 0]
     hic_num = len(hic_keys)
     print(f"hic {hic_num}")
 

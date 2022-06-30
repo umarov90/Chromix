@@ -39,7 +39,7 @@ p = MainParams()
 head_name = "hg38"
 heads = joblib.load(f"{p.pickle_folder}heads.gz")
 head = heads[head_name]
-hic_keys = parser.parse_hic(p)
+hic_keys = pd.read_csv("data/good_hic.tsv", sep="\t", header=None).iloc[:, 0].tolist()
 hic_num = len(hic_keys)
 for k in hic_keys:
     print(k, end=", ")
@@ -50,41 +50,13 @@ print(f"Number of positions: {len(infos)}")
 one_hot = joblib.load(f"{p.pickle_folder}hg38_one_hot.gz")
 strategy = tf.distribute.MultiWorkerMirroredStrategy()
 with strategy.scope():
-    our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, hic_num, head, use_hic=True)
-    our_model.get_layer("our_hic").set_weights(joblib.load(p.model_path + "_hic"))
+    our_model =mo.make_model(p.input_size, p.num_features, p.num_bins, hic_num, p.hic_size, head)
+    our_model.get_layer("our_resnet").set_weights(joblib.load(p.model_path + "_res"))
+    our_model.get_layer("our_expression").set_weights(joblib.load(p.model_path + "_expression_hg38"))
+    our_model.get_layer("our_epigenome").set_weights(joblib.load(p.model_path + "_epigenome"))
+    our_model.get_layer("our_conservation").set_weights(joblib.load(p.model_path + "_conservation"))
 
-hic_output = []
-for hi, key in enumerate(hic_keys):
-    hdf = joblib.load(p.parsed_hic_folder + key)
-    ni = 0
-    for i, info in enumerate(infos):
-        hd = hdf[info[0]]
-        hic_mat = np.zeros((p.num_hic_bins, p.num_hic_bins))
-        start_hic = int(info[1] - (info[1] % p.bin_size) - p.half_size_hic)
-        end_hic = start_hic + 2 * p.half_size_hic
-        start_row = hd['start1'].searchsorted(start_hic - p.hic_bin_size, side='left')
-        end_row = hd['start1'].searchsorted(end_hic, side='right')
-        hd = hd.iloc[start_row:end_row]
-        # convert start of the input region to the bin number
-        start_hic = int(start_hic / p.hic_bin_size)
-        # subtract start bin from the binned entries in the range [start_row : end_row]
-        l1 = (np.floor(hd["start1"].values / p.hic_bin_size) - start_hic).astype(int)
-        l2 = (np.floor(hd["start2"].values / p.hic_bin_size) - start_hic).astype(int)
-        hic_score = hd["score"].values
-        # drop contacts with regions outside the [start_row : end_row] range
-        lix = (l2 < len(hic_mat)) & (l2 >= 0) & (l1 >= 0)
-        l1 = l1[lix]
-        l2 = l2[lix]
-        hic_score = hic_score[lix]
-        hic_mat[l1, l2] += hic_score
-        hic_mat = hic_mat[np.triu_indices_from(hic_mat, k=1)]
-        if hi == 0:
-            hic_output.append([])
-        hic_output[ni].append(hic_mat)
-        ni += 1
-    del hd
-    del hdf
-    gc.collect()
+hic_output = parser.par_load_hic_data(hic_keys, p, infos, 0, None)
 
 test_seq = []
 for info in infos:
