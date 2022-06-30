@@ -7,9 +7,9 @@ import joblib
 import gc
 import random
 import time
-# import pandas as pd
+import pandas as pd
 # pip install modin[all]
-import modin.pandas as pd
+# import modin.pandas as pd
 import numpy as np
 import common as cm
 from pathlib import Path
@@ -23,6 +23,7 @@ import multiprocessing as mp
 import evaluation
 from main_params import MainParams
 from scipy.ndimage import gaussian_filter
+import cooler
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 logging.getLogger("tensorflow").setLevel(logging.ERROR)
@@ -111,11 +112,15 @@ def get_data_and_train(last_proc, fit_epochs, head_id):
         output_scores_info.append([info[0], start_bin, start_bin + p.num_bins])
     print(datetime.now().strftime('[%H:%M:%S] ') + "Loading parsed tracks")
     if head_id == 0:
+        output_conservation = parser.par_load_data(output_scores_info, heads[p.species[head_id]]["conservation"], p)
+        gc.collect()
         output_expression = parser.par_load_data(output_scores_info, heads[p.species[head_id]]["expression"], p)
+        gc.collect()
         # a = np.max(output_expression, axis=-2)
+        # a = np.sum(output_expression, axis=-1)
         # a = np.min(a, axis=0)
         output_epigenome = parser.par_load_data(output_scores_info, heads[p.species[head_id]]["epigenome"], p)
-        output_conservation = parser.par_load_data(output_scores_info, heads[p.species[head_id]]["conservation"], p)
+        gc.collect()
     else:
         output_expression = parser.par_load_data(output_scores_info, heads[p.species[head_id]], p)
     gc.collect()
@@ -125,55 +130,37 @@ def get_data_and_train(last_proc, fit_epochs, head_id):
     # loading corresponding 2D data
     output_hic = []
     if head_id == 0:
-        for hi, key in enumerate(hic_keys):
-            hdf = joblib.load(p.parsed_hic_folder + key)
+        for i in range(len(picked_regions)):
+            output_hic.append([])
+        for hic in hic_keys:
+            c = cooler.Cooler("hic/" + hic + "::resolutions/2000")
             for i, info in enumerate(picked_regions):
-                hd = hdf[info[0]]
-                hic_mat = np.zeros((p.num_hic_bins, p.num_hic_bins))
-                start_hic = int(info[1] - (info[1] % p.bin_size) - p.half_size_hic + shifts[i] * p.bin_size)
-                end_hic = start_hic + 2 * p.half_size_hic
-                start_row = hd['start1'].searchsorted(start_hic - p.hic_bin_size, side='left')
-                end_row = hd['start1'].searchsorted(end_hic, side='right')
-                hd = hd.iloc[start_row:end_row]
-                # convert start of the input region to the bin number
-                start_hic = int(start_hic / p.hic_bin_size)
-                # subtract start bin from the binned entries in the range [start_row : end_row]
-                l1 = (np.floor(hd["start1"].values / p.hic_bin_size) - start_hic).astype(int)
-                l2 = (np.floor(hd["start2"].values / p.hic_bin_size) - start_hic).astype(int)
-                hic_score = hd["score"].values
-                # drop contacts with regions outside the [start_row : end_row] range
-                lix = (l2 < len(hic_mat)) & (l2 >= 0) & (l1 >= 0)
-                l1 = l1[lix]
-                l2 = l2[lix]
-                hic_score = hic_score[lix]
-                hic_mat[l1, l2] += hic_score
-                hic_mat = hic_mat + hic_mat.T - np.diag(np.diag(hic_mat))
+                start_hic = int(info[1] - (info[1] % p.bin_size) - p.half_size_hic + shifts[i] * p.bin_size) + p.hic_bin_size // 2
+                end_hic = start_hic + 2 * p.half_size_hic - p.hic_bin_size
+                hic_mat = c.matrix(balance=True, field="count").fetch(f'{info[0]}:{start_hic}-{end_hic}')
+                hic_mat[np.isnan(hic_mat)] = 0
+                hic_mat = hic_mat - np.diag(np.diag(hic_mat, k=1), k=1) - np.diag(np.diag(hic_mat, k=-1), k=-1) - np.diag(np.diag(hic_mat))
                 hic_mat = gaussian_filter(hic_mat, sigma=1)
-                # if i < half:
-                #     hic_mat = np.rot90(hic_mat, k=2)
-                hic_mat = hic_mat[np.triu_indices_from(hic_mat, k=1)]
-                if hi == 0:
-                    output_hic.append([])
+                if i < half:
+                    hic_mat = np.rot90(hic_mat, k=2)
+                hic_mat = hic_mat[np.triu_indices_from(hic_mat, k=2)]
                 output_hic[i].append(hic_mat)
-            del hd
-            del hdf
-            gc.collect()
     output_hic = np.asarray(output_hic)
     gc.collect()
     print_memory()
     input_sequences = np.asarray(input_sequences, dtype=bool)
 
     # reverse-complement
-    # with mp.Pool(8) as pool:
-    #     rc_arr = pool.map(change_seq, input_sequences[:half])
-    # input_sequences[:half] = rc_arr
+    with mp.Pool(8) as pool:
+        rc_arr = pool.map(change_seq, input_sequences[:half])
+    input_sequences[:half] = rc_arr
 
     # for reverse-complement sequences, the 1D output is flipped
-    # for i in range(half):
-    #     output_expression[i] = np.flip(output_expression[i], axis=1)
-    #     if p.species[head_id] == "hg38":
-    #         output_epigenome[i] = np.flip(output_epigenome[i], axis=1)
-    #         output_conservation[i] = np.flip(output_conservation[i], axis=1)
+    for i in range(half):
+        output_expression[i] = np.flip(output_expression[i], axis=1)
+        if p.species[head_id] == "hg38":
+            output_epigenome[i] = np.flip(output_epigenome[i], axis=1)
+            output_conservation[i] = np.flip(output_conservation[i], axis=1)
 
     all_outputs = {"our_expression": output_expression}
     if p.species[head_id] == "hg38":
@@ -232,7 +219,7 @@ def make_model_and_train(head, head_name, input_sequences, all_outputs, fit_epoc
         gc.collect()
         strategy = tf.distribute.MultiWorkerMirroredStrategy()
         with strategy.scope():
-            our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, hic_num, head, use_hic=(head_name == "hg38"))
+            our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, hic_num if head_name == "hg38" else 0, p.hic_size, head)
             loss_weights = {}
             learning_rates = {}
             with open(str(p.script_folder) + "/../loss_weights") as f:
@@ -243,26 +230,6 @@ def make_model_and_train(head, head_name, input_sequences, all_outputs, fit_epoc
                     if key != "our_resnet":
                         loss_weights[key] = float(weight)
                     learning_rates[key] = float(lr)
-            # our_model.get_layer("our_resnet").trainable = False
-            # our_model.get_layer("our_expression").trainable = False
-            # our_model.get_layer("our_epigenome").trainable = False
-            # our_model.get_layer("our_conservation").trainable = False
-            # print(our_model.summary())
-
-            # frozen_epochs = 5
-            # if current_epoch < frozen_epochs:
-            #     to_freeze = ["patchify"]
-            #     for block in range(6): #mlp_start_block = 6
-            #         to_freeze.append("body_block_" + str(block) + "_")
-            #     for layer in our_model.get_layer("our_resnet").layers:
-            #         if layer.name.startswith(tuple(to_freeze)):
-            #             layer.trainable = False
-            #     print(our_model.summary())
-            # elif current_epoch == frozen_epochs:
-            #     try:
-            #         os.remove(p.model_path + "_opt_resnet")
-            #     except OSError:
-            #         pass
 
             # preparing the main optimizer
             optimizers = {
@@ -284,7 +251,7 @@ def make_model_and_train(head, head_name, input_sequences, all_outputs, fit_epoc
             # loading the loss weights and compiling the model
             if head_name == "hg38":
                 losses = {
-                    "our_expression": mo.mse_plus_cor(cor_inds, small_peak=0.05), # switch to mse_cor later cor_inds
+                    "our_expression": mo.mse_plus_cor,
                     "our_epigenome": "mse",
                     "our_conservation": "mse",
                 }
@@ -304,7 +271,6 @@ def make_model_and_train(head, head_name, input_sequences, all_outputs, fit_epoc
                 print("loading resnet optimizer")
                 optimizers["our_resnet"].set_weights(joblib.load(p.model_path + "_opt_resnet"))
                 optimizers["our_resnet"].learning_rate.assign(learning_rates["our_resnet"])
-                print(f"Clipnorm is {optimizers['our_resnet'].clipnorm}")
             if head_name == "hg38":
                 if hic_num > 0 and os.path.exists(p.model_path + "_opt_hic"):
                     print("loading hic optimizer")
@@ -341,6 +307,8 @@ def make_model_and_train(head, head_name, input_sequences, all_outputs, fit_epoc
 
     try:
         our_model.fit(train_data, epochs=fit_epochs, batch_size=p.GLOBAL_BATCH_SIZE)
+        del train_data
+        gc.collect()
         safe_save(our_model.get_layer("our_resnet").get_weights(), p.model_path + "_res")
         safe_save(optimizers["our_resnet"].get_weights(), p.model_path + "_opt_resnet")
         safe_save(our_model.get_layer("our_expression").get_weights(), p.model_path + "_expression_" + head_name)
@@ -372,7 +340,7 @@ def check_perf(mp_q):
     try:
         strategy = tf.distribute.MultiWorkerMirroredStrategy()
         with strategy.scope():
-            our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, hic_num, heads["hg38"], use_hic=False)
+            our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, 0, p.hic_size, heads["hg38"])
             our_model.get_layer("our_resnet").set_weights(joblib.load(p.model_path + "_res"))
             our_model.get_layer("our_expression").set_weights(joblib.load(p.model_path + "_expression_hg38"))
             our_model.get_layer("our_epigenome").set_weights(joblib.load(p.model_path + "_epigenome"))
@@ -416,8 +384,8 @@ last_proc = None
 p = MainParams()
 dry_run_regions = {}
 if __name__ == '__main__':
-    import ray
-    ray.init()
+    # import ray
+    # ray.init()
     train_info, test_info, protein_coding = parser.parse_sequences(p)
     if Path(f"{p.pickle_folder}track_names_col.gz").is_file():
         track_names_col = joblib.load(f"{p.pickle_folder}track_names_col.gz")
@@ -465,7 +433,7 @@ if __name__ == '__main__':
     #         sample_id = filename[filename.index("CNhs"):filename.index("CNhs") + 9]
     #         sizes[sample_id] = lib_size
     #         full_names[sample_id] = filename
-    # df = pd.read_csv("data/ontology.csv", sep="\t")
+    # df = pd.read_csv("data/ontology.csv", sep=",")
     # ftracks = {}
     # for i, row in df.iterrows():
     #     if not row["term"] in ftracks.keys():
@@ -488,12 +456,12 @@ if __name__ == '__main__':
     # exit()
     cor_inds = pd.read_csv("for_cor_inds.tsv", sep="\t").iloc[:, 0].astype(int).tolist()
     # hic_keys = parser.parse_hic(p)
-    hic_keys = []
+    hic_keys = pd.read_csv("data/good_hic.tsv", sep="\t").iloc[:, 0]
     hic_num = len(hic_keys)
     print(f"hic {hic_num}")
 
     # import model as mo
-    # our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, hic_num, heads["hg38"])
+    # our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, hic_num, p.hic_size, heads["hg38"])
 
     # load_old_weights()
     # exit()
@@ -511,16 +479,16 @@ if __name__ == '__main__':
             # else:
             #     head_id = 1 + (current_epoch - math.ceil(current_epoch / 2)) % (len(heads) - 1)
             if head_id == 0:
-                p.STEPS_PER_EPOCH = 64
+                p.STEPS_PER_EPOCH = 400
                 fit_epochs = 4
             else:
                 p.STEPS_PER_EPOCH = 600
                 fit_epochs = 2
 
-            check_perf(mp_q)
-            exit()
+            # check_perf(mp_q)
+            # exit()
             last_proc = get_data_and_train(last_proc, fit_epochs, head_id)
-            if current_epoch % 20 == 0 and current_epoch != 0:  # and current_epoch != 0:
+            if current_epoch % 10 == 0 and current_epoch != 0:  # and current_epoch != 0:
                 print("Eval epoch")
                 print(mp_q.get())
                 last_proc.join()

@@ -28,62 +28,12 @@ def parse_hic(p):
         directory = "hic"
 
         for filename in os.listdir(directory):
-            try:
-                fn = os.path.join(directory, filename)
-                if not fn.endswith("4608nt.tsv.gz"):
-                    continue
-                t_name = filename
-                print(t_name)
-                df = pd.read_csv(fn, sep="\t", index_col=False)
-                df.rename(columns={'hg38_chrom': 'chrom', 'hg38_bin_1_start': 'start1',
-                                   'hg38_bin_2_start': 'start2', 'rlogP_max': 'score',
-                                   'rlogQ_max': 'score', 'CHiCAGO_score_max': 'score'}, inplace=True)
-                if 'score' not in df.columns:
-                    print("score not in columns")
-                df = df[["chrom", "start1", "start2", "score"]]
-                chrd = list(df["chrom"].unique())
-                should_continue = False
-                for i in range(22):
-                    if "chr" + str(i+1) not in chrd:
-                        should_continue = True
-                        break
-                if should_continue or "chrX" not in chrd:
-                    print(f"Not all chroms present in {t_name}")
-                    continue
-                df.drop(df[df['start1'] - df['start2'] > p.input_size].index, inplace=True)
-                print(len(df))
+            fn = os.path.join(directory, filename)
+            if not fn.endswith(".mcool"):
+                continue
+            t_name = filename
+            hic_keys.append(t_name)
 
-                df["score"] = np.log10(df["score"] + 1)
-                m = df["score"].max()
-                print("P Max is: " + str(m))
-                print("P Median is: " + str(df["score"].median()))
-                df["score"] = df["score"] / m
-
-                for chr in chrd:
-                    joblib.dump(df.loc[df['chrom'] == chr].sort_values(by=['start1']),
-                                p.temp_folder + t_name + chr, compress="lz4")
-                print(t_name)
-                del df
-                gc.collect()
-                hic_keys.append(t_name)
-            except Exception as exc:
-                print(exc)
-                print(f"!!!!!!!!!!!!!!!{t_name}")
-
-        chromosomes = ["chrX", "chrY"]
-        for i in range(1, 23):
-            chromosomes.append("chr" + str(i))
-        for key in hic_keys:
-            print(key)
-            hdf = {}
-            for chr in chromosomes:
-                try:
-                    hdf[chr] = joblib.load(p.temp_folder + key + chr)
-                except:
-                    pass
-            joblib.dump(hdf, p.parsed_hic_folder + key, compress="lz4")
-            print(key)
-        joblib.dump(hic_keys, f"{p.pickle_folder}hic_keys.gz", compress="lz4")
         return hic_keys
 
 
@@ -139,8 +89,8 @@ def parse_tracks(p):
 
 def parse_some_tracks(q, some_tracks, ga, bin_size, tracks_folder, meta):
     for track in some_tracks:
-        if Path(main.p.parsed_tracks_folder + track).is_file():
-            continue
+        # if Path(main.p.parsed_tracks_folder + track).is_file():
+        #     continue
         try:
             fn = tracks_folder + track
             meta_row = meta.loc[meta['file_name'] == track]
@@ -205,7 +155,7 @@ def parse_some_tracks(q, some_tracks, ga, bin_size, tracks_folder, meta):
             for key in gast.keys():
                 # if not (meta_row is None or meta_row["value"] == "RNA" or meta_row["value"] == "conservation"):
                 gast[key] = gast[key] / max_val  # np.clip(gast[key], 0, scale_val) / scale_val
-                gast[key] = gaussian_filter(gast[key], sigma=0.5)
+                gast[key] = gaussian_filter(gast[key], sigma=1.0)
                 gast[key] = gast[key].astype(np.float16)
             joblib.dump(gast, main.p.parsed_tracks_folder + track, compress="lz4")
             # pickle.dump(gast, open(main.p.parsed_tracks_folder + track, "wb"), protocol=pickle.HIGHEST_PROTOCOL)

@@ -29,7 +29,7 @@ def recover_shape(v, size_X):
     end = int((size_X * size_X - size_X) / 2)
     v = v[:end]
     X = np.zeros((size_X, size_X))
-    X[np.triu_indices(X.shape[0], k=1)] = v
+    X[np.triu_indices(X.shape[0], k=2)] = v
     X = X + X.T
     return X
 
