@@ -348,10 +348,11 @@ def load_hic_data(mp_q, hic_tracks, picked_regions, t, p, half, shifts):
     for hic in hic_tracks:
         c = cooler.Cooler("hic/" + hic + "::resolutions/5000")
         for i, info in enumerate(picked_regions):
-            start_hic = int(info[1] - (info[1] % p.bin_size) - p.half_size_hic) + p.hic_bin_size // 2
+            start_hic = info[1] - info[1] % p.bin_size - p.half_size_hic
             if shifts is not None:
                 start_hic = start_hic + shifts[i] * p.bin_size
-            end_hic = start_hic + 2 * p.half_size_hic - p.hic_bin_size
+            start_hic = start_hic - start_hic % p.hic_bin_size
+            end_hic = start_hic + 2 * p.half_size_hic
             hic_mat = c.matrix(balance=True, field="count").fetch(f'{info[0]}:{start_hic}-{end_hic}')
             hic_mat[np.isnan(hic_mat)] = 0
             hic_mat = hic_mat - np.diag(np.diag(hic_mat, k=1), k=1) - np.diag(np.diag(hic_mat, k=-1), k=-1) - np.diag(np.diag(hic_mat))

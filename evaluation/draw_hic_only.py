@@ -60,6 +60,10 @@ nan_counts = {}
 good_hic = pd.read_csv("data/good_hic.tsv", sep="\t", header=None).iloc[:, 0].tolist()
 directory = "hic"
 
+# for filename in good_hic:
+#     shutil.copyfile("hic/" + filename, "/media/user/30D4BACAD4BA9218/hic/" + filename)
+# exit()
+
 for i, info in enumerate(infos):
     hic_output.append([])
     hic_output2.append([])
@@ -67,12 +71,13 @@ for i, info in enumerate(infos):
 for filename in good_hic: # os.listdir(directory)
     if not filename.endswith(".mcool"):
         continue
-    c = cooler.Cooler("hic/" + filename + "::resolutions/5000")
+    c = cooler.Cooler("/media/user/30D4BACAD4BA9218/hic/" + filename + "::resolutions/5000")
     resolution = c.binsize
     print(filename)
     for i, info in enumerate(infos):
-        start_hic = int(info[1] - (info[1] % p.bin_size) - p.half_size_hic) + p.hic_bin_size // 2
-        end_hic = start_hic + 2 * p.half_size_hic - p.hic_bin_size
+        start_hic = info[1] - info[1] % p.bin_size - p.half_size_hic
+        start_hic = start_hic - start_hic % p.hic_bin_size
+        end_hic = start_hic + 2 * p.half_size_hic
         dif = end_hic - start_hic
 
         if start_hic < 0 or end_hic >= len(one_hot[info[0]]):
