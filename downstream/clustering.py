@@ -21,18 +21,27 @@ p = MainParams()
 head_name = "hg38"
 heads = joblib.load(f"{p.pickle_folder}heads.gz")
 head = heads[head_name]["expression"]
-tracks = []
+cor_tracks = pd.read_csv("data/fantom_tracks.tsv", sep="\t", header=None).iloc[:, 0].tolist()
+cor_inds = {}
+short_name = {}
 colors = []
-for t in head:
+inds = []
+for i, t in enumerate(head):
+    if "FANTOM5" not in t:
+        continue
     track_type = t[:t.index(".")]
     colors.append(track_type)
     start = t.index(".ctss.") + len(".ctss.")
     end = t.find("_") # t.find("_", t.find("_") + 1)
     if end == -1:
         end = t.find(".", start)
-    tracks.append(t[start:end])
+    inds.append(i)
+    if t in cor_tracks:
+        cor_inds[t] = len(inds) - 1
+        short_name[t] = t[start:end]
 weights = joblib.load(p.model_path + "_expression_hg38")
 weights = np.vstack([np.squeeze(weights[0]), weights[1]]).T
+weights = weights[inds, :]
 reducer = umap.UMAP()
 latent_vectors = reducer.fit_transform(weights)
 fig, axs = plt.subplots(1,1,figsize=(10, 10))
@@ -44,8 +53,8 @@ data = {'x': latent_vectors[:, 0],
 df = pd.DataFrame(data)
 
 sns.scatterplot(x="x", y="y", hue="c", data=df, s=5, alpha=0.2, ax=axs)
-# for i in range(len(latent_vectors)):
-#     axs.text(latent_vectors[i, 0], latent_vectors[i, 1], tracks[i], color=colors[i], alpha=0.2)
+for i, track in enumerate(cor_tracks):
+    axs.text(latent_vectors[cor_inds[track], 0], latent_vectors[cor_inds[track], 1], short_name[track], color="black", fontsize=6)
 axs.set_title("Latent space")
 axs.set_xlabel("A1")
 axs.set_ylabel("A2")
