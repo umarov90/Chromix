@@ -74,17 +74,12 @@ def load_old_weights():
 
 def get_data_and_train(last_proc, fit_epochs, head_id):
     print(datetime.now().strftime('[%H:%M:%S] ') + "Epoch " + str(current_epoch) + " " + p.species[head_id])
-    # if head_id != 0 or hic_num > 0:
     training_regions = joblib.load(f"{p.pickle_folder}{p.species[head_id]}_regions.gz")
-    # else:
-    # training_regions = joblib.load(f"{p.pickle_folder}train_info.gz")
     one_hot = joblib.load(f"{p.pickle_folder}{p.species[head_id]}_one_hot.gz")
     # training regions are shuffled each iteration
     shuffled_regions_info = random.sample(training_regions, len(training_regions))
-    # shuffled_regions_info = joblib.load(f"{p.pickle_folder}train_info.gz")[100:110]
     input_sequences = []
     output_scores_info = []
-    shifts = []
     picked_regions = []
     for i, info in enumerate(shuffled_regions_info):
         if len(input_sequences) >= p.GLOBAL_BATCH_SIZE * p.STEPS_PER_EPOCH:
@@ -92,9 +87,7 @@ def get_data_and_train(last_proc, fit_epochs, head_id):
         # Don't use chrY, chrM etc
         if info[0] not in one_hot.keys():
             continue
-        shift_bins = random.randint(-int(current_epoch / p.shift_speed) - p.initial_shift,
-                                    int(current_epoch / p.shift_speed) + p.initial_shift)
-        start = info[1] - (info[1] % p.bin_size) - p.half_size + shift_bins * p.bin_size
+        start = info[1] - (info[1] % p.bin_size) - p.half_size
         extra = start + p.input_size - len(one_hot[info[0]])
         if start < 0 or extra > 0:
             continue
@@ -105,9 +98,8 @@ def get_data_and_train(last_proc, fit_epochs, head_id):
 
         dry_run_regions.setdefault(p.species[head_id], []).append(
             f"{info[0]}\t{start}\t{start + p.input_size}\ttrain")
-        shifts.append(shift_bins)
         picked_regions.append(info)
-        start_bin = int(info[1] / p.bin_size) - p.half_num_regions + shift_bins
+        start_bin = int(info[1] / p.bin_size) - p.half_num_regions
         input_sequences.append(ns)
         output_scores_info.append([info[0], start_bin, start_bin + p.num_bins])
     print(datetime.now().strftime('[%H:%M:%S] ') + "Loading parsed tracks")
@@ -128,7 +120,7 @@ def get_data_and_train(last_proc, fit_epochs, head_id):
     # half of sequences will be reverse-complemented
     half = len(input_sequences) // 2
     # loading corresponding 2D data
-    output_hic = parser.par_load_hic_data(hic_keys, p, picked_regions, half, shifts)
+    output_hic = parser.par_load_hic_data(hic_keys, p, picked_regions, half)
     gc.collect()
     print_memory()
     input_sequences = np.asarray(input_sequences, dtype=bool)
@@ -216,17 +208,17 @@ def make_model_and_train(head, head_name, input_sequences, all_outputs, fit_epoc
 
             # preparing the main optimizer
             optimizers = {
-                "our_resnet": tf.keras.optimizers.Adam(learning_rate=learning_rates["our_resnet"], clipnorm=0.001),
-                "our_expression": tf.keras.optimizers.Adam(learning_rate=learning_rates["our_expression"], clipnorm=0.001),
-                "our_epigenome": tf.keras.optimizers.Adam(learning_rate=learning_rates["our_epigenome"], clipnorm=0.001),
-                "our_conservation": tf.keras.optimizers.Adam(learning_rate=learning_rates["our_conservation"], clipnorm=0.001),
+                "our_resnet": tfa.optimizers.AdamW(learning_rate=learning_rates["our_resnet"], weight_decay=0.01, clipnorm=0.001),
+                "our_expression": tfa.optimizers.AdamW(learning_rate=learning_rates["our_expression"], weight_decay=0.0001, clipnorm=0.001),
+                "our_epigenome": tfa.optimizers.AdamW(learning_rate=learning_rates["our_epigenome"], weight_decay=0.0001, clipnorm=0.001),
+                "our_conservation": tfa.optimizers.AdamW(learning_rate=learning_rates["our_conservation"], weight_decay=0.0001, clipnorm=0.001),
                 }
 
             optimizers_and_layers = [(optimizers["our_resnet"], our_model.get_layer("our_resnet")),
                                      (optimizers["our_expression"], our_model.get_layer("our_expression"))]
             if head_name == "hg38":
                 if hic_num > 0:
-                    optimizers["our_hic"] = tf.keras.optimizers.Adam(learning_rate=learning_rates["our_hic"], clipnorm=0.001)
+                    optimizers["our_hic"] = tfa.optimizers.AdamW(learning_rate=learning_rates["our_hic"], weight_decay=0.0001, clipnorm=0.001)
                     optimizers_and_layers.append((optimizers["our_hic"], our_model.get_layer("our_hic")))
                 optimizers_and_layers.append((optimizers["our_epigenome"], our_model.get_layer("our_epigenome")))
                 optimizers_and_layers.append((optimizers["our_conservation"], our_model.get_layer("our_conservation")))
@@ -234,7 +226,7 @@ def make_model_and_train(head, head_name, input_sequences, all_outputs, fit_epoc
             # loading the loss weights and compiling the model
             if head_name == "hg38":
                 losses = {
-                    "our_expression": mo.mse_plus_cor,
+                    "our_expression": "mse",
                     "our_epigenome": "mse",
                     "our_conservation": "mse",
                 }
@@ -404,41 +396,6 @@ if __name__ == '__main__':
         else:
             print(f"Number of tracks in head {head_key}: {len(heads[head_key])}")
 
-
-    # tracks_folder = p.tracks_folder + "hg38/"
-    # sizes = {}
-    # full_names = {}
-    # for filename in os.listdir(tracks_folder):
-    #     if "FANTOM5" in filename:
-    #         df = pd.read_csv(tracks_folder + filename, delim_whitespace=True, header=None, index_col=False)
-    #         df = df.rename(columns={0: "chr", 1: "start", 2: "end", 3: "score"})
-    #         lib_size = df['score'].sum()
-    #         sample_id = filename[filename.index("CNhs"):filename.index("CNhs") + 9]
-    #         sizes[sample_id] = lib_size
-    #         full_names[sample_id] = filename
-    # df = pd.read_csv("data/ontology.csv", sep=",")
-    # ftracks = {}
-    # for i, row in df.iterrows():
-    #     if not row["term"] in ftracks.keys():
-    #         ftracks[row["term"]] = row["sample"]
-    #     elif sizes[row["sample"]] > sizes[ftracks[row["term"]]]:
-    #         ftracks[row["term"]] = row["sample"]
-    # print(len(ftracks.values()))
-    # for_cor = []
-    # for_cor_inds = []
-    # for val in ftracks.values():
-    #     for_cor.append(full_names[val])
-    # with open("fantom_tracks.tsv", 'w+') as f:
-    #     f.write('\n'.join(for_cor))
-    # for i, track in enumerate(heads["hg38"]["expression"]):
-    #     if track in for_cor:
-    #         for_cor_inds.append(str(i))
-    # print(len(for_cor_inds))
-    # with open("for_cor_inds.tsv", 'w+') as f:
-    #     f.write('\n'.join(for_cor_inds))
-    # exit()
-    cor_inds = pd.read_csv("for_cor_inds.tsv", sep="\t", header=None).iloc[:, 0].astype(int).tolist()
-    # hic_keys = parser.parse_hic(p)
     hic_keys = pd.read_csv("data/good_hic.tsv", sep="\t", header=None).iloc[:, 0]
     hic_num = len(hic_keys)
     print(f"hic {hic_num}")

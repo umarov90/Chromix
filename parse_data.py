@@ -312,7 +312,7 @@ def par_load_data(output_scores_info, tracks, p):
     return output_scores
 
 
-def par_load_hic_data(hic_tracks, p, picked_regions, half, shifts):
+def par_load_hic_data(hic_tracks, p, picked_regions, half):
     mp_q = mp.Queue()
     ps = []
 
@@ -324,7 +324,7 @@ def par_load_hic_data(hic_tracks, p, picked_regions, half, shifts):
     for t in range(0, end, step_size):
         t_end = min(t + step_size, end)
         load_proc = mp.Process(target=load_hic_data,
-                               args=(mp_q, hic_tracks, picked_regions[t:t_end], t, p, half, shifts,))
+                               args=(mp_q, hic_tracks, picked_regions[t:t_end], t, p, half,))
         load_proc.start()
         ps.append(load_proc)
 
@@ -340,17 +340,15 @@ def par_load_hic_data(hic_tracks, p, picked_regions, half, shifts):
     return output_scores
 
 
-def load_hic_data(mp_q, hic_tracks, picked_regions, t, p, half, shifts):
+def load_hic_data(mp_q, hic_tracks, picked_regions, t, p, half):
     hic_data = []
     for i in range(len(picked_regions)):
         hic_data.append([])
 
     for hic in hic_tracks:
-        c = cooler.Cooler("hic/" + hic + "::resolutions/5000")
+        c = cooler.Cooler(p.hic_folder + hic + "::resolutions/5000")
         for i, info in enumerate(picked_regions):
-            start_hic = info[1] - info[1] % p.bin_size - p.half_size_hic
-            if shifts is not None:
-                start_hic = start_hic + shifts[i] * p.bin_size
+            start_hic = info[1] - p.half_size_hic
             start_hic = start_hic - start_hic % p.hic_bin_size
             end_hic = start_hic + 2 * p.half_size_hic
             hic_mat = c.matrix(balance=True, field="count").fetch(f'{info[0]}:{start_hic}-{end_hic}')

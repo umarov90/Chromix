@@ -2,7 +2,7 @@ import math
 
 import tensorflow as tf
 from tensorflow.keras.layers import LeakyReLU, LayerNormalization, MultiHeadAttention, \
-    Add, Embedding, Layer, Reshape, \
+    Add, Embedding, Layer, Dropout, Reshape, \
     Dense, Conv1D, Input, Flatten, Activation, BatchNormalization, LocallyConnected1D, DepthwiseConv1D, DepthwiseConv2D
 from tensorflow.keras.models import Model
 from keras import backend as K
@@ -26,8 +26,7 @@ def make_model(input_size, num_features, num_regions, hic_num, hic_size, one_d_h
         hx = tf.transpose(hx, [0, 2, 1])
         hx = Dense(hic_size, activation=tf.nn.gelu, name="hic_mlp_1")(hx)
         hx = tf.transpose(hx, [0, 2, 1])
-        hx = Dense(4096, activation=tf.nn.gelu, name="hic_mlp_2")(hx)
-        hx = Dense(hic_num, name="hic_mlp_3")(hx)
+        hx = Dense(hic_num, name="hic_mlp_2")(hx)
         hx = tf.transpose(hx, [0, 2, 1])
 
         hx = Activation('linear', dtype='float32')(hx)
@@ -60,14 +59,9 @@ def make_head(track_num, num_regions, output1d, name):
     trim = (x.shape[-2] - num_regions) // 2
     x = x[..., trim:-trim, :]
 
-    filter_num = 2048
-    activation = "linear"
-    if name == "our_expression":
-        filter_num *= 2
-    x = Conv1D(filter_num, kernel_size=1, strides=1, name=name + "_pointwise", activation=tf.nn.gelu)(x)
     outputs = Conv1D(track_num, kernel_size=1, strides=1, name=name + "_last_conv1d")(x)
     outputs = tf.transpose(outputs, [0, 2, 1])
-    head_output = Activation(activation, dtype='float32')(outputs)
+    head_output = Activation("linear", dtype='float32')(outputs)
     return Model(head_input, head_output, name=name)
 
 
@@ -78,31 +72,30 @@ def resnet(input_x, input_size):
     mlp_hidden_dim_reduction = 32
     num_blocks = 6
     patchify_val = 4
-    filter_nums = exponential_linspace_int(num_filters, 1024, num_blocks, divisible_by=64)
+    filter_nums = exponential_linspace_int(num_filters, 2048, num_blocks, divisible_by=128)
     # Patchify layer
     x = Conv1D(num_filters,
                strides=patchify_val,
                kernel_size=patchify_val,
                name="patchify")(input_x)
-    x = LayerNormalization(dtype=tf.float32)(x)
+    x = LayerNormalization(epsilon=1e-6, dtype=tf.float32)(x)
     current_len = input_size // patchify_val
     for block in range(num_blocks):
         cname = "body_block_" + str(block) + "_"
-        strides = 1
-        y = x
+        num_filters = filter_nums[block]
         if block != 0:
             # Downsample
             strides = 2
             current_len = math.ceil(current_len / strides)
-            y = LayerNormalization(dtype=tf.float32)(y)
-            y = DepthwiseConv1D(kernel_size=strides,
+            x = LayerNormalization(epsilon=1e-6, dtype=tf.float32)(x)
+            x = Conv1D(num_filters, kernel_size=strides,
                                 strides=strides,
                                 padding="same",
-                                name=cname + "downsample")(y)
-            if block > mlp_start_block and mlp_hidden_dim_reduction > 4:
+                                name=cname + "downsample")(x)
+            if block > mlp_start_block and mlp_hidden_dim_reduction > 1:
                 mlp_hidden_dim_reduction = mlp_hidden_dim_reduction // 2
 
-        num_filters = filter_nums[block]
+        y = x
 
         y1 = y
         y1 = DepthwiseConv1D(kernel_size=7, name=cname + "depthwise", padding="same")(y1)
@@ -112,29 +105,28 @@ def resnet(input_x, input_size):
             y2 = tf.transpose(y2, [0, 2, 1])
             hd = current_len // mlp_hidden_dim_reduction
             y2 = Dense(hd, activation=tf.nn.gelu, name=cname + "mlp_1")(y2)
+            y2 = Dropout(0.2)(y2)
             y2 = Dense(current_len, name=cname + "mlp_2")(y2)
             y2 = tf.transpose(y2, [0, 2, 1])
             y = y1 + y2
         else:
             y = y1
-        y = LayerNormalization(dtype=tf.float32)(y)
+        y = LayerNormalization(epsilon=1e-6, dtype=tf.float32)(y)
         # Pointwise to mix the channels
         y = Conv1D(4 * num_filters,
                    kernel_size=1, padding="same",
                    name=cname + "pointwise_1")(y)
         y = tf.keras.layers.Activation(tf.nn.gelu)(y)
+        y = Dropout(0.2)(y)
         y = Conv1D(num_filters, kernel_size=1, padding="same",
                    name=cname + "pointwise_2")(y)
 
-        # linear projection residual shortcut connection
-        x = Conv1D(num_filters,
-                   kernel_size=7,
-                   strides=strides,
-                   padding="same",
-                   name=cname + "linear_projection")(x)
-
         x = x + y
-    return LayerNormalization(dtype=tf.float32)(x)
+
+    x = LayerNormalization(epsilon=1e-6, dtype=tf.float32)(x)
+    x = Conv1D(2 * num_filters, kernel_size=1, name="body_output", activation=tf.nn.gelu)(x)
+    x = Dropout(0.05)(x)
+    return x
 
 
 def wrap(input_sequences, output_scores, bs):
@@ -219,60 +211,6 @@ def batch_predict_effect(p, model, seqs1, seqs2):
     return predictions
 
 
-def mse_plus_cor(y_true, y_pred):
-    y_pred_positive = tf.gather_nd(y_pred, tf.where(y_true > 0))
-    # print(f"Shape is {y_pred_positive.shape}")
-    y_true_positive = tf.gather_nd(y_true, tf.where(y_true > 0))
-
-    cor = cor_loss(y_pred_positive, y_true_positive, -1)
-
-    total_loss = fast_mse(y_true, y_pred) + 0.0001 * tf.math.reduce_mean(cor)
-
-    return total_loss
-
-
-def cor_loss(x, y, cor_axis):
-    mx = tf.math.reduce_mean(x, axis=cor_axis)
-    # print(f"Mean Shape is {mx.shape}")
-    my = tf.math.reduce_mean(y, axis=cor_axis)
-    xm, ym = x - mx, y - my
-    r_num = tf.math.reduce_mean(xm * ym, axis=cor_axis)
-    r_den = tf.math.reduce_std(xm, axis=cor_axis) * tf.math.reduce_std(ym, axis=cor_axis)
-    r_den = r_den + 0.0000001
-    r = r_num / r_den
-    r = tf.math.maximum(tf.math.minimum(r, 1.0), -1.0)
-    cor = 1 - r
-    cor = tf.where(tf.math.is_nan(cor), tf.zeros_like(cor), cor)
-    return cor
-
-
-@tf.function
-def fast_mse(y_true, y_pred):
-    y_pred_negative = tf.gather_nd(y_pred, tf.where(y_true==0))
-    y_true_negative = tf.gather_nd(y_true, tf.where(y_true==0))
-    zero_mse = tf.reduce_mean(tf.square(y_pred_negative - y_true_negative))
-    zero_mse = tf.where(tf.math.is_nan(zero_mse), tf.zeros_like(zero_mse), zero_mse)
-
-    y_pred_positive = tf.gather_nd(y_pred, tf.where(y_true>0))
-    y_true_positive = tf.gather_nd(y_true, tf.where(y_true>0))
-    non_zero_mse = tf.reduce_mean(tf.square(y_true_positive - y_pred_positive))
-    non_zero_mse = tf.where(tf.math.is_nan(non_zero_mse), tf.zeros_like(non_zero_mse), non_zero_mse)
-
-    total_loss = 0.9 * zero_mse + 0.1 * non_zero_mse
-
-    return total_loss
-
-
-@tf.function
-def fast_mse_hic(y_true, y_pred):
-    normal_mse = tf.reduce_mean(tf.square(y_true - y_pred))
-    y_pred_positive = tf.gather_nd(y_pred, tf.where(y_true>0))
-    y_true_positive = tf.gather_nd(y_true, tf.where(y_true>0))
-    non_zero_mse = tf.reduce_mean(tf.square(y_true_positive - y_pred_positive))
-    non_zero_mse = tf.where(tf.math.is_nan(non_zero_mse), tf.zeros_like(non_zero_mse), non_zero_mse)
-    total_loss = normal_mse + 0.2 * non_zero_mse
-    return total_loss
-
 # from https://github.com/deepmind/deepmind-research/blob/master/enformer/enformer.py
 def exponential_linspace_int(start, end, num, divisible_by=1):
   """Exponentially increasing values of integers."""
@@ -281,58 +219,3 @@ def exponential_linspace_int(start, end, num, divisible_by=1):
 
   base = np.exp(np.log(end / start) / (num - 1))
   return [_round(start * base**i) for i in range(num)]
-
-
-# Taken from https://github.com/calico/basenji/blob/master/basenji/layers.py
-class UpperTri(tf.keras.layers.Layer):
-    ''' Unroll matrix to its upper triangular portion.'''
-
-    def __init__(self, diagonal_offset=1):
-        super(UpperTri, self).__init__()
-        self.diagonal_offset = diagonal_offset
-
-    def call(self, inputs):
-        seq_len = inputs.shape[1]
-        output_dim = inputs.shape[-1]
-
-        if type(seq_len) == tf.compat.v1.Dimension:
-            seq_len = seq_len.value
-            output_dim = output_dim.value
-
-        triu_tup = np.triu_indices(seq_len, self.diagonal_offset)
-        triu_index = list(triu_tup[0] + seq_len * triu_tup[1])
-        unroll_repr = tf.reshape(inputs, [-1, seq_len ** 2, output_dim])
-        return tf.gather(unroll_repr, triu_index, axis=1)
-
-    def get_config(self):
-        config = super().get_config().copy()
-        config['diagonal_offset'] = self.diagonal_offset
-        return config
-
-# taken from https://stackoverflow.com/questions/46881006/slicing-tensor-with-list-tensorflow
-def list_slice(tensor, indices, axis):
-    """
-    Args
-    ----
-    tensor (Tensor) : input tensor to slice
-    indices ( [int] ) : list of indices of where to perform slices
-    axis (int) : the axis to perform the slice on
-    """
-
-    slices = []   
-
-    ## Set the shape of the output tensor. 
-    # Set any unknown dimensions to -1, so that reshape can infer it correctly. 
-    # Set the dimension in the slice direction to be 1, so that overall dimensions are preserved during the operation
-    shape = tensor.get_shape().as_list()
-    shape[shape==None] = -1
-    shape[axis] = 1
-
-    nd = len(shape)
-
-    for i in indices:   
-        _slice = [slice(None)]*nd
-        _slice[axis] = slice(i,i+1)
-        slices.append(tf.reshape(tensor[_slice], shape))
-
-    return tf.concat(slices, axis=axis)

@@ -24,8 +24,6 @@ class MainParams:
         self.STEPS_PER_EPOCH = 200
         self.num_epochs = 1000
         self.num_features = 4
-        self.shift_speed = 2000000
-        self.initial_shift = 0 #
         self.species = ["hg38", "mm10", "macFas5", "calJac4", "rheMac8", "canFam3", "oviAri4", "rn6"]
         # self.species = ["hg38"]
         self.script_folder = pathlib.Path(__file__).parent.resolve()
@@ -33,7 +31,7 @@ class MainParams:
         self.data_folder = folders[0]
         os.chdir(self.data_folder)
         self.parsed_tracks_folder = folders[1]
-        self.parsed_hic_folder = folders[2]
+        self.hic_folder = folders[2]
         self.model_folder = folders[3]
         self.temp_folder = folders[4]
         self.pickle_folder = folders[5]
