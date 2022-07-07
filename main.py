@@ -197,28 +197,32 @@ def make_model_and_train(head, head_name, input_sequences, all_outputs, fit_epoc
             our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, hic_num if head_name == "hg38" else 0, p.hic_size, head)
             loss_weights = {}
             learning_rates = {}
+            weight_decays = {}
             with open(str(p.script_folder) + "/../loss_weights") as f:
                 for line in f:
-                    (key, weight, lr) = line.split()
+                    (key, weight, lr, wd) = line.split()
                     if hic_num == 0 and key == "our_hic":
                         continue
                     if key != "our_resnet":
                         loss_weights[key] = float(weight)
                     learning_rates[key] = float(lr)
+                    weight_decays[key] = float(wd)
 
             # preparing the main optimizer
+            # tf.keras.optimizers.Adam(learning_rate=learning_rates["our_expression"], clipnorm=0.001)
+            # "our_resnet": tfa.optimizers.AdamW(learning_rate=learning_rates["our_resnet"], weight_decay=0.00001, clipnorm=0.001)
             optimizers = {
-                "our_resnet": tfa.optimizers.AdamW(learning_rate=learning_rates["our_resnet"], weight_decay=0.01, clipnorm=0.001),
-                "our_expression": tfa.optimizers.AdamW(learning_rate=learning_rates["our_expression"], weight_decay=0.0001, clipnorm=0.001),
-                "our_epigenome": tfa.optimizers.AdamW(learning_rate=learning_rates["our_epigenome"], weight_decay=0.0001, clipnorm=0.001),
-                "our_conservation": tfa.optimizers.AdamW(learning_rate=learning_rates["our_conservation"], weight_decay=0.0001, clipnorm=0.001),
+                "our_resnet": tfa.optimizers.AdamW(learning_rate=learning_rates["our_resnet"], weight_decay=weight_decays["our_resnet"], clipnorm=0.001),
+                "our_expression": tfa.optimizers.AdamW(learning_rate=learning_rates["our_expression"], weight_decay=weight_decays["our_expression"], clipnorm=0.001),
+                "our_epigenome": tfa.optimizers.AdamW(learning_rate=learning_rates["our_epigenome"], weight_decay=weight_decays["our_epigenome"], clipnorm=0.001),
+                "our_conservation": tfa.optimizers.AdamW(learning_rate=learning_rates["our_conservation"], weight_decay=weight_decays["our_conservation"], clipnorm=0.001)
                 }
 
             optimizers_and_layers = [(optimizers["our_resnet"], our_model.get_layer("our_resnet")),
                                      (optimizers["our_expression"], our_model.get_layer("our_expression"))]
             if head_name == "hg38":
                 if hic_num > 0:
-                    optimizers["our_hic"] = tfa.optimizers.AdamW(learning_rate=learning_rates["our_hic"], weight_decay=0.0001, clipnorm=0.001)
+                    optimizers["our_hic"] = tfa.optimizers.AdamW(learning_rate=learning_rates["our_hic"], weight_decay=weight_decays["our_hic"], clipnorm=0.001)
                     optimizers_and_layers.append((optimizers["our_hic"], our_model.get_layer("our_hic")))
                 optimizers_and_layers.append((optimizers["our_epigenome"], our_model.get_layer("our_epigenome")))
                 optimizers_and_layers.append((optimizers["our_conservation"], our_model.get_layer("our_conservation")))
@@ -226,7 +230,7 @@ def make_model_and_train(head, head_name, input_sequences, all_outputs, fit_epoc
             # loading the loss weights and compiling the model
             if head_name == "hg38":
                 losses = {
-                    "our_expression": "mse",
+                    "our_expression": mo.fast_mse,
                     "our_epigenome": "mse",
                     "our_conservation": "mse",
                 }
@@ -396,7 +400,8 @@ if __name__ == '__main__':
         else:
             print(f"Number of tracks in head {head_key}: {len(heads[head_key])}")
 
-    hic_keys = pd.read_csv("data/good_hic.tsv", sep="\t", header=None).iloc[:, 0]
+    # hic_keys = pd.read_csv("data/good_hic.tsv", sep="\t", header=None).iloc[:, 0]
+    hic_keys = []
     hic_num = len(hic_keys)
     print(f"hic {hic_num}")
 
@@ -408,7 +413,7 @@ if __name__ == '__main__':
     mp_q = mp.Queue()
     print("Training starting")
     start_epoch = 0
-    fit_epochs = 10
+    fit_epochs = 4
     try:
         for current_epoch in range(start_epoch, p.num_epochs, 1):
             head_id = 0
@@ -418,17 +423,17 @@ if __name__ == '__main__':
             #     head_id = 0
             # else:
             #     head_id = 1 + (current_epoch - math.ceil(current_epoch / 2)) % (len(heads) - 1)
-            if head_id == 0:
-                p.STEPS_PER_EPOCH = 400
-                fit_epochs = 4
-            else:
-                p.STEPS_PER_EPOCH = 600
-                fit_epochs = 2
+            # if head_id == 0:
+            #     p.STEPS_PER_EPOCH = 400
+            #     fit_epochs = 4
+            # else:
+            #     p.STEPS_PER_EPOCH = 600
+            #     fit_epochs = 2
 
             # check_perf(mp_q)
             # exit()
             last_proc = get_data_and_train(last_proc, fit_epochs, head_id)
-            if current_epoch % 10 == 0 and current_epoch != 0:  # and current_epoch != 0:
+            if current_epoch % 10 == 0:  # and current_epoch != 0:
                 print("Eval epoch")
                 print(mp_q.get())
                 last_proc.join()

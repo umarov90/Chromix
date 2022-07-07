@@ -6,14 +6,14 @@ import pathlib
 
 class MainParams:
     def __init__(self):
-        self.input_size = 276480 # 276480 # 5120
+        self.input_size = 102400 # 276480
         self.half_size = self.input_size // 2
         self.bin_size = 128
         self.hic_bin_size = 5000
         self.hic_size = 1176
         self.num_hic_bins = 50
         self.half_size_hic = (self.num_hic_bins // 2) * self.hic_bin_size
-        self.num_bins = 1000 # 1000
+        self.num_bins = 400 # 1000
         self.half_num_regions = self.num_bins // 2
         self.mid_bin = self.num_bins // 2
         self.BATCH_SIZE = 1
@@ -21,7 +21,7 @@ class MainParams:
         self.GLOBAL_BATCH_SIZE = self.NUM_GPU * self.BATCH_SIZE
         self.predict_batch_size = self.NUM_GPU * 2 * self.BATCH_SIZE
         self.w_step = 200
-        self.STEPS_PER_EPOCH = 200
+        self.STEPS_PER_EPOCH = 400
         self.num_epochs = 1000
         self.num_features = 4
         self.species = ["hg38", "mm10", "macFas5", "calJac4", "rheMac8", "canFam3", "oviAri4", "rn6"]

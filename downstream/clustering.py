@@ -27,8 +27,8 @@ short_name = {}
 colors = []
 inds = []
 for i, t in enumerate(head):
-    if "FANTOM5" not in t:
-        continue
+    # if "FANTOM5" not in t:
+    #     continue
     track_type = t[:t.index(".")]
     colors.append(track_type)
     start = t.index(".ctss.") + len(".ctss.")

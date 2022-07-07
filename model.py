@@ -68,11 +68,10 @@ def make_head(track_num, num_regions, output1d, name):
 def resnet(input_x, input_size):
     # Initial number of filters
     num_filters = 512
-    mlp_start_block = 2
-    mlp_hidden_dim_reduction = 32
-    num_blocks = 6
+    mlp_start_block = 6
+    num_blocks = 10
     patchify_val = 4
-    filter_nums = exponential_linspace_int(num_filters, 2048, num_blocks, divisible_by=128)
+    filter_nums = exponential_linspace_int(num_filters, 2 * num_filters, mlp_start_block, divisible_by=64)
     # Patchify layer
     x = Conv1D(num_filters,
                strides=patchify_val,
@@ -82,30 +81,22 @@ def resnet(input_x, input_size):
     current_len = input_size // patchify_val
     for block in range(num_blocks):
         cname = "body_block_" + str(block) + "_"
-        num_filters = filter_nums[block]
-        if block != 0:
+        if block != 0 and block < mlp_start_block:
             # Downsample
+            num_filters = filter_nums[block]
             strides = 2
-            current_len = math.ceil(current_len / strides)
+            current_len = current_len // strides
             x = LayerNormalization(epsilon=1e-6, dtype=tf.float32)(x)
-            x = Conv1D(num_filters, kernel_size=strides,
-                                strides=strides,
-                                padding="same",
-                                name=cname + "downsample")(x)
-            if block > mlp_start_block and mlp_hidden_dim_reduction > 1:
-                mlp_hidden_dim_reduction = mlp_hidden_dim_reduction // 2
-
+            x = Conv1D(num_filters, kernel_size=strides, strides=strides, padding="same", name=cname + "downsample")(x)
         y = x
-
         y1 = y
-        y1 = DepthwiseConv1D(kernel_size=7, name=cname + "depthwise", padding="same")(y1)
+        y1 = DepthwiseConv1D(kernel_size=9, name=cname + "depthwise", padding="same")(y1)
         # Spatial MLP for long range interactions
         if block >= mlp_start_block:
             y2 = y
             y2 = tf.transpose(y2, [0, 2, 1])
-            hd = current_len // mlp_hidden_dim_reduction
-            y2 = Dense(hd, activation=tf.nn.gelu, name=cname + "mlp_1")(y2)
-            y2 = Dropout(0.2)(y2)
+            y2 = Dense(4 * current_len, activation=tf.nn.gelu, name=cname + "mlp_1")(y2)
+            # y2 = Dropout(0.1)(y2)
             y2 = Dense(current_len, name=cname + "mlp_2")(y2)
             y2 = tf.transpose(y2, [0, 2, 1])
             y = y1 + y2
@@ -113,20 +104,25 @@ def resnet(input_x, input_size):
             y = y1
         y = LayerNormalization(epsilon=1e-6, dtype=tf.float32)(y)
         # Pointwise to mix the channels
-        y = Conv1D(4 * num_filters,
-                   kernel_size=1, padding="same",
-                   name=cname + "pointwise_1")(y)
-        y = tf.keras.layers.Activation(tf.nn.gelu)(y)
-        y = Dropout(0.2)(y)
-        y = Conv1D(num_filters, kernel_size=1, padding="same",
-                   name=cname + "pointwise_2")(y)
-
+        y = Conv1D(4 * num_filters, kernel_size=1, padding="same", activation=tf.nn.gelu, name=cname + "pointwise_1")(y)
+        # y = Dropout(0.1)(y)
+        y = Conv1D(num_filters, kernel_size=1, padding="same", name=cname + "pointwise_2")(y)
         x = x + y
 
     x = LayerNormalization(epsilon=1e-6, dtype=tf.float32)(x)
-    x = Conv1D(2 * num_filters, kernel_size=1, name="body_output", activation=tf.nn.gelu)(x)
-    x = Dropout(0.05)(x)
+    x = Conv1D(4096, kernel_size=1, name="body_output", activation=tf.nn.gelu)(x)
     return x
+
+
+@tf.function
+def fast_mse(y_true, y_pred):
+    normal_mse = tf.reduce_mean(tf.square(y_true - y_pred))
+    y_pred_positive = tf.gather_nd(y_pred, tf.where(y_true > 0))
+    y_true_positive = tf.gather_nd(y_true, tf.where(y_true > 0))
+    non_zero_mse = tf.reduce_mean(tf.square(y_true_positive - y_pred_positive))
+    non_zero_mse = tf.where(tf.math.is_nan(non_zero_mse), tf.zeros_like(non_zero_mse), non_zero_mse)
+    total_loss = normal_mse + 0.1 * non_zero_mse
+    return total_loss
 
 
 def wrap(input_sequences, output_scores, bs):
@@ -213,9 +209,10 @@ def batch_predict_effect(p, model, seqs1, seqs2):
 
 # from https://github.com/deepmind/deepmind-research/blob/master/enformer/enformer.py
 def exponential_linspace_int(start, end, num, divisible_by=1):
-  """Exponentially increasing values of integers."""
-  def _round(x):
-    return int(np.round(x / divisible_by) * divisible_by)
+    """Exponentially increasing values of integers."""
 
-  base = np.exp(np.log(end / start) / (num - 1))
-  return [_round(start * base**i) for i in range(num)]
+    def _round(x):
+        return int(np.round(x / divisible_by) * divisible_by)
+
+    base = np.exp(np.log(end / start) / (num - 1))
+    return [_round(start * base ** i) for i in range(num)]
