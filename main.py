@@ -440,7 +440,7 @@ if __name__ == '__main__':
             # check_perf(mp_q)
             # exit()
             last_proc = get_data_and_train(last_proc, fit_epochs, head_id)
-            if current_epoch % 20 == 0:  # and current_epoch != 0:
+            if current_epoch % 2000 == 0 and current_epoch != 0:  # and current_epoch != 0:
                 print("Eval epoch")
                 print(mp_q.get())
                 last_proc.join()
