@@ -69,7 +69,7 @@ def resnet(input_x, input_size):
     # Initial number of filters
     num_filters = 512
     mlp_start_block = 6
-    num_blocks = 10
+    num_blocks = 12
     patchify_val = 4
     filter_nums = exponential_linspace_int(num_filters, 2 * num_filters, mlp_start_block, divisible_by=64)
     # Patchify layer
@@ -96,7 +96,6 @@ def resnet(input_x, input_size):
             y2 = y
             y2 = tf.transpose(y2, [0, 2, 1])
             y2 = Dense(4 * current_len, activation=tf.nn.gelu, name=cname + "mlp_1")(y2)
-            # y2 = Dropout(0.1)(y2)
             y2 = Dense(current_len, name=cname + "mlp_2")(y2)
             y2 = tf.transpose(y2, [0, 2, 1])
             y = y1 + y2
@@ -105,7 +104,8 @@ def resnet(input_x, input_size):
         y = LayerNormalization(epsilon=1e-6, dtype=tf.float32)(y)
         # Pointwise to mix the channels
         y = Conv1D(4 * num_filters, kernel_size=1, padding="same", activation=tf.nn.gelu, name=cname + "pointwise_1")(y)
-        # y = Dropout(0.1)(y)
+        if block < mlp_start_block:
+            y = Dropout(0.1)(y)
         y = Conv1D(num_filters, kernel_size=1, padding="same", name=cname + "pointwise_2")(y)
         x = x + y
 

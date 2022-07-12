@@ -55,8 +55,9 @@ with strategy.scope():
     our_model.get_layer("our_expression").set_weights(joblib.load(p.model_path + "_expression_hg38"))
     our_model.get_layer("our_epigenome").set_weights(joblib.load(p.model_path + "_epigenome"))
     our_model.get_layer("our_conservation").set_weights(joblib.load(p.model_path + "_conservation"))
+    our_model.get_layer("our_hic").set_weights(joblib.load(p.model_path + "_hic"))
 
-hic_output = parser.par_load_hic_data(hic_keys, p, infos, 0, None)
+hic_output = parser.par_load_hic_data(hic_keys, p, infos, 0)
 
 test_seq = []
 for info in infos:
@@ -95,7 +96,7 @@ for n in range(len(hic_output)):
     fig, axs = plt.subplots(2, hic_num, figsize=(20, 10))
     for i in range(hic_num):
         mat = recover_shape(hic_output[n][i], p.num_hic_bins)
-        mat = gaussian_filter(mat, sigma=0.5)
+        # mat = gaussian_filter(mat, sigma=0.5)
         sns.heatmap(mat, linewidth=0.0, ax=axs[0, i], square=True)
         axs[0, i].set(xticklabels=[])
         axs[0, i].set(yticklabels=[])

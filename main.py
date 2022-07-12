@@ -195,6 +195,13 @@ def make_model_and_train(head, head_name, input_sequences, all_outputs, fit_epoc
         strategy = tf.distribute.MultiWorkerMirroredStrategy()
         with strategy.scope():
             our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, hic_num if head_name == "hg38" else 0, p.hic_size, head)
+            # if current_epoch == 0:
+            #     our_model.get_layer("our_resnet").trainable = False
+            #     our_model.get_layer("our_expression").trainable = False
+            #     our_model.get_layer("our_epigenome").trainable = False
+            #     our_model.get_layer("our_conservation").trainable = False
+            #     our_model.get_layer("our_hic").trainable = True
+            #     print(our_model.summary())
             loss_weights = {}
             learning_rates = {}
             weight_decays = {}
@@ -400,8 +407,8 @@ if __name__ == '__main__':
         else:
             print(f"Number of tracks in head {head_key}: {len(heads[head_key])}")
 
-    # hic_keys = pd.read_csv("data/good_hic.tsv", sep="\t", header=None).iloc[:, 0]
-    hic_keys = []
+    hic_keys = pd.read_csv("data/good_hic.tsv", sep="\t", header=None).iloc[:, 0]
+    # hic_keys = []
     hic_num = len(hic_keys)
     print(f"hic {hic_num}")
 
@@ -433,7 +440,7 @@ if __name__ == '__main__':
             # check_perf(mp_q)
             # exit()
             last_proc = get_data_and_train(last_proc, fit_epochs, head_id)
-            if current_epoch % 10 == 0:  # and current_epoch != 0:
+            if current_epoch % 20 == 0:  # and current_epoch != 0:
                 print("Eval epoch")
                 print(mp_q.get())
                 last_proc.join()

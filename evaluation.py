@@ -12,11 +12,17 @@ import parse_data as parser
 import pandas as pd
 
 
-def eval_perf(p, our_model, head, eval_infos, should_draw, current_epoch, label, one_hot):
+def eval_perf(p, our_model, head, eval_infos_all, should_draw, current_epoch, label, one_hot):
     import model as mo
     eval_track_names = []
     for key in head.keys():
         eval_track_names += head[key]
+    eval_infos = []
+    for info in eval_infos_all:
+        if info[5]:
+            continue
+        eval_infos.append(info)
+
 
     if Path(f"{p.pickle_folder}{label}_seq.gz").is_file():
         print(datetime.now().strftime('[%H:%M:%S] ') + "Loading sequences. ")
@@ -34,10 +40,21 @@ def eval_perf(p, our_model, head, eval_infos, should_draw, current_epoch, label,
         gt = parser.par_load_data(load_info, eval_track_names, p)
         print("Extracting evaluation regions")
         eval_gt_tss = {}
+        eval_gt = {}
+        for i in range(len(eval_infos)):
+            eval_gt[eval_infos[i][2]] = {}
 
         for i, info in enumerate(eval_infos):
             for j, track in enumerate(eval_track_names):
                 eval_gt_tss.setdefault(track, []).append(gt[i, j])
+                eval_gt[info[2]].setdefault(track, []).append(gt[i, j])
+
+        for i, gene in enumerate(eval_gt.keys()):
+            if i % 10 == 0:
+                print(i, end=" ")
+            for track in eval_track_names:
+                eval_gt[gene][track] = np.mean(eval_gt[gene][track])
+        print("")
 
         print("Extracting DNA regions")
         test_seq = []
@@ -103,13 +120,20 @@ def eval_perf(p, our_model, head, eval_infos, should_draw, current_epoch, label,
         predictions_for_bed = None
         gc.collect()
     # joblib.dump(predictions, "pred.gz", compress="lz4")
-    protein_gene_set = []
+    final_pred = {}
+    for i in range(len(eval_infos)):
+        final_pred[eval_infos[i][2]] = {}
     final_pred_tss = {}
     for i in range(len(eval_infos)):
-        if not eval_infos[i][5]:
-            protein_gene_set.append(eval_infos[i][2])
         for it, track in enumerate(eval_track_names):
+            final_pred[eval_infos[i][2]].setdefault(track, []).append(predictions[i][it])
             final_pred_tss.setdefault(track, []).append(predictions[i][it])
+
+    for i, gene in enumerate(final_pred.keys()):
+        if i % 10 == 0:
+            print(i, end=" ")
+        for track in eval_track_names:
+            final_pred[gene][track] = np.mean(final_pred[gene][track])
 
     # print("Saving bed files")
     # for track in start_val.keys():
@@ -124,7 +148,7 @@ def eval_perf(p, our_model, head, eval_infos, should_draw, current_epoch, label,
     corr_p = []
     corr_s = []
     genes_performance = []
-    for i in range(len(eval_infos)):
+    for gene in final_pred.keys():
         a = []
         b = []
         indices = []
@@ -133,8 +157,8 @@ def eval_perf(p, our_model, head, eval_infos, should_draw, current_epoch, label,
                 continue
             if track_types[track] != "CAGE" or "FANTOM5" not in track:
                 continue
-            a.append(final_pred_tss[track][i])
-            b.append(eval_gt_tss[track][i])
+            a.append(final_pred[gene][track])
+            b.append(eval_gt[gene][track])
             indices.append(v)
         a = np.nan_to_num(a, neginf=0, posinf=0)
         b = np.nan_to_num(b, neginf=0, posinf=0)
@@ -143,28 +167,32 @@ def eval_perf(p, our_model, head, eval_infos, should_draw, current_epoch, label,
         if not math.isnan(sc) and not math.isnan(pc):
             corr_p.append(pc)
             corr_s.append(sc)
-            genes_performance.append(f"{eval_infos[i][2]}-{eval_infos[i][1]}\t{sc}\t{np.mean(b)}\t{np.std(b)}\t{eval_track_names[indices[np.argmin(a)]]}\t{eval_track_names[indices[np.argmax(a)]]}")
+            genes_performance.append(f"{gene}\t{sc}\t{np.mean(b)}\t{np.std(b)}\t{eval_track_names[indices[np.argmin(a)]]}\t{eval_track_names[indices[np.argmax(a)]]}")
 
     print("")
     print(f"Across tracks {len(corr_p)} {np.mean(corr_p)} {np.mean(corr_s)}")
     with open("genes_performance.tsv", 'w+') as f:
         f.write('\n'.join(genes_performance))
 
-    print("Across genes (TSS)")
+    print("Across genes")
     corrs_p = {}
     corrs_s = {}
     all_track_spearman = {}
     track_perf = {}
-    print(f"Number of TSS: {len(eval_gt_tss[eval_track_names[0]])}")
     for track in eval_track_names:
-        a = eval_gt_tss[track]
-        b = final_pred_tss[track]
+        if track_types[track] == "CAGE" and track not in cor_tracks:
+            continue
+        a = []
+        b = []
+        for gene in eval_gt.keys():
+            a.append(final_pred[gene][track])
+            b.append(eval_gt[gene][track])
         a = np.nan_to_num(a, neginf=0, posinf=0)
         b = np.nan_to_num(b, neginf=0, posinf=0)
         pc = stats.pearsonr(a, b)[0]
         sc = stats.spearmanr(a, b)[0]
         track_perf[track] = pc
-        if pc is not None and sc is not None:
+        if not math.isnan(sc) and not math.isnan(pc):
             corrs_p.setdefault(track_types[track], []).append((pc, track))
             corrs_s.setdefault(track_types[track], []).append((sc, track))
             all_track_spearman[track] = stats.spearmanr(a, b)[0]

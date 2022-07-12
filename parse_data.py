@@ -358,6 +358,10 @@ def load_hic_data(mp_q, hic_tracks, picked_regions, t, p, half):
             if t + i < half:
                 hic_mat = np.rot90(hic_mat, k=2)
             hic_mat = hic_mat[np.triu_indices_from(hic_mat, k=2)]
+
+            # Scale the values
+            hic_mat = hic_mat * 10
+
             hic_data[i].append(hic_mat)
     joblib.dump(hic_data, f"{p.temp_folder}hic_data{t}", compress="lz4")
     mp_q.put(None)
