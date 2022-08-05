@@ -3,35 +3,35 @@ from main_params import MainParams
 import joblib
 import tensorflow as tf
 import numpy as np
+import pandas as pd
 import parse_data as parser
+from pathlib import Path
 
 compute_correlation = False
-head_name = "rn6"
 p = MainParams()
-heads = joblib.load(f"{p.pickle_folder}heads.gz")
-head = heads[head_name]
-if head_name == "hg38":
-    head = head["expression"]
-track_inds_bed = [0]
+head = joblib.load(f"{p.pickle_folder}heads.gz")
+head = head["expression"]
+track_inds_bed = []
 
-# with open('candidate_tracks.tsv') as f:
-#     candidates_list = f.read().splitlines()
-#
-# for i, track in enumerate(head):
-#     if track in candidates_list:
-#         track_inds_bed.append(i)
+cor_tracks = pd.read_csv("data/fantom_tracks.tsv", sep="\t", header=None).iloc[:, 0].tolist()
 
-one_hot = joblib.load(f"{p.pickle_folder}{head_name}_one_hot.gz")
+for i, track in enumerate(head):
+    if track in cor_tracks:
+        track_inds_bed.append(i)
+
+print(f"Predicting {len(track_inds_bed)} tracks")
+
+one_hot = joblib.load(f"{p.pickle_folder}one_hot.gz")
 
 strategy = tf.distribute.MultiWorkerMirroredStrategy()
 with strategy.scope():
-    our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, 0, head)
+    our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, 0, p.hic_size, head)
     our_model.get_layer("our_resnet").set_weights(joblib.load(p.model_path + "_res"))
-    our_model.get_layer("our_expression").set_weights(joblib.load(p.model_path + "_expression_" + head_name))
+    our_model.get_layer("our_expression").set_weights(joblib.load(p.model_path + "_expression"))
 
 all_start_vals = {}
 corrs = []
-for chrom in ["chr15"]:#one_hot.keys():
+for chrom in ["chr14"]: # one_hot.keys()
     print(f"\nPredicting {chrom} +++++++++++++++++++++++")
     start_val = {}
     batch = []
@@ -87,6 +87,7 @@ if compute_correlation:
     print("Average correlation: " + str(np.mean([corrs])))
 
 print("Saving bed files")
+Path("bed_output").mkdir(parents=True, exist_ok=True)
 for track in start_val.keys():
     with open("bed_output/our_" + track + ".bedGraph", 'w+') as f:
         for chrom in all_start_vals.keys():

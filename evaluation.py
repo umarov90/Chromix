@@ -23,62 +23,59 @@ def eval_perf(p, our_model, head, eval_infos_all, should_draw, current_epoch, la
             continue
         eval_infos.append(info)
 
+    # if Path(f"{p.pickle_folder}{label}_seq.gz").is_file():
+    #     print(datetime.now().strftime('[%H:%M:%S] ') + "Loading sequences. ")
+    #     test_seq = joblib.load(f"{p.pickle_folder}/{label}_seq.gz")
+    #     print(datetime.now().strftime('[%H:%M:%S] ') + "Loading gt. ")
+    #     eval_gt = joblib.load(f"{p.pickle_folder}/{label}_eval_gt.gz")
+    #     # eval_gt_tss = pickle.load(open(f"{p.pickle_folder}/{label}_eval_gt_tss.gz", "rb"))
+    #     print(datetime.now().strftime('[%H:%M:%S] ') + "Finished loading. ")
+    # else:
+    load_info = []
+    for j, info in enumerate(eval_infos):
+        mid = int(info[1] / p.bin_size)
+        load_info.append([info[0], mid])
+    print("Loading ground truth tracks")
+    gt = parser.par_load_data(load_info, eval_track_names, p)
+    print("Extracting evaluation regions")
+    eval_gt = {}
+    for i in range(len(eval_infos)):
+        eval_gt[eval_infos[i][2]] = {}
 
-    if Path(f"{p.pickle_folder}{label}_seq.gz").is_file():
-        print(datetime.now().strftime('[%H:%M:%S] ') + "Loading sequences. ")
-        test_seq = joblib.load(f"{p.pickle_folder}/{label}_seq.gz")
-        print(datetime.now().strftime('[%H:%M:%S] ') + "Loading gt 1. ")
-        # eval_gt_tss = joblib.load(f"{p.pickle_folder}/{label}_eval_gt_tss.gz")
-        eval_gt_tss = pickle.load(open(f"{p.pickle_folder}/{label}_eval_gt_tss.gz", "rb"))
-        print(datetime.now().strftime('[%H:%M:%S] ') + "Finished loading. ")
-    else:
-        load_info = []
-        for j, info in enumerate(eval_infos):
-            mid = int(info[1] / p.bin_size)
-            load_info.append([info[0], mid])
-        print("Loading ground truth tracks")
-        gt = parser.par_load_data(load_info, eval_track_names, p)
-        print("Extracting evaluation regions")
-        eval_gt_tss = {}
-        eval_gt = {}
-        for i in range(len(eval_infos)):
-            eval_gt[eval_infos[i][2]] = {}
+    for i, info in enumerate(eval_infos):
+        for j, track in enumerate(eval_track_names):
+            eval_gt[info[2]].setdefault(track, []).append(gt[i, j])
 
-        for i, info in enumerate(eval_infos):
-            for j, track in enumerate(eval_track_names):
-                eval_gt_tss.setdefault(track, []).append(gt[i, j])
-                eval_gt[info[2]].setdefault(track, []).append(gt[i, j])
+    for i, gene in enumerate(eval_gt.keys()):
+        if i % 10 == 0:
+            print(i, end=" ")
+        for track in eval_track_names:
+            eval_gt[gene][track] = np.sum(eval_gt[gene][track])
+    print("")
 
-        for i, gene in enumerate(eval_gt.keys()):
-            if i % 10 == 0:
-                print(i, end=" ")
-            for track in eval_track_names:
-                eval_gt[gene][track] = np.mean(eval_gt[gene][track])
-        print("")
-
-        print("Extracting DNA regions")
-        test_seq = []
-        for info in eval_infos:
-            start = int(info[1] - (info[1] % p.bin_size) - p.half_size)
-            extra = start + p.input_size - len(one_hot[info[0]])
-            if start < 0:
-                ns = one_hot[info[0]][0:start + p.input_size]
-                ns = np.concatenate((np.zeros((-1 * start, 5)), ns))
-            elif extra > 0:
-                ns = one_hot[info[0]][start: len(one_hot[info[0]])]
-                ns = np.concatenate((ns, np.zeros((extra, 5))))
-            else:
-                ns = one_hot[info[0]][start:start + p.input_size]
-            test_seq.append(ns[:, :-1])
-        test_seq = np.asarray(test_seq, dtype=bool)
-        print(f"Length: {len(test_seq)}")
-        gc.collect()
-        print("Dumping the evaluation data")
-        # joblib.dump(test_seq, f"{p.pickle_folder}/{label}_seq.gz", compress="lz4")
-        # # pickle.dump(test_seq, open(f"{p.pickle_folder}/{chr_name}_seq.gz", "wb"), protocol=pickle.HIGHEST_PROTOCOL)
-        # gc.collect()
-        # # joblib.dump(eval_gt_tss, f"{p.pickle_folder}/{label}_eval_gt_tss.gz", compress="lz4")
-        # pickle.dump(eval_gt_tss, open(f"{p.pickle_folder}/{label}_eval_gt_tss.gz", "wb"), protocol=pickle.HIGHEST_PROTOCOL)
+    print("Extracting DNA regions")
+    test_seq = []
+    for info in eval_infos:
+        start = int(info[1] - (info[1] % p.bin_size) - p.half_size)
+        extra = start + p.input_size - len(one_hot[info[0]])
+        if start < 0:
+            ns = one_hot[info[0]][0:start + p.input_size]
+            ns = np.concatenate((np.zeros((-1 * start, 5)), ns))
+        elif extra > 0:
+            ns = one_hot[info[0]][start: len(one_hot[info[0]])]
+            ns = np.concatenate((ns, np.zeros((extra, 5))))
+        else:
+            ns = one_hot[info[0]][start:start + p.input_size]
+        test_seq.append(ns[:, :-1])
+    test_seq = np.asarray(test_seq, dtype=bool)
+    print(f"Length: {len(test_seq)}")
+    gc.collect()
+    # print("Dumping the evaluation data")
+    # joblib.dump(test_seq, f"{p.pickle_folder}/{label}_seq.gz", compress="lz4")
+    # # # pickle.dump(test_seq, open(f"{p.pickle_folder}/{chr_name}_seq.gz", "wb"), protocol=pickle.HIGHEST_PROTOCOL)
+    # # gc.collect()
+    # joblib.dump(eval_gt, f"{p.pickle_folder}/{label}_eval_gt.gz", compress="lz4")
+    # # pickle.dump(eval_gt_tss, open(f"{p.pickle_folder}/{label}_eval_gt_tss.gz", "wb"), protocol=pickle.HIGHEST_PROTOCOL)
 
     start_val = {}
     track_inds_bed = []
@@ -98,7 +95,7 @@ def eval_perf(p, our_model, head, eval_infos_all, should_draw, current_epoch, la
         print(w, end=" ")
         pr = our_model.predict(mo.wrap2(test_seq[w:w + p.w_step], p.predict_batch_size))
         p1 = np.concatenate((pr[0], pr[1], pr[2]), axis=1)
-        p2 = p1[:, :, p.mid_bin - 2] + p1[:, :, p.mid_bin - 1] + p1[:, :, p.mid_bin] + p1[:, :, p.mid_bin + 1] + p1[:, :, p.mid_bin + 2]
+        p2 = p1[:, :, p.mid_bin - 1] + p1[:, :, p.mid_bin] + p1[:, :, p.mid_bin + 1]
         if w == 0:
             predictions = p2
         else:
@@ -119,7 +116,7 @@ def eval_perf(p, our_model, head, eval_infos_all, should_draw, current_epoch, la
         p2 = None
         predictions_for_bed = None
         gc.collect()
-    # joblib.dump(predictions, "pred.gz", compress="lz4")
+    joblib.dump(predictions, "pred.gz", compress="lz4")
     final_pred = {}
     for i in range(len(eval_infos)):
         final_pred[eval_infos[i][2]] = {}
@@ -133,7 +130,7 @@ def eval_perf(p, our_model, head, eval_infos_all, should_draw, current_epoch, la
         if i % 10 == 0:
             print(i, end=" ")
         for track in eval_track_names:
-            final_pred[gene][track] = np.mean(final_pred[gene][track])
+            final_pred[gene][track] = np.sum(final_pred[gene][track])
 
     # print("Saving bed files")
     # for track in start_val.keys():
@@ -153,8 +150,8 @@ def eval_perf(p, our_model, head, eval_infos_all, should_draw, current_epoch, la
         b = []
         indices = []
         for v, track in enumerate(eval_track_names):
-            if track not in cor_tracks:
-                continue
+            # if track not in cor_tracks:
+            #     continue
             if track_types[track] != "CAGE" or "FANTOM5" not in track:
                 continue
             a.append(final_pred[gene][track])
@@ -180,8 +177,8 @@ def eval_perf(p, our_model, head, eval_infos_all, should_draw, current_epoch, la
     all_track_spearman = {}
     track_perf = {}
     for track in eval_track_names:
-        if track_types[track] == "CAGE" and track not in cor_tracks:
-            continue
+        # if track_types[track] == "CAGE" and track not in cor_tracks:
+        #     continue
         a = []
         b = []
         for gene in eval_gt.keys():
@@ -213,7 +210,7 @@ def eval_perf(p, our_model, head, eval_infos_all, should_draw, current_epoch, la
     return_result = np.mean([i[0] for i in corrs_s["CAGE"]])
 
     if should_draw:
-        viz.draw_regplots(eval_track_names, track_perf, final_pred_tss, eval_gt_tss,
+        viz.draw_regplots(eval_track_names, track_perf, final_pred_tss, eval_gt,
                           f"{p.figures_folder}/plots/epoch_{current_epoch}")
 
     return return_result

@@ -2,7 +2,7 @@ import math
 
 import tensorflow as tf
 from tensorflow.keras.layers import LeakyReLU, LayerNormalization, MultiHeadAttention, \
-    Add, Embedding, Layer, Dropout, Reshape, \
+    Concatenate, GaussianDropout, GaussianNoise, Add, Embedding, Layer, Dropout, Reshape, \
     Dense, Conv1D, Input, Flatten, Activation, BatchNormalization, LocallyConnected1D, DepthwiseConv1D, DepthwiseConv2D
 from tensorflow.keras.models import Model
 from keras import backend as K
@@ -66,11 +66,13 @@ def make_head(track_num, num_regions, output1d, name):
 
 
 def resnet(input_x, input_size):
+    print("Version 1.16")
     # Initial number of filters
-    num_filters = 512
+    num_filters = 768
     mlp_start_block = 6
-    num_blocks = 12
+    num_blocks = 10
     patchify_val = 4
+    # replace with hardcoded values
     filter_nums = exponential_linspace_int(num_filters, 2 * num_filters, mlp_start_block, divisible_by=64)
     # Patchify layer
     x = Conv1D(num_filters,
@@ -89,28 +91,30 @@ def resnet(input_x, input_size):
             x = LayerNormalization(epsilon=1e-6, dtype=tf.float32)(x)
             x = Conv1D(num_filters, kernel_size=strides, strides=strides, padding="same", name=cname + "downsample")(x)
         y = x
-        y1 = y
-        y1 = DepthwiseConv1D(kernel_size=9, name=cname + "depthwise", padding="same")(y1)
+        y = GaussianDropout(0.001)(y)
+        y1 = DepthwiseConv1D(kernel_size=7, name=cname + "depthwise", padding="same")(y)
         # Spatial MLP for long range interactions
         if block >= mlp_start_block:
-            y2 = y
-            y2 = tf.transpose(y2, [0, 2, 1])
-            y2 = Dense(4 * current_len, activation=tf.nn.gelu, name=cname + "mlp_1")(y2)
+            y2 = tf.transpose(y, [0, 2, 1])
+            y2 = Dense(current_len * 2, name=cname + "mlp_1")(y2)
+            y2 = Activation(tf.nn.gelu)(y2)
+            y2 = MonteCarloDropout(0.1)(y2)
             y2 = Dense(current_len, name=cname + "mlp_2")(y2)
             y2 = tf.transpose(y2, [0, 2, 1])
-            y = y1 + y2
+            y = Concatenate(axis=-1)([y1, y2])
         else:
             y = y1
         y = LayerNormalization(epsilon=1e-6, dtype=tf.float32)(y)
         # Pointwise to mix the channels
-        y = Conv1D(4 * num_filters, kernel_size=1, padding="same", activation=tf.nn.gelu, name=cname + "pointwise_1")(y)
-        if block < mlp_start_block:
-            y = Dropout(0.1)(y)
+        y = Conv1D(4 * num_filters, kernel_size=1, padding="same", name=cname + "pointwise_1")(y)
+        y = Activation(tf.nn.gelu)(y)
+        y = MonteCarloDropout(0.1)(y)
         y = Conv1D(num_filters, kernel_size=1, padding="same", name=cname + "pointwise_2")(y)
         x = x + y
 
     x = LayerNormalization(epsilon=1e-6, dtype=tf.float32)(x)
     x = Conv1D(4096, kernel_size=1, name="body_output", activation=tf.nn.gelu)(x)
+    x = MonteCarloDropout(0.04)(x)
     return x
 
 
@@ -123,6 +127,35 @@ def fast_mse(y_true, y_pred):
     non_zero_mse = tf.where(tf.math.is_nan(non_zero_mse), tf.zeros_like(non_zero_mse), non_zero_mse)
     total_loss = normal_mse + 0.1 * non_zero_mse
     return total_loss
+
+
+@tf.function
+def mse_plus_cor(y_true, y_pred):
+    normal_mse = tf.reduce_mean(tf.square(y_true - y_pred))
+    y_pred_positive = tf.gather_nd(y_pred, tf.where(y_true > 0))
+    y_true_positive = tf.gather_nd(y_true, tf.where(y_true > 0))
+    non_zero_mse = tf.reduce_mean(tf.square(y_true_positive - y_pred_positive))
+    non_zero_mse = tf.where(tf.math.is_nan(non_zero_mse), tf.zeros_like(non_zero_mse), non_zero_mse)
+
+    cor = cor_loss(y_pred_positive, y_true_positive, -1)
+    total_loss = normal_mse + 0.4 * non_zero_mse + 0.001 * tf.math.reduce_mean(cor)
+
+    return total_loss
+
+
+@tf.function
+def cor_loss(x, y, cor_axis):
+    mx = tf.math.reduce_mean(x, axis=cor_axis)
+    my = tf.math.reduce_mean(y, axis=cor_axis)
+    xm, ym = x - mx, y - my
+    r_num = tf.math.reduce_mean(xm * ym, axis=cor_axis)
+    r_den = tf.math.reduce_std(xm, axis=cor_axis) * tf.math.reduce_std(ym, axis=cor_axis)
+    r_den = r_den + 0.0000001
+    r = r_num / r_den
+    r = tf.math.maximum(tf.math.minimum(r, 1.0), -1.0)
+    cor = 1 - r
+    cor = tf.where(tf.math.is_nan(cor), tf.zeros_like(cor), cor)
+    return cor
 
 
 def wrap(input_sequences, output_scores, bs):
@@ -181,29 +214,38 @@ def batch_predict(p, model, seqs):
         if w == 0:
             predictions = p1
         else:
-            predictions = np.concatenate((predictions, p1), dtype=np.float16)
+            predictions = np.concatenate((predictions, p1))
     return predictions
 
 
 def batch_predict_effect(p, model, seqs1, seqs2):
+    body = model.get_layer("our_resnet")
+    n_times = 3
     for w in range(0, len(seqs1), p.w_step):
         print(w, end=" ")
-        pr = model.predict(wrap2(seqs1[w:w + p.w_step], p.predict_batch_size))
-        p1 = np.concatenate((pr[0], pr[1], pr[2]), axis=1)
-        pr = model.predict(wrap2(seqs2[w:w + p.w_step], p.predict_batch_size))
-        p2 = np.concatenate((pr[0], pr[1], pr[2]), axis=1)
-        # if len(hic_keys) > 0:
-        #     p2 = p1[0][:, :, p.mid_bin - 1] + p1[0][:, :, p.mid_bin] + p1[0][:, :, p.mid_bin + 1]
-        #     if w == 0:
-        #         predictions = p2
-        #     else:
-        #         predictions = np.concatenate((predictions, p2), dtype=np.float32)
-        # else:
+        p1s = []
+        for i in range(n_times):
+            p1s.append(body.predict(wrap2(seqs1[w:w + p.w_step], p.predict_batch_size)))
+        p1 = np.mean(p1s, axis=0)
+        # pr = model.predict(wrap2(seqs1[w:w + p.w_step], p.predict_batch_size))
+        # p1 = np.concatenate((pr[0], pr[1], pr[2]), axis=1)
+        p2s = []
+        for i in range(n_times):
+            p2s.append(body.predict(wrap2(seqs2[w:w + p.w_step], p.predict_batch_size)))
+        p2 = np.mean(p2s, axis=0)
+        # pr = model.predict(wrap2(seqs2[w:w + p.w_step], p.predict_batch_size))
+        # p2 = np.concatenate((pr[0], pr[1], pr[2]), axis=1)
         effect = np.max(np.abs(p1 - p2), axis=-1)
+        # effect = np.mean(p1, axis=-1) - np.mean(p2, axis=-1)
+        # effect1 = np.mean(p1 - p2, axis=-1)
+        # effect2 = np.mean(p1 - p2, axis=-2)
+        # effect3 = np.max(np.abs(p1 - p2), axis=-1)
+        # effect4 = np.max(np.abs(p1 - p2), axis=-2)
+        # effect = np.concatenate((effect3, effect4), axis=-1)
         if w == 0:
             predictions = effect
         else:
-            predictions = np.concatenate((predictions, effect), dtype=np.float16)
+            predictions = np.concatenate((predictions, effect))
     return predictions
 
 
@@ -216,3 +258,7 @@ def exponential_linspace_int(start, end, num, divisible_by=1):
 
     base = np.exp(np.log(end / start) / (num - 1))
     return [_round(start * base ** i) for i in range(num)]
+
+class MonteCarloDropout(Dropout):
+    def call(self, inputs):
+      return super().call(inputs, training=True)

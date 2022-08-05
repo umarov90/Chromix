@@ -36,23 +36,22 @@ def recover_shape(v, size_X):
 
 eval_gt_full = []
 p = MainParams()
-head_name = "hg38"
 heads = joblib.load(f"{p.pickle_folder}heads.gz")
-head = heads[head_name]
 hic_keys = pd.read_csv("data/good_hic.tsv", sep="\t", header=None).iloc[:, 0].tolist()
 hic_num = len(hic_keys)
 for k in hic_keys:
     print(k, end=", ")
 
-infos = joblib.load(f"{p.pickle_folder}train_info.gz")[100:110]
-# infos = infos[::20]
+regions_tss = joblib.load(f"{p.pickle_folder}test_info.gz")
+infos = random.sample(regions_tss, 100)
+
 print(f"Number of positions: {len(infos)}")
-one_hot = joblib.load(f"{p.pickle_folder}hg38_one_hot.gz")
+one_hot = joblib.load(f"{p.pickle_folder}one_hot.gz")
 strategy = tf.distribute.MultiWorkerMirroredStrategy()
 with strategy.scope():
-    our_model =mo.make_model(p.input_size, p.num_features, p.num_bins, hic_num, p.hic_size, head)
+    our_model =mo.make_model(p.input_size, p.num_features, p.num_bins, hic_num, p.hic_size, heads)
     our_model.get_layer("our_resnet").set_weights(joblib.load(p.model_path + "_res"))
-    our_model.get_layer("our_expression").set_weights(joblib.load(p.model_path + "_expression_hg38"))
+    our_model.get_layer("our_expression").set_weights(joblib.load(p.model_path + "_expression"))
     our_model.get_layer("our_epigenome").set_weights(joblib.load(p.model_path + "_epigenome"))
     our_model.get_layer("our_conservation").set_weights(joblib.load(p.model_path + "_conservation"))
     our_model.get_layer("our_hic").set_weights(joblib.load(p.model_path + "_hic"))
@@ -61,7 +60,8 @@ hic_output = parser.par_load_hic_data(hic_keys, p, infos, 0)
 
 test_seq = []
 for info in infos:
-    start = int(info[1] - (info[1] % p.bin_size) - p.half_size)
+    pos_hic = info[1] - (info[1] % p.hic_bin_size)
+    start = pos_hic - (pos_hic % p.bin_size) - p.half_size
     # if start in starts:
     #     continue
     # starts.append(start)
@@ -91,7 +91,6 @@ hic_output = np.asarray(hic_output)
 print("drawing")
 print(predictions_hic.shape)
 print(hic_output.shape)
-hic_num = 5
 for n in range(len(hic_output)):
     fig, axs = plt.subplots(2, hic_num, figsize=(20, 10))
     for i in range(hic_num):
@@ -109,5 +108,5 @@ for n in range(len(hic_output)):
         axs[1, i].set(yticklabels=[])
 
     fig.tight_layout()
-    plt.savefig(f"hic_check/{n}.svg")
+    plt.savefig(f"hic_check/{n}.png")
     plt.close(fig)

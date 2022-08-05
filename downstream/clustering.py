@@ -1,4 +1,3 @@
-import tensorflow as tf
 import joblib
 from main_params import MainParams
 import visualization as viz
@@ -27,12 +26,12 @@ short_name = {}
 colors = []
 inds = []
 for i, t in enumerate(head):
-    # if "FANTOM5" not in t:
-    #     continue
+    if "FANTOM5" not in t:
+        continue
     track_type = t[:t.index(".")]
     colors.append(track_type)
     start = t.index(".ctss.") + len(".ctss.")
-    end = t.find("_") # t.find("_", t.find("_") + 1)
+    end = t.find("_", t.find("_") + 1) # t.find("_")
     if end == -1:
         end = t.find(".", start)
     inds.append(i)
@@ -59,4 +58,4 @@ axs.set_title("Latent space")
 axs.set_xlabel("A1")
 axs.set_ylabel("A2")
 plt.tight_layout()
-plt.savefig("clustering.svg")
+plt.savefig("clustering1.svg")
