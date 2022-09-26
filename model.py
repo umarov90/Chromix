@@ -66,7 +66,7 @@ def make_head(track_num, num_regions, output1d, name):
 
 
 def resnet(input_x, input_size):
-    print("Version 1.16")
+    print("Version 1.21")
     # Initial number of filters
     num_filters = 768
     mlp_start_block = 6
@@ -79,7 +79,7 @@ def resnet(input_x, input_size):
                strides=patchify_val,
                kernel_size=patchify_val,
                name="patchify")(input_x)
-    x = LayerNormalization(epsilon=1e-6, dtype=tf.float32)(x)
+    x = LayerNormalization(epsilon=1e-6)(x)
     current_len = input_size // patchify_val
     for block in range(num_blocks):
         cname = "body_block_" + str(block) + "_"
@@ -88,7 +88,7 @@ def resnet(input_x, input_size):
             num_filters = filter_nums[block]
             strides = 2
             current_len = current_len // strides
-            x = LayerNormalization(epsilon=1e-6, dtype=tf.float32)(x)
+            x = LayerNormalization(epsilon=1e-6)(x)
             x = Conv1D(num_filters, kernel_size=strides, strides=strides, padding="same", name=cname + "downsample")(x)
         y = x
         y = GaussianDropout(0.001)(y)
@@ -104,7 +104,7 @@ def resnet(input_x, input_size):
             y = Concatenate(axis=-1)([y1, y2])
         else:
             y = y1
-        y = LayerNormalization(epsilon=1e-6, dtype=tf.float32)(y)
+        y = LayerNormalization(epsilon=1e-6)(y)
         # Pointwise to mix the channels
         y = Conv1D(4 * num_filters, kernel_size=1, padding="same", name=cname + "pointwise_1")(y)
         y = Activation(tf.nn.gelu)(y)
@@ -112,14 +112,14 @@ def resnet(input_x, input_size):
         y = Conv1D(num_filters, kernel_size=1, padding="same", name=cname + "pointwise_2")(y)
         x = x + y
 
-    x = LayerNormalization(epsilon=1e-6, dtype=tf.float32)(x)
+    x = LayerNormalization(epsilon=1e-6)(x)
     x = Conv1D(4096, kernel_size=1, name="body_output", activation=tf.nn.gelu)(x)
-    x = MonteCarloDropout(0.04)(x)
+    x = MonteCarloDropout(0.05)(x)
     return x
 
 
 @tf.function
-def fast_mse(y_true, y_pred):
+def fast_mse01(y_true, y_pred):
     normal_mse = tf.reduce_mean(tf.square(y_true - y_pred))
     y_pred_positive = tf.gather_nd(y_pred, tf.where(y_true > 0))
     y_true_positive = tf.gather_nd(y_true, tf.where(y_true > 0))
@@ -130,15 +130,36 @@ def fast_mse(y_true, y_pred):
 
 
 @tf.function
-def mse_plus_cor(y_true, y_pred):
+def fast_mse1(y_true, y_pred):
     normal_mse = tf.reduce_mean(tf.square(y_true - y_pred))
     y_pred_positive = tf.gather_nd(y_pred, tf.where(y_true > 0))
     y_true_positive = tf.gather_nd(y_true, tf.where(y_true > 0))
     non_zero_mse = tf.reduce_mean(tf.square(y_true_positive - y_pred_positive))
     non_zero_mse = tf.where(tf.math.is_nan(non_zero_mse), tf.zeros_like(non_zero_mse), non_zero_mse)
+    total_loss = normal_mse + 1 * non_zero_mse
+    return total_loss
+
+@tf.function
+def fast_mse5(y_true, y_pred):
+    normal_mse = tf.reduce_mean(tf.square(y_true - y_pred))
+    y_pred_positive = tf.gather_nd(y_pred, tf.where(y_true > 0))
+    y_true_positive = tf.gather_nd(y_true, tf.where(y_true > 0))
+    non_zero_mse = tf.reduce_mean(tf.square(y_true_positive - y_pred_positive))
+    non_zero_mse = tf.where(tf.math.is_nan(non_zero_mse), tf.zeros_like(non_zero_mse), non_zero_mse)
+    total_loss = normal_mse + 2 * non_zero_mse
+    return total_loss
+
+@tf.function
+def mse_plus_cor(y_true, y_pred):
+    normal_mse = tf.reduce_mean(tf.square(y_true - y_pred))
+    y_pred_positive = tf.gather_nd(y_pred, tf.where(y_true > 0))
+    y_true_positive = tf.gather_nd(y_true, tf.where(y_true > 0))
+
+    non_zero_mse = tf.reduce_mean(tf.square(y_true_positive - y_pred_positive))
+    non_zero_mse = tf.where(tf.math.is_nan(non_zero_mse), tf.zeros_like(non_zero_mse), non_zero_mse)
 
     cor = cor_loss(y_pred_positive, y_true_positive, -1)
-    total_loss = normal_mse + 0.4 * non_zero_mse + 0.001 * tf.math.reduce_mean(cor)
+    total_loss = normal_mse + 0.2 * non_zero_mse + 0.001 * tf.math.reduce_mean(cor)
 
     return total_loss
 
@@ -220,7 +241,7 @@ def batch_predict(p, model, seqs):
 
 def batch_predict_effect(p, model, seqs1, seqs2):
     body = model.get_layer("our_resnet")
-    n_times = 3
+    n_times = 1
     for w in range(0, len(seqs1), p.w_step):
         print(w, end=" ")
         p1s = []
@@ -246,6 +267,31 @@ def batch_predict_effect(p, model, seqs1, seqs2):
             predictions = effect
         else:
             predictions = np.concatenate((predictions, effect))
+    return predictions
+
+
+def batch_predict_effect2(p, model, seqs1, seqs2, inds):
+    n_times = 3
+    for w in range(0, len(seqs1), p.w_step):
+        print(w, end=" ")
+
+        p1s = []
+        for i in range(n_times):
+            p1s.append(model.predict(wrap2(seqs1[w:w + p.w_step], p.predict_batch_size))[0])
+        p1 = np.mean(p1s, axis=0)
+        p1 = p1[:, inds, :]
+
+        p2s = []
+        for i in range(n_times):
+            p2s.append(model.predict(wrap2(seqs2[w:w + p.w_step], p.predict_batch_size))[0])
+        p2 = np.mean(p2s, axis=0)
+        p2 = p2[:, inds, :]
+
+        effect = np.max(np.abs(p1 - p2), axis=-2)
+        if w == 0:
+            predictions = effect
+        else:
+            predictions = np.concatenate((predictions, effect), dtype=np.float16)
     return predictions
 
 

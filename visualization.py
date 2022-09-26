@@ -123,13 +123,16 @@ def draw_regplots(track_names, track_perf, final_pred, eval_gt, fig_path):
     print("Drawing gene regplot")
     for it, track in enumerate(track_names):
         type = track[:track.find(".")]
-        if type not in ["CAGE", "NETCAGE"]:
+        if type not in ["CAGE"]:
             continue
-        if track_perf[track] < 0.75:
+        if track_perf[track] < 0.85:
             continue
 
-        a = final_pred[track]
-        b = eval_gt[track]
+        a = []
+        b = []
+        for gene in eval_gt.keys():
+            a.append(final_pred[gene][track])
+            b.append(eval_gt[gene][track])
 
         fig, ax = plt.subplots(figsize=(6, 6))
         r, p = stats.spearmanr(a, b)

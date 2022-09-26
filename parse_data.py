@@ -47,11 +47,12 @@ def parse_tracks(p):
         tracks_folder = p.tracks_folder
         track_names = []
         for filename in os.listdir(tracks_folder):
-            if filename.endswith(".gz"):
+            if filename.endswith(".gz") or filename.endswith(".bed"):
                 fn = tracks_folder + filename
                 size = os.path.getsize(fn)
                 if size > 200000 or filename.startswith("sc"):
                     track_names.append(filename)
+                track_names.append(filename)
 
         print(f"Number of tracks {len(track_names)}")
 
@@ -65,7 +66,7 @@ def parse_tracks(p):
             t_end = min(t+step_size, end)
             sub_tracks = track_names[t:t_end]
             proc = mp.Process(target=parse_some_tracks,
-                           args=(q, sub_tracks, ga, p.bin_size, tracks_folder,meta,))
+                           args=(q, p, sub_tracks, ga, p.bin_size, tracks_folder,meta,))
             proc.start()
             ps.append(proc)
             if len(ps) >= nproc:
@@ -78,29 +79,51 @@ def parse_tracks(p):
             for proc in ps:
                 proc.join()
             print(q.get())
+        track_names = []
+        for filename in os.listdir(p.parsed_tracks_folder):
+            if filename.endswith(".parsed"):
+                track_names.append(filename)
         joblib.dump(track_names, f"{p.pickle_folder}track_names.gz", compress="lz4")
     return track_names
 
 
-def parse_some_tracks(q, some_tracks, ga, bin_size, tracks_folder, meta):
+def parse_some_tracks(q, p, some_tracks, ga, bin_size, tracks_folder, meta):
     for track in some_tracks:
         # if Path(main.p.parsed_tracks_folder + track).is_file():
         #     continue
         try:
             fn = tracks_folder + track
-            meta_row = meta.loc[meta['file_name'] == track]
+            track_name = track
+            if track_name.endswith(".64nt.bed.gz"):
+                track_name = track_name[:-len(".64nt.bed.gz")] 
+            track_name += ".parsed"
+            new_path = p.parsed_tracks_folder + track_name
+            meta_row = meta.loc[meta['file_name'] == track_name]
             if len(meta_row) > 0:
                 meta_row = meta_row.iloc[0]
             else:
                 meta_row = None
+            # if not ("scend5" in track.lower() or (meta_row is not None and meta_row["value"] == "RNA")):
+            #     continue
+            if "scend5" not in track.lower() and not (meta_row is not None and meta_row["value"] == "RNA"):
+                continue
+            # delete in case it already exists
+            if Path(new_path).exists():
+                Path(new_path).unlink()
             gast = copy.deepcopy(ga)
             df = pd.read_csv(fn, delim_whitespace=True, header=None, index_col=False)
             if len(df.columns) == 4:
                 df = df.rename(columns={0: "chr", 1: "start", 2: "end", 3: "score"})
                 df["mid"] = (df["start"] + (df["end"] - df["start"]) / 2) / bin_size
             else:
-                df = df.rename(columns={0: "chr", 1: "start", 2: "end", 3: "id", 4: "score", 5: "strand"})
-                df["mid"] = df["start"] / bin_size
+                df = df.rename(columns={0: "chr", 1: "start", 2: "end", 3: "id", 4: "score", 5: "strand", 6: "tss"})
+                df["mid"] = df["tss"] // bin_size
+            total_reads = df['score'].sum()
+            print(df.iloc[df['score'].argmax()])
+            if meta_row is not None and meta_row["value"] == "RNA" and total_reads < 1000000:
+                print(f"Skipping: {track}")
+                continue
+
             df[["start", "end", "mid"]] = df[["start", "end", "mid"]].astype(int)
             df["score"] = df["score"].astype(float)
             df = df[["chr", "start", "end", "score", "mid"]]
@@ -119,24 +142,24 @@ def parse_some_tracks(q, some_tracks, ga, bin_size, tracks_folder, meta):
                 gast[key][pos] += score
 
             max_val = -1
+            cid = 0
             for key in gast.keys():
-                if meta_row is None:
-                    gast[key] = np.log10(gast[key] + 1)
-                elif meta_row["technology"] == "scEnd5":
+                if "scend5" in track.lower():
                     gast[key] = np.log10(np.exp(gast[key]))
+                    cid = 1
+                elif meta_row is None:
+                    gast[key] = np.log10(gast[key] + 1)
+                    cid = 2
                 elif meta_row["value"] == "RNA":
                     gast[key] = np.log10(gast[key] + 1)
-                elif meta_row["value"] == "conservation":
-                    pass
-                else:
-                    gast[key] = np.log10(gast[key] + 1)
+                    cid = 3
                 max_val = max(np.max(gast[key]), max_val)
             for key in gast.keys():
                 gast[key] = gast[key] / max_val
                 gast[key] = gaussian_filter(gast[key], sigma=1.0)
-                gast[key] = gast[key].astype(np.float16)
-            joblib.dump(gast, main.p.parsed_tracks_folder + track, compress="lz4")
-            print(f"Parsed {track}. Max value: {max_val}.")
+                gast[key] = gast[key].astype(np.float16)            
+            joblib.dump(gast, new_path, compress="lz4")
+            print(f"Parsed {track}. Max value: {max_val}. Sum: {total_reads}. CID: {cid}")
         except Exception as exc:
             print(exc)
             traceback.print_exc()

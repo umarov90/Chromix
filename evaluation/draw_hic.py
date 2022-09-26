@@ -83,9 +83,9 @@ for w in range(0, len(test_seq), p.w_step):
     print(w, end=" ")
     p1 = our_model.predict(mo.wrap2(test_seq[w:w + p.w_step], p.predict_batch_size))
     if w == 0:
-        predictions_hic = p1[3]
+        predictions_hic = p1[4]
     else:
-        predictions_hic = np.concatenate((predictions_hic, p1[3]))
+        predictions_hic = np.concatenate((predictions_hic, p1[4]))
 
 hic_output = np.asarray(hic_output)
 print("drawing")

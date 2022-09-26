@@ -10,14 +10,14 @@ from pathlib import Path
 compute_correlation = False
 p = MainParams()
 head = joblib.load(f"{p.pickle_folder}heads.gz")
-head = head["expression"]
+head = head["sc"]
 track_inds_bed = []
 
-cor_tracks = pd.read_csv("data/fantom_tracks.tsv", sep="\t", header=None).iloc[:, 0].tolist()
+# cor_tracks = pd.read_csv("data/fantom_tracks.tsv", sep="\t", header=None).iloc[:, 0].tolist()
 
 for i, track in enumerate(head):
-    if track in cor_tracks:
-        track_inds_bed.append(i)
+    # if track in cor_tracks:
+    track_inds_bed.append(i)
 
 print(f"Predicting {len(track_inds_bed)} tracks")
 
@@ -27,11 +27,11 @@ strategy = tf.distribute.MultiWorkerMirroredStrategy()
 with strategy.scope():
     our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, 0, p.hic_size, head)
     our_model.get_layer("our_resnet").set_weights(joblib.load(p.model_path + "_res"))
-    our_model.get_layer("our_expression").set_weights(joblib.load(p.model_path + "_expression"))
+    our_model.get_layer("our_expression").set_weights(joblib.load(p.model_path + "_sc"))
 
 all_start_vals = {}
 corrs = []
-for chrom in ["chr14"]: # one_hot.keys()
+for chrom in ["chr1"]: # one_hot.keys()
     print(f"\nPredicting {chrom} +++++++++++++++++++++++")
     start_val = {}
     batch = []

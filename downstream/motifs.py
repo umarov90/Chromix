@@ -1,6 +1,5 @@
 import os
 import pathlib
-from skimage import measure
 import model as mo
 import tensorflow as tf
 import joblib
@@ -11,12 +10,13 @@ import attribution
 import logomaker
 from sklearn.cluster import KMeans
 from main_params import MainParams
-# os.environ["CUDA_VISIBLE_DEVICES"] = '-1'
+import parse_data as parser
+os.environ["CUDA_VISIBLE_DEVICES"] = '-1'
 
-MAX_TRACKS = 2
-MAX_PROMOTERS = 1000
-k = 100
-OUT_DIR = "temp/"
+MAX_TRACKS = 1
+MAX_PROMOTERS = 50
+k = 40
+OUT_DIR = "motifs/"
 
 
 def find_nearest(array, value):
@@ -26,39 +26,44 @@ def find_nearest(array, value):
 
 
 p = MainParams()
-script_folder = pathlib.Path(__file__).parent.resolve()
-folders = open(str(script_folder) + "/../data_dirs").read().strip().split("\n")
-os.chdir(folders[0])
-parsed_tracks_folder = folders[1]
-parsed_hic_folder = folders[2]
-model_folder = folders[3]
-heads = joblib.load("pickle/heads.gz")
-head_id = 0
-head_tracks = heads[head_id]
-one_hot = joblib.load("pickle/one_hot.gz")
-test_info = joblib.load("pickle/test_info.gz")
-gene_info = pd.read_csv("data/hg38.GENCODEv38.pc_lnc.gene.info.tsv", sep="\t", index_col=False)
-tss_loc = joblib.load("pickle/tss_loc.gz")
-for key in tss_loc.keys():
-    tss_loc[key].sort()
+head = joblib.load(f"{p.pickle_folder}heads.gz")
+head_tracks = head["expression"]
+one_hot = joblib.load(f"{p.pickle_folder}one_hot.gz")
 
-strategy = tf.distribute.MultiWorkerMirroredStrategy()
-with strategy.scope():
-    our_model = tf.keras.models.load_model(model_folder + p.model_name)
-    our_model.get_layer("our_head").set_weights(joblib.load(model_folder + p.model_name + "_head_" + str(head_id)))
+model_path = p.model_folder + "0.8070915954746051_0.5100707215128535/" + p.model_name 
 
-test_seq = joblib.load(f"pickle/chr1_seq.gz")
+our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, 0, p.hic_size, head_tracks)
+our_model.get_layer("our_resnet").set_weights(joblib.load(model_path + "_res"))
+our_model.get_layer("our_expression").set_weights(joblib.load(model_path + "_expression"))
+
+
+train_info, valid_info, test_info, protein_coding = parser.parse_sequences(p)
+eval_infos = valid_info + test_info
+test_seq = []
+for info in eval_infos:
+    start = int(info[1] - (info[1] % p.bin_size) - p.half_size)
+    extra = start + p.input_size - len(one_hot[info[0]])
+    if start < 0:
+        ns = one_hot[info[0]][0:start + p.input_size]
+        ns = np.concatenate((np.zeros((-1 * start, 5)), ns))
+    elif extra > 0:
+        ns = one_hot[info[0]][start: len(one_hot[info[0]])]
+        ns = np.concatenate((ns, np.zeros((extra, 5))))
+    else:
+        ns = one_hot[info[0]][start:start + p.input_size]
+    test_seq.append(ns[:, :-1])
+test_seq = np.asarray(test_seq, dtype=bool)
+
 meme_motifs = []
 tracks_count = 0
 for track_to_use, track in enumerate(head_tracks):
-    type = track[:track.find(".")]
-    if type != "scEnd5":
+    if "FANTOM5" not in track or "K562" not in track or "response" in track:
         continue
     print(track)
     picked_sub_seqs = []
     picked_sub_seqs_scores = []
     for si, seq in enumerate(test_seq):
-        if si % 10 == 0:
+        if si % 1 == 0:
             print(si, end=" ")
         if si > MAX_PROMOTERS:
             break
@@ -68,15 +73,15 @@ for track_to_use, track in enumerate(head_tracks):
         ig_attributions = attribution.integrated_gradients(our_model, baseline=baseline,
                                                            image=image,
                                                            target_class_idx=[p.mid_bin, track_to_use],
-                                                           m_steps=40)
+                                                           m_steps=10)
 
         attribution_mask = tf.squeeze(ig_attributions).numpy()
         attribution_mask = (attribution_mask - np.min(attribution_mask)) / (
                 np.max(attribution_mask) - np.min(attribution_mask))
         attribution_mask = np.sum(attribution_mask[:, :4], axis=-1)
-        start = int(p.input_size / 2) - 500
-        attribution_mask = attribution_mask[start: start + 1000]
-        top_n = 50
+        start = int(p.input_size / 2) - 1500
+        attribution_mask = attribution_mask[start: start + 3000]
+        top_n = 100
         top = attribution_mask.argsort()[-top_n:][::-1]
         picked = []
         for v in top:
@@ -87,11 +92,11 @@ for track_to_use, track in enumerate(head_tracks):
             picked_sub_seqs.append(seq[start + v - 5: start + v + 5][:, :4].flatten())
             picked_sub_seqs_scores.append(attribution_mask[v])
             picked.append(v)
-            if len(picked) >= 5:
+            if len(picked) >= 40:
                 break
     picked_sub_seqs = np.asarray(picked_sub_seqs)
     cluster_scores = {}
-    kmeans = KMeans(n_clusters=2, random_state=0).fit(picked_sub_seqs)
+    kmeans = KMeans(n_clusters=min(k, len(picked_sub_seqs)), random_state=0).fit(picked_sub_seqs)
     for i in range(len(picked_sub_seqs)):
         cluster_scores.setdefault(kmeans.labels_[i], []).append(picked_sub_seqs_scores[i])
     for ci, cluster in enumerate(kmeans.cluster_centers_):

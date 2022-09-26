@@ -9,6 +9,7 @@ import attribution
 # import logomaker
 from sklearn.cluster import KMeans
 import seaborn as sns
+sns.set(font_scale = 2.5)
 import model as mo
 from main_params import MainParams
 import common as cm
@@ -17,6 +18,7 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn import metrics
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import RobustScaler
+from sklearn.metrics import RocCurveDisplay
 
 VCF_DIR = "data/gtex_pos_neg/"
 
@@ -33,14 +35,11 @@ head = joblib.load(f"{p.pickle_folder}heads.gz")
 one_hot = joblib.load(f"{p.pickle_folder}one_hot.gz")
 hic_keys = pd.read_csv("data/good_hic.tsv", sep="\t", header=None).iloc[:, 0]
 
+# model_path = p.model_folder + "0.8070915954746051_0.5100707215128535/" + p.model_name 
 strategy = tf.distribute.MultiWorkerMirroredStrategy()
 with strategy.scope():
-    our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, len(hic_keys), p.hic_size, head)
+    our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, 0, p.hic_size, head)
     our_model.get_layer("our_resnet").set_weights(joblib.load(p.model_path + "_res"))
-    our_model.get_layer("our_expression").set_weights(joblib.load(p.model_path + "_expression"))
-    our_model.get_layer("our_epigenome").set_weights(joblib.load(p.model_path + "_epigenome"))
-    our_model.get_layer("our_conservation").set_weights(joblib.load(p.model_path + "_conservation"))
-    our_model.get_layer("our_hic").set_weights(joblib.load(p.model_path + "_hic"))
 
 vcf_names = set([])
 for filename in sorted(os.listdir(VCF_DIR)):
@@ -48,11 +47,13 @@ for filename in sorted(os.listdir(VCF_DIR)):
     vcf_names.add(name)
 
 vcf_names = sorted(list(vcf_names))
-vcf_names = vcf_names[1:2]
+# Number of files to use!
+vcf_names = vcf_names[6:12] 
+AUCs = []
 print(f"Num vcf: {len(vcf_names)}")
 data = {}
-X_trains = []
 for name in vcf_names:
+    # get positive and negative examples
     print(name)
     pos = pd.read_csv(VCF_DIR + name + "_pos.vcf", sep="\t", index_col=False,
                       names=["chrom", "position", "info", "ref", "alt", "c1", "c2"], comment="#")
@@ -60,6 +61,7 @@ for name in vcf_names:
     neg = pd.read_csv(VCF_DIR + name + "_neg.vcf", sep="\t", index_col=False,
                       names=["chrom", "position", "info", "ref", "alt", "c1", "c2"], comment="#")
     neg = neg.drop(neg[neg.position < p.half_size - 1].index)
+    print(f"{len(pos)} - {len(neg)}")
     Y_label_orig = np.concatenate([np.ones_like(np.arange(len(pos))), np.zeros_like(np.arange(len(neg)))], axis=0)
     df = pos.append(neg, ignore_index=True)
     seqs1 = []
@@ -90,56 +92,48 @@ for name in vcf_names:
         seq2[snp_pos][["ACGT".index(row["alt"])]] = True
         alt2 = seq2[snp_pos][["ACGT".index(row["alt"])]] # True
         seqs2.append(seq2)
-
+    #############################################################
     print(f"Predicting {len(seqs1)}")
+    # Turn the two outputs into feature vectors for Random Forests
     dif = mo.batch_predict_effect(p, our_model, np.asarray(seqs1), np.asarray(seqs2))
     print("Done")
     
 
-    X_train, X_test, Y_train, Y_test = train_test_split(dif, np.asarray(Y_label), test_size=0.1, random_state=1)
-    data[name] = X_train, X_test, Y_train, Y_test
-    X_trains.append(X_train)
+    X_train, X_test, Y_train, Y_test = train_test_split(dif, np.asarray(Y_label), test_size=0.1)
 
+    transformer1 = RobustScaler().fit(X_train)
+    X_train1 = transformer1.transform(X_train)
+    pca = PCA(n_components=60)
+    pca.fit(X_train1)
+    X_train2 = pca.transform(X_train1)
+    transformer2 = RobustScaler().fit(X_train2)
 
-X_trains = np.concatenate(X_trains, axis=0)
+    def transform(xx):
+        xx = transformer1.transform(xx)
+        xx = pca.transform(xx)
+        xx = transformer2.transform(xx)
+        return xx
 
-# We used principal component analysis (PCA) to reduce 5,313 variant effect features from Enformer to 20 principle components.
-# We used variant effect scores from 1000 Genomes SNPs on chromosome 9 and performed the following steps:
-# (1) subtracted the median and divided by standard deviation estimated from the interquartile range as implemented in RobustScaler in scikit-learn (v0.23.2);
-# (2) reduced the dimensionality to 20 principle components using TruncatedSVD from scikit-learn; and 
-# (3) normalized the resulting principal component features using RobustScaler to obtain z-scores.
-
-transformer1 = RobustScaler().fit(X_trains)
-X_trains = transformer1.transform(X_trains)
-pca = PCA(n_components=50)
-pca.fit(X_trains)
-X_trains = pca.transform(X_trains)
-transformer2 = RobustScaler().fit(X_trains)
-
-def transform(xx):
-    xx = transformer1.transform(xx)
-    xx = pca.transform(xx)
-    xx = transformer2.transform(xx)
-    return xx
-
-# print("Dumping")
-# joblib.dump(data, "GTEXdata.p", compress=3)
-# data = joblib.load("GTEXdata.p")
-# Turn off dropout!!!!!!!!!! or multiple eval
-# use change on last resnet layer
-AUCs = []
-for name in vcf_names:
-    X_train, X_test, Y_train, Y_test = data[name]
-    clf = RandomForestClassifier(random_state=0) # , max_depth=20
+    clf = RandomForestClassifier() # , max_depth=20
     clf.fit(X_train, Y_train)
     Y_pred = clf.predict(X_test)
     fpr, tpr, thresholds = metrics.roc_curve(Y_test, Y_pred, pos_label=1)
     auc1 = metrics.auc(fpr, tpr)
     print(f"{name} AUC1: {auc1}")
 
+    fig, axs = plt.subplots(1,1,figsize=(15, 15))
+    RocCurveDisplay.from_estimator(clf, X_test, Y_test, ax=axs, name=name)
+    plt.plot([0, 1], [0, 1], color="navy", lw=2, linestyle="--")
+    plt.xlim([0.0, 1.0])
+    plt.ylim([0.0, 1.05])
+    plt.xlabel("False Positive Rate")
+    plt.ylabel("True Positive Rate") 
+    plt.tight_layout()
+    plt.savefig(name + "_roc.png")
+
     X_train = transform(X_train)
     X_test = transform(X_test)
-    clf = RandomForestClassifier(random_state=0) # , max_depth=20
+    clf = RandomForestClassifier() # , max_depth=20
     clf.fit(X_train, Y_train)
     Y_pred = clf.predict(X_test)
     fpr, tpr, thresholds = metrics.roc_curve(Y_test, Y_pred, pos_label=1)
@@ -147,6 +141,30 @@ for name in vcf_names:
     print(f"{name} AUC2: {auc2}")
 
     AUCs.append(max(auc1, auc2))
+
+    fig, axs = plt.subplots(1,1,figsize=(15, 15))
+    RocCurveDisplay.from_estimator(clf, X_test, Y_test, ax=axs, name=name)
+    plt.plot([0, 1], [0, 1], color="navy", lw=2, linestyle="--")
+    plt.xlim([0.0, 1.0])
+    plt.ylim([0.0, 1.05])
+    plt.xlabel("False Positive Rate")
+    plt.ylabel("True Positive Rate") 
+    plt.tight_layout()
+    plt.savefig(name + "_roc_pca.png")
+
+
+
+# We used principal component analysis (PCA) to reduce 5,313 variant effect features from Enformer to 20 principle components.
+# We used variant effect scores from 1000 Genomes SNPs on chromosome 9 and performed the following steps:
+# (1) subtracted the median and divided by standard deviation estimated from the interquartile range as implemented in RobustScaler in scikit-learn (v0.23.2);
+# (2) reduced the dimensionality to 20 principle components using TruncatedSVD from scikit-learn; and 
+# (3) normalized the resulting principal component features using RobustScaler to obtain z-scores.
+
+
+
+# Turn off dropout!!!!!!!!!! or multiple eval
+
+    
 
 
 print(f"Average AUC: {np.mean(AUCs)}")

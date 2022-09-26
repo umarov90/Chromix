@@ -36,7 +36,7 @@ class MainParams:
         self.model_name = "our_model_276480" # "our_model_small.h5"
         self.model_path = self.model_folder + self.model_name
         self.figures_folder = "figures_1"
-        self.tracks_folder = "/media/user/PASSPORT1/variants_100/tracks/"
+        self.tracks_folder = "/media/user/PASSPORT1/variants_100/tracks/hg38/"
         Path(self.model_folder).mkdir(parents=True, exist_ok=True)
         Path(self.figures_folder + "/" + "attribution").mkdir(parents=True, exist_ok=True)
         Path(self.figures_folder + "/" + "tracks").mkdir(parents=True, exist_ok=True)

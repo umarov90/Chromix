@@ -64,6 +64,7 @@ def get_data_and_train(last_proc, fit_epochs):
     print(datetime.now().strftime('[%H:%M:%S] ') + "Loading parsed tracks")
     output_conservation = parser.par_load_data(output_scores_info, heads["conservation"], p)
     output_expression = parser.par_load_data(output_scores_info, heads["expression"], p)
+    output_sc = parser.par_load_data(output_scores_info, heads["sc"], p)
     output_epigenome = parser.par_load_data(output_scores_info, heads["epigenome"], p)
     # half of sequences will be reverse-complemented
     half = len(input_sequences) // 2
@@ -81,12 +82,14 @@ def get_data_and_train(last_proc, fit_epochs):
     # for reverse-complement sequences, the 1D output is flipped
     for i in range(half):
         output_expression[i] = np.flip(output_expression[i], axis=1)
+        output_sc[i] = np.flip(output_sc[i], axis=1)
         output_epigenome[i] = np.flip(output_epigenome[i], axis=1)
         output_conservation[i] = np.flip(output_conservation[i], axis=1)
 
     all_outputs = {"our_expression": output_expression}
     all_outputs["our_epigenome"] = output_epigenome
     all_outputs["our_conservation"] = output_conservation
+    all_outputs["our_sc"] = output_sc
     if hic_num > 0:
         all_outputs["our_hic"] = output_hic
     # Cut off the test TSS layer
@@ -129,6 +132,7 @@ def make_model_and_train(heads, input_sequences, all_outputs, fit_epochs, hic_nu
                 optimizers_and_layers.append((optimizers["our_hic"], our_model.get_layer("our_hic")))
             optimizers_and_layers.append((optimizers["our_epigenome"], our_model.get_layer("our_epigenome")))
             optimizers_and_layers.append((optimizers["our_conservation"], our_model.get_layer("our_conservation")))
+            optimizers_and_layers.append((optimizers["our_sc"], our_model.get_layer("our_sc")))
             optimizer = tfa.optimizers.MultiOptimizer(optimizers_and_layers)
             print("Loss updated")
             # loading the loss weights
@@ -149,17 +153,19 @@ def make_model_and_train(heads, input_sequences, all_outputs, fit_epochs, hic_nu
             optimizers["our_epigenome"].learning_rate.assign(learning_rates["our_epigenome"])
             optimizers["our_epigenome"].weight_decay.assign(weight_decays["our_epigenome"])       
             optimizers["our_conservation"].learning_rate.assign(learning_rates["our_conservation"])
-            optimizers["our_conservation"].weight_decay.assign(weight_decays["our_conservation"])   
+            optimizers["our_conservation"].weight_decay.assign(weight_decays["our_conservation"]) 
+            print(loss_weights["our_sc"])  
             if hic_num > 0:
                 optimizers["our_hic"].learning_rate.assign(learning_rates["our_hic"])
                 optimizers["our_hic"].weight_decay.assign(weight_decays["our_hic"])   
             losses = {
-                    "our_expression": mo.fast_mse5,
-                    "our_epigenome": mo.fast_mse,
+                    "our_expression": mo.fast_mse1,
+                    "our_sc": mo.fast_mse5,
+                    "our_epigenome": mo.fast_mse01,
                     "our_conservation":  "mse",
                 }
             if hic_num > 0:
-                losses["our_hic"] =  mo.fast_mse
+                losses["our_hic"] = mo.fast_mse01
             our_model.compile(optimizer=optimizer, loss=losses, loss_weights=loss_weights)
             if current_epoch == 0 and os.path.exists(p.model_path + "_opt_resnet"):
                 # need to init the optimizers
@@ -183,18 +189,22 @@ def make_model_and_train(heads, input_sequences, all_outputs, fit_epochs, hic_nu
                 if os.path.exists(p.model_path + "_opt_conservation"):
                     print("loading conservation optimizer")
                     optimizers["our_conservation"].set_weights(joblib.load(p.model_path + "_opt_conservation"))
+                if os.path.exists(p.model_path + "_opt_sc"):
+                    print("loading sc optimizer")
+                    optimizers["our_sc"].set_weights(joblib.load(p.model_path + "_opt_sc"))
             # loading model weights
             if os.path.exists(p.model_path + "_res"):
                 our_model.get_layer("our_resnet").set_weights(joblib.load(p.model_path + "_res"))
             if os.path.exists(p.model_path + "_expression"):
-                our_model.get_layer("our_expression").set_weights(
-                    joblib.load(p.model_path + "_expression"))
+                our_model.get_layer("our_expression").set_weights(joblib.load(p.model_path + "_expression"))
             if os.path.exists(p.model_path + "_epigenome"):
                 our_model.get_layer("our_epigenome").set_weights(joblib.load(p.model_path + "_epigenome"))
             if hic_num > 0 and os.path.exists(p.model_path + "_hic"):
                 our_model.get_layer("our_hic").set_weights(joblib.load(p.model_path + "_hic"))
             if os.path.exists(p.model_path + "_conservation"):
                 our_model.get_layer("our_conservation").set_weights(joblib.load(p.model_path + "_conservation"))
+            if os.path.exists(p.model_path + "_sc"):
+                our_model.get_layer("our_sc").set_weights(joblib.load(p.model_path + "_sc"))
     except:
         traceback.print_exc()
         print(datetime.now().strftime('[%H:%M:%S] ') + "Error while compiling.")
@@ -210,6 +220,8 @@ def make_model_and_train(heads, input_sequences, all_outputs, fit_epochs, hic_nu
         joblib.dump(optimizers["our_resnet"].get_weights(), p.model_folder + "temp/" + p.model_name + "_opt_resnet", compress="lz4")
         joblib.dump(our_model.get_layer("our_expression").get_weights(), p.model_folder + "temp/" + p.model_name + "_expression", compress="lz4")
         joblib.dump(optimizers["our_expression"].get_weights(), p.model_folder + "temp/" + p.model_name + "_opt_expression", compress="lz4")
+        joblib.dump(our_model.get_layer("our_sc").get_weights(), p.model_folder + "temp/" + p.model_name + "_sc", compress="lz4")
+        joblib.dump(optimizers["our_sc"].get_weights(), p.model_folder + "temp/" + p.model_name + "_opt_sc", compress="lz4")
         if hic_num > 0:
             joblib.dump(optimizers["our_hic"].get_weights(), p.model_folder + "temp/" + p.model_name + "_opt_hic", compress="lz4")
             joblib.dump(our_model.get_layer("our_hic").get_weights(), p.model_folder + "temp/" + p.model_name + "_hic", compress="lz4")
@@ -243,17 +255,23 @@ def check_perf(mp_q):
             our_model.get_layer("our_expression").set_weights(joblib.load(p.model_path + "_expression"))
             our_model.get_layer("our_epigenome").set_weights(joblib.load(p.model_path + "_epigenome"))
             our_model.get_layer("our_conservation").set_weights(joblib.load(p.model_path + "_conservation"))
+            our_model.get_layer("our_sc").set_weights(joblib.load(p.model_path + "_sc"))
         train_eval_chr = "chr1"
         train_eval_chr_info = []
         for info in train_info:
             if info[0] == train_eval_chr:
                 train_eval_chr_info.append(info)
         print(f"Training set {len(train_eval_chr_info)}")
-        training_result = evaluation.eval_perf(p, our_model, heads, train_eval_chr_info,
-                                                 False, current_epoch, "train", one_hot)
-        print(f"Valid set {len(test_info)}")
-        valid_result = evaluation.eval_perf(p, our_model, heads, test_info,
-                                             True, current_epoch, "test", one_hot)
+        # training_result = evaluation.eval_perf(p, our_model, heads, train_eval_chr_info,
+        #                                          False, current_epoch, "train", one_hot)
+        training_result = "0"
+        valid_eval_chr_info = []
+        for info in valid_info:
+            if info[0] == "chr2":
+                valid_eval_chr_info.append(info)
+        print(f"Valid set {len(valid_eval_chr_info)}")
+        valid_result = evaluation.eval_perf(p, our_model, heads, valid_eval_chr_info,
+                                             False, current_epoch, "valid", one_hot)
         with open(p.model_name + "_history.tsv", "a+") as myfile:
             myfile.write(training_result + "\t" + valid_result + "\n")
         new_folder = p.model_folder + valid_result + "/"
@@ -284,22 +302,26 @@ dry_run_regions = []
 if __name__ == '__main__':
     train_info, valid_info, test_info, protein_coding = parser.parse_sequences(p)
     track_names = parser.parse_tracks(p)
+    meta = pd.read_csv("data/ML_all_track.metadata.2022053017.tsv", sep="\t")
     if Path(f"{p.pickle_folder}heads.gz").is_file():
         heads = joblib.load(f"{p.pickle_folder}heads.gz")
     else:
-        shuffled_tracks = random.sample(track_names, len(track_names))
+        heads = {}
+        heads["sc"] = [x for x in track_names if x.startswith(("scATAC", "scEnd5"))]
+        track_names = [x for x in track_names if not x.startswith(("scATAC", "scEnd5"))]
         meta = pd.read_csv("data/ML_all_track.metadata.2022053017.tsv", sep="\t")
-        heads = {"expression": [x for x in shuffled_tracks if
+        heads["expression"] = [x for x in track_names if
                                    meta.loc[meta['file_name'] == x].iloc[0]["technology"].startswith(
-                                       ("CAGE", "RAMPAGE", "NETCAGE"))],
-                    "epigenome": [x for x in shuffled_tracks if
+                                       ("CAGE", "RAMPAGE", "NETCAGE"))]
+
+        heads["epigenome"] = [x for x in track_names if
                                   meta.loc[meta['file_name'] == x].iloc[0]["technology"].startswith(
-                                      ("DNase", "ATAC", "Histone_ChIP", "TF_ChIP"))],
-                    "conservation": [x for x in shuffled_tracks if
+                                      ("DNase", "ATAC", "Histone_ChIP", "TF_ChIP"))]
+        heads["conservation"] = [x for x in track_names if
                                      meta.loc[meta['file_name'] == x].iloc[0]["value"].startswith(
-                                         "conservation")]}
+                                         "conservation")]
         joblib.dump(heads, f"{p.pickle_folder}heads.gz", compress="lz4")
-    if 'sc' in heads: del heads['sc']
+
     for key in heads.keys():
         print(f"Number of tracks in head {key}: {len(heads[key])}")
 
@@ -324,6 +346,7 @@ if __name__ == '__main__':
     optimizers = {}
     optimizers["our_resnet"] = tfa.optimizers.AdamW(learning_rate=learning_rates["our_resnet"], weight_decay=weight_decays["our_resnet"], clipnorm=0.001)
     optimizers["our_expression"] = tfa.optimizers.AdamW(learning_rate=learning_rates["our_expression"], weight_decay=weight_decays["our_expression"], clipnorm=0.001)
+    optimizers["our_sc"] = tfa.optimizers.AdamW(learning_rate=learning_rates["our_sc"], weight_decay=weight_decays["our_sc"], clipnorm=0.001)
     optimizers["our_epigenome"] = tfa.optimizers.AdamW(learning_rate=learning_rates["our_epigenome"], weight_decay=weight_decays["our_epigenome"], clipnorm=0.001)
     optimizers["our_conservation"] = tfa.optimizers.AdamW(learning_rate=learning_rates["our_conservation"], weight_decay=weight_decays["our_conservation"], clipnorm=0.001)
     optimizers["our_hic"] = tfa.optimizers.AdamW(learning_rate=learning_rates["our_hic"], weight_decay=weight_decays["our_hic"], clipnorm=0.001)
@@ -341,7 +364,7 @@ if __name__ == '__main__':
             # check_perf(mp_q)
             # exit()
             last_proc = get_data_and_train(last_proc, fit_epochs)
-            if current_epoch % 20 == 0 and current_epoch != 0:  # and current_epoch != 0:
+            if current_epoch % 10 == 0 and current_epoch != 0:  # and current_epoch != 0:
                 print("Eval epoch")
                 print(mp_q.get())
                 last_proc.join()
