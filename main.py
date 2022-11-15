@@ -22,6 +22,7 @@ import multiprocessing as mp
 import evaluation
 from main_params import MainParams
 from scipy.ndimage import gaussian_filter
+from enhancers.enhancer_linking import get_linking_AUC
 import cooler
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
@@ -32,7 +33,7 @@ matplotlib.use("agg")
 def get_data_and_train(last_proc, fit_epochs):
     print(datetime.now().strftime('[%H:%M:%S] ') + "Epoch " + str(current_epoch))
     # training regions are shuffled each iteration
-    shuffled_regions_info = random.sample(training_regions, len(training_regions_tss)) + training_regions_tss
+    shuffled_regions_info = random.sample(training_regions, len(training_regions_tss) // 2) + training_regions_tss
     shuffled_regions_info = random.sample(shuffled_regions_info, len(shuffled_regions_info))
     input_sequences = []
     output_scores_info = []
@@ -154,12 +155,12 @@ def make_model_and_train(heads, input_sequences, all_outputs, fit_epochs, hic_nu
                 optimizers["our_hic"].learning_rate.assign(learning_rates["our_hic"])
                 optimizers["our_hic"].weight_decay.assign(weight_decays["our_hic"])   
             losses = {
-                    "our_expression": mo.fast_mse5,
-                    "our_epigenome": mo.fast_mse,
+                    "our_expression": mo.fast_mse1,
+                    "our_epigenome": mo.fast_mse01,
                     "our_conservation":  "mse",
                 }
             if hic_num > 0:
-                losses["our_hic"] =  mo.fast_mse
+                losses["our_hic"] =  mo.fast_mse01
             our_model.compile(optimizer=optimizer, loss=losses, loss_weights=loss_weights)
             if current_epoch == 0 and os.path.exists(p.model_path + "_opt_resnet"):
                 # need to init the optimizers
@@ -243,20 +244,26 @@ def check_perf(mp_q):
             our_model.get_layer("our_expression").set_weights(joblib.load(p.model_path + "_expression"))
             our_model.get_layer("our_epigenome").set_weights(joblib.load(p.model_path + "_epigenome"))
             our_model.get_layer("our_conservation").set_weights(joblib.load(p.model_path + "_conservation"))
+        auc = get_linking_AUC()
         train_eval_chr = "chr1"
         train_eval_chr_info = []
         for info in train_info:
             if info[0] == train_eval_chr:
                 train_eval_chr_info.append(info)
         print(f"Training set {len(train_eval_chr_info)}")
-        training_result = evaluation.eval_perf(p, our_model, heads, train_eval_chr_info,
-                                                 False, current_epoch, "train", one_hot)
-        print(f"Valid set {len(test_info)}")
-        valid_result = evaluation.eval_perf(p, our_model, heads, test_info,
-                                             True, current_epoch, "test", one_hot)
+        # training_result = evaluation.eval_perf(p, our_model, heads, train_eval_chr_info,
+        #                                          False, current_epoch, "train", one_hot)
+        training_result = "0"
+        valid_eval_chr_info = []
+        for info in valid_info:
+            # if info[0] == "chr2":
+            valid_eval_chr_info.append(info)
+        print(f"Valid set {len(valid_eval_chr_info)}")
+        valid_result = evaluation.eval_perf(p, our_model, heads, valid_eval_chr_info,
+                                             False, current_epoch, "valid", one_hot)
         with open(p.model_name + "_history.tsv", "a+") as myfile:
-            myfile.write(training_result + "\t" + valid_result + "\n")
-        new_folder = p.model_folder + valid_result + "/"
+            myfile.write(training_result + "\t" + valid_result + "\t" + str(auc) + "\n")
+        new_folder = p.model_folder + valid_result + "_" + str(auc) + "/"
         Path(new_folder).mkdir(parents=True, exist_ok=True)
         file_names = os.listdir(p.model_folder)
         for file_name in file_names:
@@ -314,6 +321,8 @@ if __name__ == '__main__':
     weight_decays = {}
     with open(str(p.script_folder) + "/../loss_weights") as f:
         for line in f:
+            if line.startswith("#"):
+                continue
             (key, weight, lr, wd) = line.split()
             if hic_num == 0 and key == "our_hic":
                 continue

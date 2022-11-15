@@ -19,6 +19,7 @@ import time
 import parse_data as parser
 import matplotlib
 import matplotlib.pyplot as plt
+from scipy.stats import ttest_ind
 import seaborn as sns
 import umap
 from sklearn.decomposition import PCA
@@ -214,61 +215,61 @@ for i, gene in enumerate(final_pred_enformer.keys()):
         final_pred_enformer[gene][track] = np.sum(final_pred_enformer[gene][track])
 # OUR MODEL #####################################################################################################
 #################################################################################################################
-pred_matrix_our = joblib.load("pred_matrix_our.p")
-print(f"{np.max(pred_matrix_our)}\t{np.std(pred_matrix_our)}\t{np.mean(pred_matrix_our)}\t{np.median(pred_matrix_our)}")
-# heads = joblib.load(f"{p.pickle_folder}heads.gz")
-# one_hot = joblib.load(f"{p.pickle_folder}one_hot.gz")
-# strategy = tf.distribute.MultiWorkerMirroredStrategy()
-# # model_path = p.model_folder + "0.8070915954746051_0.5100707215128535/" + p.model_name 
-# with strategy.scope():
-#     our_model =mo.make_model(p.input_size, p.num_features, p.num_bins, 0, p.hic_size, heads)
-#     our_model.get_layer("our_resnet").set_weights(joblib.load(p.model_path + "_res"))
-#     our_model.get_layer("our_expression").set_weights(joblib.load(p.model_path + "_expression"))
-# pred_matrix_our = np.zeros((len(eval_tracks), len(test_info)))
+# pred_matrix_our = joblib.load("pred_matrix_our.p")
+# print(f"{np.max(pred_matrix_our)}\t{np.std(pred_matrix_our)}\t{np.mean(pred_matrix_our)}\t{np.median(pred_matrix_our)}")
+heads = joblib.load(f"{p.pickle_folder}heads.gz")
+one_hot = joblib.load(f"{p.pickle_folder}one_hot.gz")
+strategy = tf.distribute.MultiWorkerMirroredStrategy()
+# model_path = p.model_folder + "0.8070915954746051_0.5100707215128535/" + p.model_name 
+with strategy.scope():
+    our_model =mo.make_model(p.input_size, p.num_features, p.num_bins, 0, p.hic_size, heads)
+    our_model.get_layer("our_resnet").set_weights(joblib.load(p.model_path + "_res"))
+    our_model.get_layer("our_expression").set_weights(joblib.load(p.model_path + "_expression"))
+pred_matrix_our = np.zeros((len(eval_tracks), len(test_info)))
 
-# counts = [0, 0, 0, 0, 0]
-# print("Predicting our")
-# start = time.time()
-# def get_seq(info):
-#     start = int(info[1] - (info[1] % p.bin_size) - p.half_size)
-#     extra = start + p.input_size - len(one_hot[info[0]])
-#     if start < 0:
-#         ns = one_hot[info[0]][0:start + p.input_size]
-#         ns = np.concatenate((np.zeros((-1 * start, 5)), ns))
-#     elif extra > 0:
-#         ns = one_hot[info[0]][start: len(one_hot[info[0]])]
-#         ns = np.concatenate((ns, np.zeros((extra, 5))))
-#     else:
-#         ns = one_hot[info[0]][start:start + p.input_size]
-#     return ns[:, :-1]
+counts = [0, 0, 0, 0, 0]
+print("Predicting our")
+start = time.time()
+def get_seq(info):
+    start = int(info[1] - (info[1] % p.bin_size) - p.half_size)
+    extra = start + p.input_size - len(one_hot[info[0]])
+    if start < 0:
+        ns = one_hot[info[0]][0:start + p.input_size]
+        ns = np.concatenate((np.zeros((-1 * start, 5)), ns))
+    elif extra > 0:
+        ns = one_hot[info[0]][start: len(one_hot[info[0]])]
+        ns = np.concatenate((ns, np.zeros((extra, 5))))
+    else:
+        ns = one_hot[info[0]][start:start + p.input_size]
+    return ns[:, :-1]
 
-# tss_index = 0
-# for index, info in enumerate(test_info):
-#     if index % 100 == 0:
-#         print(index, end=" ")
-#     batch = []
-#     # for rvc in [True, False]:
-#     for i in range(-1, 2, 1):
-#         seq = get_seq([info[0], info[1] + i])
-#     # seq = get_seq([info[0], info[1]])
-#     #         if rvc:
-#     #             seq = rev_comp(seq)
-#         batch.append(seq)
-#     batch = np.asarray(batch, dtype=bool)
-#     pr = our_model.predict(mo.wrap2(batch, p.predict_batch_size))
-#     p1 = np.mean(pr[1], axis=0)
-#     for j, track in enumerate(eval_tracks):
-#         t = track_ind_our[track]
-#         bins = [p1[t, p.mid_bin - 1], p1[t, p.mid_bin], p1[t, p.mid_bin + 1]]
-#         counts[bins.index(max(bins))] += 1 
-#         pred_matrix_our[j, index] = np.sum(bins)
+tss_index = 0
+for index, info in enumerate(test_info):
+    if index % 100 == 0:
+        print(index, end=" ")
+    batch = []
+    # for rvc in [True, False]:
+    for i in [0]: # range(-1, 2, 1)
+        seq = get_seq([info[0], info[1] + i])
+    # seq = get_seq([info[0], info[1]])
+    #         if rvc:
+    #             seq = rev_comp(seq)
+        batch.append(seq)
+    batch = np.asarray(batch, dtype=bool)
+    pr = our_model.predict(mo.wrap2(batch, p.predict_batch_size), verbose = 0)
+    p1 = np.mean(pr[1], axis=0) # SC is removed, replace by pr[0]!!!!!!!!!!!
+    for j, track in enumerate(eval_tracks):
+        t = track_ind_our[track]
+        bins = [p1[t, p.mid_bin - 1], p1[t, p.mid_bin], p1[t, p.mid_bin + 1]]
+        counts[bins.index(max(bins))] += 1 
+        pred_matrix_our[j, index] = np.sum(bins)
 
-# print("")
-# print(counts)
-# end = time.time()
-# print("Our time")
-# print(end - start)
-# joblib.dump(pred_matrix_our, "pred_matrix_our.p", compress=3)
+print("")
+print(counts)
+end = time.time()
+print("Our time")
+print(end - start)
+joblib.dump(pred_matrix_our, "pred_matrix_our.p", compress=3)
 
 final_pred_our = {}
 for i in range(len(test_info)):
@@ -333,7 +334,7 @@ def eval_perf(eval_gt, final_pred):
 
     print("")
     print(f"Across tracks {len(corr_s)} {np.mean(corr_s)}")
-
+    scatter_data.append(np.asarray(corr_s))
     corr_s = []
     for track in eval_tracks:
         a = []
@@ -352,43 +353,9 @@ def eval_perf(eval_gt, final_pred):
         else:
             corr_s.append(0)
     print(f"Across genes {len(corr_s)} {np.mean(corr_s)}")
-
-def eval_perf_norm(eval_gt, final_pred):
-    corr_s = []
-    for i in range(len(eval_gt[0])):
-        a = final_pred[:, i]
-        b = eval_gt[:, i]
-        a = np.nan_to_num(a, neginf=0, posinf=0)
-        b = np.nan_to_num(b, neginf=0, posinf=0)
-        if np.sum(b)==0:
-            print(gene)
-            continue
-        sc = stats.spearmanr(a, b)[0]
-        if not math.isnan(sc):
-            corr_s.append(sc)
-        else:
-            corr_s.append(0)
-
-    print("")
-    print(f"Across genes {len(corr_s)} {np.median(corr_s)}")
-    scatter_data.append(corr_s)
-    corr_s = []
-    for i in range(len(eval_gt)):
-        a = final_pred[i, :]
-        b = eval_gt[i, :]
-        a = np.nan_to_num(a, neginf=0, posinf=0)
-        b = np.nan_to_num(b, neginf=0, posinf=0)
-        if np.sum(b)==0:
-            print(track)
-            continue
-        sc = stats.spearmanr(a, b)[0]
-        if not math.isnan(sc):
-            corr_s.append(sc)
-        else:
-            corr_s.append(0)
-    print(f"Across tracks {len(corr_s)} {np.median(corr_s)}")
-    scatter_data.append(corr_s)
+    scatter_data.append(np.asarray(corr_s))
     return scatter_data
+    
 
 print("Enformer =================================================")
 scatter_data_enf = eval_perf(eval_gt, final_pred_enformer)
@@ -396,20 +363,65 @@ print("OUR =================================================")
 scatter_data_our = eval_perf(eval_gt, final_pred_our)
 
 
-fig, axs = plt.subplots(1,2,figsize=(15, 5))
-sns.scatterplot(x=scatter_data_our[0], y=scatter_data_enf[0], ax=axs[0])
+fig, axs = plt.subplots(1,2,figsize=(20, 10))
+r, p = stats.pearsonr(scatter_data_our[0], scatter_data_enf[0])
+sns.scatterplot(x=scatter_data_our[0], y=scatter_data_enf[0], ax=axs[0], label="r = {0:.2f}; p = {1:.2e}".format(r, p))
+axs[0].axline((0, 0), (1, 1), color='r', lw=2)
 axs[0].set_xlim(0, 1)
 axs[0].set_ylim(0, 1)
-axs[0].plot([0, 0], [1, 1], linewidth=2, transform=axs[0].transAxes)
-sns.scatterplot(x=scatter_data_our[1], y=scatter_data_enf[1], ax=axs[1])
+axs[0].set_title("Across tracks")
+axs[0].set(xlabel='Chromix', ylabel='Enformer')
+r, p = stats.pearsonr(scatter_data_our[1], scatter_data_enf[1])
+sns.scatterplot(x=scatter_data_our[1], y=scatter_data_enf[1], ax=axs[1], label="r = {0:.2f}; p = {1:.2e}".format(r, p))
+axs[1].axline((0, 0), (1, 1), color='r', lw=2)
 axs[1].set_xlim(0, 1)
 axs[1].set_ylim(0, 1)
-axs[1].plot([0, 0], [1, 1], linewidth=2, transform=axs[1].transAxes)
-ax.set(xlabel='Predicted', ylabel='Ground truth')
-plt.title("Gene expression prediction")
+axs[1].set_title("Across genes")
+axs[1].set(xlabel='Chromix', ylabel='Enformer')
+plt.suptitle('Enformer comparision')
 plt.tight_layout()
 plt.savefig("predictions_scatter.svg")
 
+
+# sns.set(font_scale = 2.5)
+# t, p = ttest_ind(scatter_data_our[1], scatter_data_enf[1])
+# print(f"Chromix/Enformer ttest: {t} {p}")
+
+# fig, axs = plt.subplots(1,1,figsize=(10, 10))
+
+# df1 = pd.DataFrame(np.asarray([scatter_data_our[1], ["Chromix"] * len(scatter_data_our[1])]).T, columns=['Correlation', 'Method'])
+# df2 = pd.DataFrame(np.asarray([scatter_data_enf[1], ["Enformer"] * len(scatter_data_enf[1])]).T, columns=['Correlation', 'Method'])
+
+# merged = pd.concat([df1, df2], ignore_index=True, axis=0)
+# merged.reset_index(drop=True, inplace=True)
+# merged['Correlation'] = merged['Correlation'].astype(float)
+# print(merged.shape)
+# sns.histplot(data=merged, x="Correlation", hue="Method", ax=axs, bins=50, element="step", binrange=(0.75, 1.0))
+# axs.text(0.76, 90, "t = {0:.2f}\np = {1:.2e}".format(t, p), horizontalalignment='left', size='medium', color='black', weight='semibold')
+# plt.title("Gene expression prediction")
+# plt.tight_layout()
+# plt.savefig("predictions_histplot.svg")
+
+# lib_dict = pd.read_csv('data/lib_size.csv', sep=",", header=None, index_col=0, squeeze=True).to_dict()
+
+# sizes = []
+# for track in eval_tracks:
+#     sizes.append(int(lib_dict[full_name[track]]))
+
+
+# fig, axs = plt.subplots(1,2,figsize=(10, 5))
+# r, p = stats.pearsonr(scatter_data_our[1], sizes)
+# sns.scatterplot(x=scatter_data_our[1], y=sizes, ax=axs[0], label="r = {0:.2f}; p = {1:.2e}".format(r, p))
+# axs[0].set_title("Chromix")
+# axs[0].set(xlabel='Chromix', ylabel='Library size')
+# r, p = stats.pearsonr(scatter_data_enf[1], sizes)
+# sns.scatterplot(x=scatter_data_enf[1], y=sizes, ax=axs[1], label="r = {0:.2f}; p = {1:.2e}".format(r, p))
+# axs[1].set_title("Enformer")
+# axs[1].set(xlabel='Enformer', ylabel='Library size')
+# plt.suptitle('Library size analysis')
+# plt.tight_layout()
+# plt.savefig("lib_size_scatter.svg")
+# plt.clf()
 
 # gt = np.zeros((len(eval_tracks), len(eval_gt.keys())))
 # enf = np.zeros((len(eval_tracks), len(eval_gt.keys())))

@@ -98,23 +98,23 @@ def resnet(input_x, input_size):
             y2 = tf.transpose(y, [0, 2, 1])
             y2 = Dense(current_len * 2, name=cname + "mlp_1")(y2)
             y2 = Activation(tf.nn.gelu)(y2)
-            y2 = MonteCarloDropout(0.1)(y2)
+            # y2 = MonteCarloDropout(0.1)(y2)
             y2 = Dense(current_len, name=cname + "mlp_2")(y2)
             y2 = tf.transpose(y2, [0, 2, 1])
-            y = Concatenate(axis=-1)([y1, y2])
+            y = y1 + y2 # Concatenate(axis=-1)([y1, y2])
         else:
             y = y1
         y = LayerNormalization(epsilon=1e-6)(y)
         # Pointwise to mix the channels
         y = Conv1D(4 * num_filters, kernel_size=1, padding="same", name=cname + "pointwise_1")(y)
         y = Activation(tf.nn.gelu)(y)
-        y = MonteCarloDropout(0.1)(y)
+        # y = MonteCarloDropout(0.1)(y)
         y = Conv1D(num_filters, kernel_size=1, padding="same", name=cname + "pointwise_2")(y)
         x = x + y
 
     x = LayerNormalization(epsilon=1e-6)(x)
     x = Conv1D(4096, kernel_size=1, name="body_output", activation=tf.nn.gelu)(x)
-    x = MonteCarloDropout(0.05)(x)
+    # x = MonteCarloDropout(0.05)(x)
     return x
 
 
@@ -246,14 +246,21 @@ def batch_predict_effect(p, model, seqs1, seqs2):
         print(w, end=" ")
         p1s = []
         for i in range(n_times):
-            p1s.append(body.predict(wrap2(seqs1[w:w + p.w_step], p.predict_batch_size)))
+            p1s.append(body.predict(wrap2(seqs1[w:w + p.w_step], p.predict_batch_size), verbose = 0))
         p1 = np.mean(p1s, axis=0)
         # pr = model.predict(wrap2(seqs1[w:w + p.w_step], p.predict_batch_size))
         # p1 = np.concatenate((pr[0], pr[1], pr[2]), axis=1)
         p2s = []
         for i in range(n_times):
-            p2s.append(body.predict(wrap2(seqs2[w:w + p.w_step], p.predict_batch_size)))
+            p2s.append(body.predict(wrap2(seqs2[w:w + p.w_step], p.predict_batch_size), verbose = 0))
         p2 = np.mean(p2s, axis=0)
+        expression = p1[:, :, p.mid_bin] 
+        expression = np.squeeze(expression)
+        expression = np.max(expression, axis=1, keepdims=True)
+
+        fold_change = p2[:, :, p.mid_bin] / p1[:, :, p.mid_bin] 
+        fold_change = np.squeeze(fold_change)
+        fold_change = np.max(fold_change, axis=1, keepdims=True)
         # pr = model.predict(wrap2(seqs2[w:w + p.w_step], p.predict_batch_size))
         # p2 = np.concatenate((pr[0], pr[1], pr[2]), axis=1)
         effect = np.max(np.abs(p1 - p2), axis=-1)
@@ -265,35 +272,97 @@ def batch_predict_effect(p, model, seqs1, seqs2):
         # effect = np.concatenate((effect3, effect4), axis=-1)
         if w == 0:
             predictions = effect
+            fold_changes = fold_change
+            expressions = expression
+        else:
+            predictions = np.concatenate((predictions, effect))
+            fold_changes = np.concatenate((fold_changes, fold_change))
+            expressions = np.concatenate((expressions, expression))
+    fold_changes = np.clip(fold_changes, 0, 100)
+    fold_changes = np.log(fold_changes + 1)
+    fold_changes[np.isnan(fold_changes)] = -1
+    return predictions, fold_changes
+
+
+def batch_predict_effect_long(p, model, seqs1, seqs2):
+    body = model.get_layer("our_resnet")
+    n_times = 2
+    for w in range(0, len(seqs1), p.w_step):
+        print(w, end=" ")
+        p1s = []
+        for i in range(n_times):
+            p1s.append(body.predict(wrap2(seqs1[w:w + p.w_step], p.predict_batch_size), verbose = 0))
+        p1 = np.mean(p1s, axis=0)
+        p2s = []
+        for i in range(n_times):
+            p2s.append(body.predict(wrap2(seqs2[w:w + p.w_step], p.predict_batch_size), verbose = 0))
+        p2 = np.mean(p2s, axis=0)
+        long_range = np.abs(p1 - p2)
+        mid = long_range.shape[-2] // 2
+        long_range = np.delete(long_range, np.s_[mid - 24:mid + 24], -2)
+        effect = np.max(long_range, axis=-1)
+        if w == 0:
+            predictions = effect
+            # print(f"mid {mid} shape {long_range.shape}")
         else:
             predictions = np.concatenate((predictions, effect))
     return predictions
 
 
 def batch_predict_effect2(p, model, seqs1, seqs2, inds):
-    n_times = 3
+    n_times = 2
     for w in range(0, len(seqs1), p.w_step):
         print(w, end=" ")
-
+        # print(f"seqs shape {np.asarray(seqs1[w:w + p.w_step]).shape}")
         p1s = []
         for i in range(n_times):
-            p1s.append(model.predict(wrap2(seqs1[w:w + p.w_step], p.predict_batch_size))[0])
+            p1s.append(model.predict(wrap2(seqs1[w:w + p.w_step], p.predict_batch_size), verbose = 0))
+        # print(f"p1s {np.asarray(p1s).shape}")
         p1 = np.mean(p1s, axis=0)
         p1 = p1[:, inds, :]
-
+        # print(f"p1 {p1.shape}")
         p2s = []
         for i in range(n_times):
-            p2s.append(model.predict(wrap2(seqs2[w:w + p.w_step], p.predict_batch_size))[0])
+            p2s.append(model.predict(wrap2(seqs2[w:w + p.w_step], p.predict_batch_size), verbose = 0))
         p2 = np.mean(p2s, axis=0)
         p2 = p2[:, inds, :]
 
         effect = np.max(np.abs(p1 - p2), axis=-2)
+        # print(f"effect {effect.shape}")
         if w == 0:
             predictions = effect
         else:
             predictions = np.concatenate((predictions, effect), dtype=np.float16)
     return predictions
 
+def batch_predict_effect_linking(p, model, seqs1, seqs2, tss_positions):
+    body = model.get_layer("our_resnet")
+    n_times = 3
+    for w in range(0, len(seqs1), p.w_step):
+        print(w, end=" ")
+        p1s = []
+        for i in range(n_times):
+            p1s.append(body.predict(wrap2(seqs1[w:w + p.w_step], p.predict_batch_size), verbose = 0))
+        p1 = np.mean(p1s, axis=0)
+        p_cutout = []
+        for j in range(len(p1)):
+            p_cutout.append(np.concatenate((p1[j][len(p1[j]) // 2 - 10: len(p1[j]) // 2 + 10], p1[j][tss_positions[w + j] - 10: tss_positions[w + j] + 10])))
+        p1 = np.asarray(p_cutout)
+        p2s = []
+        for i in range(n_times):
+            p2s.append(body.predict(wrap2(seqs2[w:w + p.w_step], p.predict_batch_size), verbose = 0))
+        p2 = np.mean(p2s, axis=0)
+        p_cutout = []
+        for j in range(len(p2)):
+            p_cutout.append(np.concatenate((p2[j][len(p2[j]) // 2 - 10: len(p2[j]) // 2 + 10], p2[j][tss_positions[w + j] - 10: tss_positions[w + j] + 10])))
+        p2 = np.asarray(p_cutout)
+        effect = np.max(np.abs(p1 - p2), axis=-1)
+        if w == 0:
+            predictions = effect
+        else:
+            predictions = np.concatenate((predictions, effect))
+    return predictions
+    
 
 # from https://github.com/deepmind/deepmind-research/blob/master/enformer/enformer.py
 def exponential_linspace_int(start, end, num, divisible_by=1):

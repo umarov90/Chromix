@@ -52,7 +52,6 @@ def parse_tracks(p):
                 size = os.path.getsize(fn)
                 if size > 200000 or filename.startswith("sc"):
                     track_names.append(filename)
-                track_names.append(filename)
 
         print(f"Number of tracks {len(track_names)}")
 
@@ -83,6 +82,7 @@ def parse_tracks(p):
         for filename in os.listdir(p.parsed_tracks_folder):
             if filename.endswith(".parsed"):
                 track_names.append(filename)
+        print(f"Final number of tracks {len(track_names)}")
         joblib.dump(track_names, f"{p.pickle_folder}track_names.gz", compress="lz4")
     return track_names
 
@@ -103,10 +103,10 @@ def parse_some_tracks(q, p, some_tracks, ga, bin_size, tracks_folder, meta):
                 meta_row = meta_row.iloc[0]
             else:
                 meta_row = None
-            # if not ("scend5" in track.lower() or (meta_row is not None and meta_row["value"] == "RNA")):
-            #     continue
-            if "scend5" not in track.lower() and not (meta_row is not None and meta_row["value"] == "RNA"):
+            if not ".RNA.ctss" in track:
                 continue
+            # if "scend5" not in track.lower() and not (meta_row is not None and meta_row["value"] == "RNA"):
+            #     continue
             # delete in case it already exists
             if Path(new_path).exists():
                 Path(new_path).unlink()
@@ -119,16 +119,17 @@ def parse_some_tracks(q, p, some_tracks, ga, bin_size, tracks_folder, meta):
                 df = df.rename(columns={0: "chr", 1: "start", 2: "end", 3: "id", 4: "score", 5: "strand", 6: "tss"})
                 df["mid"] = df["tss"] // bin_size
             total_reads = df['score'].sum()
-            print(df.iloc[df['score'].argmax()])
+            # print(df.iloc[df['score'].argmax()])
             if meta_row is not None and meta_row["value"] == "RNA" and total_reads < 1000000:
                 print(f"Skipping: {track}")
                 continue
 
-            df[["start", "end", "mid"]] = df[["start", "end", "mid"]].astype(int)
+            df["mid"] = df["mid"].astype(int)
             df["score"] = df["score"].astype(float)
             df = df[["chr", "start", "end", "score", "mid"]]
             chrd = list(df["chr"].unique())
 
+            total_bins = 0
             # group the scores over `key` and gather them in a list
             grouped_scores = df.groupby("chr").agg(list)
 
@@ -140,6 +141,15 @@ def parse_some_tracks(q, p, some_tracks, ga, bin_size, tracks_folder, meta):
                 pos, score = grouped_scores.loc[key, ["mid", "score"]]
                 # fancy indexing
                 gast[key][pos] += score
+                total_bins += np.count_nonzero(gast[key])
+
+            # if meta_row is not None and meta_row["value"] == "RNA" and total_bins < 200000:
+            #     print(f"Skipping: {track} {total_bins}")
+            #     continue
+
+            # if total_bins < 20000:
+            #     print(f"Skipping nonrna: {track} {total_bins}")
+            #     continue
 
             max_val = -1
             cid = 0
@@ -150,16 +160,20 @@ def parse_some_tracks(q, p, some_tracks, ga, bin_size, tracks_folder, meta):
                 elif meta_row is None:
                     gast[key] = np.log10(gast[key] + 1)
                     cid = 2
-                elif meta_row["value"] == "RNA":
-                    gast[key] = np.log10(gast[key] + 1)
+                elif meta_row["value"] == "conservation":
                     cid = 3
+                    pass
+                else:
+                    cid = 4
+                    gast[key] = np.log10(gast[key] + 1)
                 max_val = max(np.max(gast[key]), max_val)
             for key in gast.keys():
                 gast[key] = gast[key] / max_val
                 gast[key] = gaussian_filter(gast[key], sigma=1.0)
                 gast[key] = gast[key].astype(np.float16)            
             joblib.dump(gast, new_path, compress="lz4")
-            print(f"Parsed {track}. Max value: {max_val}. Sum: {total_reads}. CID: {cid}")
+            # print(f"Parsed {track}. Max value: {max_val}. Sum: {total_reads}. Total bins: {total_bins}. CID: {cid}")
+            print(f"{track_name}, {total_reads}")
         except Exception as exc:
             print(exc)
             traceback.print_exc()
@@ -314,6 +328,49 @@ def par_load_data(output_scores_info, tracks, p):
     return output_scores
 
 
+def par_load_data_temp(output_scores_info, tracks, p):
+    mp_q = mp.Queue()
+    ps = []
+    start = 0
+    nproc = min(mp.cpu_count(), len(tracks))
+    print(nproc)
+    step_size = len(tracks) // nproc
+    end = len(tracks)
+    if len(output_scores_info[0]) == 3:
+        load_func = load_data
+    else:
+        load_func = load_data_sum_temp
+    for t in range(start, end, step_size):
+        t_end = min(t + step_size, end)
+        load_proc = mp.Process(target=load_func,
+                               args=(mp_q, p, tracks[t:t_end], output_scores_info, t, t_end,))
+        load_proc.start()
+        ps.append(load_proc)
+
+    for load_proc in ps:
+        load_proc.join()
+    print(mp_q.get())
+
+    output_scores = []
+    for t in range(start, end, step_size):
+        output_scores.append(joblib.load(f"{p.temp_folder}tdata{t}"))
+    output_scores = np.concatenate(output_scores, axis=1, dtype=np.float16)
+    gc.collect()
+    return output_scores
+
+def load_data_sum_temp(mp_q, p, tracks, scores, t, t_end):
+    scores_after_loading = np.zeros((len(scores), t_end - t), dtype=np.float16)
+    for i, track_name in enumerate(tracks):
+        parsed_track = joblib.load(p.parsed_tracks_folder + track_name)
+        for j in range(len(scores)):
+            # 3 or 6 bins?
+            pt = parsed_track[scores[j][0]]
+            mid = int(scores[j][1])
+            scores_after_loading[j, i] = np.sum(pt[mid - 3: mid + 3])
+    joblib.dump(scores_after_loading, f"{p.temp_folder}tdata{t}", compress="lz4")
+    mp_q.put(None)
+
+
 def par_load_hic_data(hic_tracks, p, picked_regions, half):
     mp_q = mp.Queue()
     ps = []
@@ -366,4 +423,55 @@ def load_hic_data(mp_q, hic_tracks, picked_regions, t, p, half):
 
             hic_data[i].append(hic_mat)
     joblib.dump(hic_data, f"{p.temp_folder}hic_data{t}", compress="lz4")
+    mp_q.put(None)
+
+
+def par_load_hic_data_one(hic_tracks, p, picked_regions):
+    mp_q = mp.Queue()
+    ps = []
+
+    nproc = min(mp.cpu_count(), len(picked_regions))
+    print(nproc)
+    step_size = len(picked_regions) // nproc
+    end = len(picked_regions)
+
+    for t in range(0, end, step_size):
+        t_end = min(t + step_size, end)
+        load_proc = mp.Process(target=load_hic_data_one,
+                               args=(mp_q, hic_tracks, picked_regions[t:t_end], t, p,))
+        load_proc.start()
+        ps.append(load_proc)
+
+    for load_proc in ps:
+        load_proc.join()
+    print(mp_q.get())
+
+    output_scores = []
+    for t in range(0, end, step_size):
+        output_scores.append(joblib.load(f"{p.temp_folder}hic_data_one{t}"))
+    output_scores = np.concatenate(output_scores, axis=0, dtype=np.float16)
+    gc.collect()
+    return output_scores
+
+
+def load_hic_data_one(mp_q, hic_tracks, picked_regions, t, p):
+    hic_bin_size = 5000
+    hic_data = []
+    for i in range(len(picked_regions)):
+        hic_data.append([])
+
+    for hic in hic_tracks:
+        c = cooler.Cooler(p.hic_folder + hic + "::resolutions/" + str(hic_bin_size))
+        for i, info in enumerate(picked_regions):
+            start_hic = info[1] - hic_bin_size // 2 - info[1] % hic_bin_size
+            end_hic = info[2] - hic_bin_size // 2 - info[2] % hic_bin_size
+            if start_hic == end_hic:
+                end_hic = end_hic + 1
+            try:
+                hic_data[i].append(c.matrix(balance=True, field="count").fetch(f'{info[0]}:{start_hic}-{end_hic}')[0, -1])
+            except:
+                hic_data[i].append(0)
+                print(info)
+    hic_data = np.mean(hic_data, axis=-1)
+    joblib.dump(hic_data, f"{p.temp_folder}hic_data_one{t}", compress="lz4")
     mp_q.put(None)

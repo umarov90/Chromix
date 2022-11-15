@@ -81,25 +81,25 @@ def eval_perf(p, our_model, head, eval_infos_all, should_draw, current_epoch, la
             track_types[track] = "scEnd5"
     print(f"Number of tracks for bed: {len(track_inds_bed)}")
     print("Predicting")
-    predictions = joblib.load("pred.gz")
-    # for w in range(0, len(test_seq), p.w_step):
-    #     print(w, end=" ")
-    #     pr = our_model.predict(mo.wrap2(test_seq[w:w + p.w_step], p.predict_batch_size))
-    #     if len(head.keys()) > 1:
-    #         p1 = np.concatenate((pr[0], pr[1], pr[2], pr[3]), axis=1)
-    #     else:
-    #         p1 = pr
-    #     p2 = p1[:, :, p.mid_bin - 1] + p1[:, :, p.mid_bin] + p1[:, :, p.mid_bin + 1]
-    #     if w == 0:
-    #         predictions = p2
-    #     else:
-    #         predictions = np.concatenate((predictions, p2), dtype=np.float16)
-    #     predictions_for_bed = p1
-    #
-    #     p1 = None
-    #     p2 = None
-    #     predictions_for_bed = None
-    #     gc.collect()
+    # predictions = joblib.load("pred.gz")
+    for w in range(0, len(test_seq), p.w_step):
+        print(w, end=" ")
+        pr = our_model.predict(mo.wrap2(test_seq[w:w + p.w_step], p.predict_batch_size))
+        if len(head.keys()) > 1:
+            p1 = np.concatenate((pr[0], pr[1], pr[2]), axis=1)
+        else:
+            p1 = pr
+        p2 = p1[:, :, p.mid_bin - 1] + p1[:, :, p.mid_bin] + p1[:, :, p.mid_bin + 1]
+        if w == 0:
+            predictions = p2
+        else:
+            predictions = np.concatenate((predictions, p2), dtype=np.float16)
+        predictions_for_bed = p1
+    
+        p1 = None
+        p2 = None
+        predictions_for_bed = None
+        gc.collect()
     # joblib.dump(predictions, "pred.gz", compress="lz4")
     final_pred = {}
     for i in range(len(eval_infos)):

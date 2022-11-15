@@ -32,7 +32,7 @@ matplotlib.use("agg")
 def get_data_and_train(last_proc, fit_epochs):
     print(datetime.now().strftime('[%H:%M:%S] ') + "Epoch " + str(current_epoch))
     # training regions are shuffled each iteration
-    shuffled_regions_info = random.sample(training_regions, len(training_regions_tss)) + training_regions_tss
+    shuffled_regions_info = random.sample(training_regions, len(training_regions_tss)) + training_regions_tss # // 2
     shuffled_regions_info = random.sample(shuffled_regions_info, len(shuffled_regions_info))
     input_sequences = []
     output_scores_info = []
@@ -267,8 +267,8 @@ def check_perf(mp_q):
         training_result = "0"
         valid_eval_chr_info = []
         for info in valid_info:
-            if info[0] == "chr2":
-                valid_eval_chr_info.append(info)
+            # if info[0] == "chr2":
+            valid_eval_chr_info.append(info)
         print(f"Valid set {len(valid_eval_chr_info)}")
         valid_result = evaluation.eval_perf(p, our_model, heads, valid_eval_chr_info,
                                              False, current_epoch, "valid", one_hot)
@@ -364,7 +364,7 @@ if __name__ == '__main__':
             # check_perf(mp_q)
             # exit()
             last_proc = get_data_and_train(last_proc, fit_epochs)
-            if current_epoch % 10 == 0 and current_epoch != 0:  # and current_epoch != 0:
+            if current_epoch % 50 == 0 and current_epoch != 0:  # and current_epoch != 0:
                 print("Eval epoch")
                 print(mp_q.get())
                 last_proc.join()

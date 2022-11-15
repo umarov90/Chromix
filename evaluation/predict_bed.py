@@ -31,7 +31,7 @@ with strategy.scope():
 
 all_start_vals = {}
 corrs = []
-for chrom in ["chr1"]: # one_hot.keys()
+for chrom in ["chr21"]: # one_hot.keys()
     print(f"\nPredicting {chrom} +++++++++++++++++++++++")
     start_val = {}
     batch = []
