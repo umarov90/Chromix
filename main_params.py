@@ -6,14 +6,14 @@ import pathlib
 
 class MainParams:
     def __init__(self):
-        self.input_size = 276480 # 276480
+        self.input_size = 600192 # 276480
         self.half_size = self.input_size // 2
         self.bin_size = 128
         self.hic_bin_size = 5000
-        self.hic_size = 1176
-        self.num_hic_bins = 50
+        self.hic_size = 4851
+        self.num_hic_bins = 100
         self.half_size_hic = (self.num_hic_bins // 2) * self.hic_bin_size
-        self.num_bins = 1000 # 1000
+        self.num_bins = 1563
         self.half_num_regions = self.num_bins // 2
         self.mid_bin = self.num_bins // 2
         self.BATCH_SIZE = 1
@@ -21,7 +21,7 @@ class MainParams:
         self.GLOBAL_BATCH_SIZE = self.NUM_GPU * self.BATCH_SIZE
         self.predict_batch_size = 2 * self.GLOBAL_BATCH_SIZE
         self.w_step = 200
-        self.STEPS_PER_EPOCH = 360
+        self.STEPS_PER_EPOCH = 250
         self.num_epochs = 1000
         self.num_features = 4
         self.script_folder = pathlib.Path(__file__).parent.resolve()
@@ -33,7 +33,7 @@ class MainParams:
         self.model_folder = folders[3]
         self.temp_folder = folders[4]
         self.pickle_folder = folders[5]
-        self.model_name = "our_model_276480" # "our_model_small.h5"
+        self.model_name = "chromix_600192"
         self.model_path = self.model_folder + self.model_name
         self.figures_folder = "figures_1"
         self.tracks_folder = "/media/user/PASSPORT1/variants_100/tracks/hg38/"

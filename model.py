@@ -56,7 +56,7 @@ def make_head(track_num, num_regions, output1d, name):
     head_input = Input(shape=(seq_len, features))
     x = head_input
 
-    trim = (x.shape[-2] - num_regions) // 2
+    trim = (x.shape[-2] - num_regions) // 2 # 4689 - 1563
     x = x[..., trim:-trim, :]
 
     outputs = Conv1D(track_num, kernel_size=1, strides=1, name=name + "_last_conv1d")(x)
@@ -68,7 +68,7 @@ def make_head(track_num, num_regions, output1d, name):
 def resnet(input_x, input_size):
     print("Version 1.21")
     # Initial number of filters
-    num_filters = 768
+    num_filters = 768 # 768
     mlp_start_block = 6
     num_blocks = 10
     patchify_val = 4
@@ -98,7 +98,7 @@ def resnet(input_x, input_size):
             y2 = tf.transpose(y, [0, 2, 1])
             y2 = Dense(current_len * 2, name=cname + "mlp_1")(y2)
             y2 = Activation(tf.nn.gelu)(y2)
-            # y2 = MonteCarloDropout(0.1)(y2)
+            y2 = MonteCarloDropout(0.1)(y2)
             y2 = Dense(current_len, name=cname + "mlp_2")(y2)
             y2 = tf.transpose(y2, [0, 2, 1])
             y = y1 + y2 # Concatenate(axis=-1)([y1, y2])
@@ -108,13 +108,13 @@ def resnet(input_x, input_size):
         # Pointwise to mix the channels
         y = Conv1D(4 * num_filters, kernel_size=1, padding="same", name=cname + "pointwise_1")(y)
         y = Activation(tf.nn.gelu)(y)
-        # y = MonteCarloDropout(0.1)(y)
+        y = MonteCarloDropout(0.1)(y)
         y = Conv1D(num_filters, kernel_size=1, padding="same", name=cname + "pointwise_2")(y)
         x = x + y
 
     x = LayerNormalization(epsilon=1e-6)(x)
     x = Conv1D(4096, kernel_size=1, name="body_output", activation=tf.nn.gelu)(x)
-    # x = MonteCarloDropout(0.05)(x)
+    x = MonteCarloDropout(0.1)(x)
     return x
 
 

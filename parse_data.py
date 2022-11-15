@@ -103,8 +103,8 @@ def parse_some_tracks(q, p, some_tracks, ga, bin_size, tracks_folder, meta):
                 meta_row = meta_row.iloc[0]
             else:
                 meta_row = None
-            if not ".RNA.ctss" in track:
-                continue
+            # if not ".RNA.ctss" in track:
+            #     continue
             # if "scend5" not in track.lower() and not (meta_row is not None and meta_row["value"] == "RNA"):
             #     continue
             # delete in case it already exists
@@ -172,7 +172,7 @@ def parse_some_tracks(q, p, some_tracks, ga, bin_size, tracks_folder, meta):
                 gast[key] = gaussian_filter(gast[key], sigma=1.0)
                 gast[key] = gast[key].astype(np.float16)            
             joblib.dump(gast, new_path, compress="lz4")
-            # print(f"Parsed {track}. Max value: {max_val}. Sum: {total_reads}. Total bins: {total_bins}. CID: {cid}")
+            print(f"Parsed {track}. Max value: {max_val}. Sum: {total_reads}. Total bins: {total_bins}. CID: {cid}")
             print(f"{track_name}, {total_reads}")
         except Exception as exc:
             print(exc)

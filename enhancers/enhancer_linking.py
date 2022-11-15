@@ -98,7 +98,7 @@ def get_linking_AUC():
     Y_label = []
     region_type = []
     distances = []
-    mark_pos = []
+    enhancer_pos = []
     picked_regions_hic = []
     tss_pos = []
     for index, row in df.iterrows():    
@@ -110,7 +110,7 @@ def get_linking_AUC():
             Y_label.append(row['Significant'])
             distances.append(abs(relative))
             region_type.append(row['Significant'])
-            mark_pos.append([row["chr"], row["mid"] // p.bin_size])
+            enhancer_pos.append([row["chr"], row["mid"] // p.bin_size])
             picked_regions_hic.append([row["chr"], min(row["mid"], row["Gene TSS"]), max(row["mid"], row["Gene TSS"])])
             tss_pos.append([row["chr"], row["Gene TSS"] // p.bin_size])
             seqs1.append(seq1)
@@ -158,42 +158,42 @@ def get_linking_AUC():
                 signals = np.concatenate((signals, signal), axis=1)
         return signals
 
-    signals = get_signals(mark_pos, head["epigenome"], marks)
+    signals = get_signals(enhancer_pos, head["epigenome"], marks)
     signals_tss = get_signals(tss_pos, head["epigenome"], marks)
     print(f"Signals {signals.shape}")
 
-    def compute_corrs(a, b):
-        corrs = []
-        for i in range(len(a)):
-            corrs.append(stats.spearmanr(a[i], b[i])[0])
-        corrs = np.expand_dims(np.asarray(corrs), axis=1)
-        corrs[np.isnan(corrs)] = 0
-        return corrs
-
-    def sanity_check(some_signal, name):
-        p = []
-        n = []
-        for i in range(len(Y_label)):
-            if Y_label[i]:
-                p.append(some_signal[i])
-            else:
-                n.append(some_signal[i])
-        print(f"{name} Avg p {np.mean(p)} Avg n {np.mean(n)}")
-
-    signals_enh_cage = get_signals(mark_pos, head["expression"], ["cage."])
-    signals_tss_cage = get_signals(tss_pos, head["expression"], ["cage."])
-    cage_corr = compute_corrs(signals_enh_cage, signals_tss_cage)
-    sanity_check(cage_corr, "CAGE corr")
-
-    signals_enh_atac = get_signals(mark_pos, head["epigenome"], ["atac."])
-    signals_tss_atac = get_signals(tss_pos, head["epigenome"], ["atac."])
-    atac_corr = compute_corrs(signals_enh_atac, signals_tss_atac)
-    sanity_check(atac_corr, "atac_corr")
-
-    signals_enh_ac = get_signals(mark_pos, head["epigenome"], ["h3k27ac"])
-    signals_tss_ac = get_signals(tss_pos, head["epigenome"], ["h3k27ac"])
-    ac_corr = compute_corrs(signals_enh_ac, signals_tss_ac)
-    sanity_check(ac_corr, "ac_corr")
+    # def compute_corrs(a, b):
+    #     corrs = []
+    #     for i in range(len(a)):
+    #         corrs.append(stats.spearmanr(a[i], b[i])[0])
+    #     corrs = np.expand_dims(np.asarray(corrs), axis=1)
+    #     corrs[np.isnan(corrs)] = 0
+    #     return corrs
+    #
+    # def sanity_check(some_signal, name):
+    #     p = []
+    #     n = []
+    #     for i in range(len(Y_label)):
+    #         if Y_label[i]:
+    #             p.append(some_signal[i])
+    #         else:
+    #             n.append(some_signal[i])
+    #     print(f"{name} Avg p {np.mean(p)} Avg n {np.mean(n)}")
+    #
+    # signals_enh_cage = get_signals(enhancer_pos, head["expression"], ["cage."], False)
+    # signals_tss_cage = get_signals(tss_pos, head["expression"], ["cage."], False)
+    # cage_corr = compute_corrs(signals_enh_cage, signals_tss_cage)
+    # sanity_check(cage_corr, "CAGE corr")
+    #
+    # signals_enh_atac = get_signals(enhancer_pos, head["epigenome"], ["atac."], False)
+    # signals_tss_atac = get_signals(tss_pos, head["epigenome"], ["atac."], False)
+    # atac_corr = compute_corrs(signals_enh_atac, signals_tss_atac)
+    # sanity_check(atac_corr, "atac_corr")
+    #
+    # signals_enh_ac = get_signals(enhancer_pos, head["epigenome"], ["h3k27ac"], False)
+    # signals_tss_ac = get_signals(tss_pos, head["epigenome"], ["h3k27ac"], False)
+    # ac_corr = compute_corrs(signals_enh_ac, signals_tss_ac)
+    # sanity_check(ac_corr, "ac_corr")
 
     hic_keys = pd.read_csv("data/good_hic.tsv", sep="\t", header=None).iloc[:, 0]
     hic_signal = parser.par_load_hic_data_one(hic_keys, p, picked_regions_hic)
@@ -220,7 +220,7 @@ def get_linking_AUC():
     latent_vectors = reducer.fit_transform(dif)
     distances = np.asarray(distances)
     distances = np.expand_dims(distances, axis=1)
-    add_features = np.concatenate((signals, signals_tss, hic_signal, distances, cage_corr, atac_corr, ac_corr), axis=-1) # , fold_changes
+    add_features = np.concatenate((signals, signals_tss, hic_signal, distances), axis=-1) # ,fold_changes, cage_corr, atac_corr, ac_corr
     print(f"add_features shape is !!!!!!!!!! {add_features.shape}")
     print(dif.shape)
     dif = np.concatenate((dif, add_features), axis=-1)
