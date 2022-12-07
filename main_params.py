@@ -19,8 +19,8 @@ class MainParams:
         self.BATCH_SIZE = 1
         self.NUM_GPU = 4
         self.GLOBAL_BATCH_SIZE = self.NUM_GPU * self.BATCH_SIZE
-        self.predict_batch_size = 2 * self.GLOBAL_BATCH_SIZE
-        self.w_step = 200
+        self.predict_batch_size = self.GLOBAL_BATCH_SIZE
+        self.w_step = 50
         self.STEPS_PER_EPOCH = 250
         self.num_epochs = 1000
         self.num_features = 4

@@ -244,7 +244,7 @@ def check_perf(mp_q):
             our_model.get_layer("our_expression").set_weights(joblib.load(p.model_path + "_expression"))
             our_model.get_layer("our_epigenome").set_weights(joblib.load(p.model_path + "_epigenome"))
             our_model.get_layer("our_conservation").set_weights(joblib.load(p.model_path + "_conservation"))
-        auc = get_linking_AUC()
+        auc = 0 # get_linking_AUC()
         train_eval_chr = "chr1"
         train_eval_chr_info = []
         for info in train_info:
@@ -347,8 +347,8 @@ if __name__ == '__main__':
     fit_epochs = 1
     try:
         for current_epoch in range(start_epoch, p.num_epochs, 1):
-            # check_perf(mp_q)
-            # exit()
+            check_perf(mp_q)
+            exit()
             last_proc = get_data_and_train(last_proc, fit_epochs)
             if current_epoch % 20 == 0 and current_epoch != 0:  # and current_epoch != 0:
                 print("Eval epoch")

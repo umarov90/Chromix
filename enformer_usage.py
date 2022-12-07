@@ -57,8 +57,15 @@ class EnformerScoreVariantsRaw:
   def predict_on_batch(self, inputs):
     ref_prediction = self._model.predict_on_batch(inputs['ref'])[self._organism]
     alt_prediction = self._model.predict_on_batch(inputs['alt'])[self._organism]
-
-    return alt_prediction.mean(axis=1) - ref_prediction.mean(axis=1)
+    # if (inputs['ref']==inputs['alt']).all():
+    #     print("identical seqs provided!")
+    # if (alt_prediction==ref_prediction).all():
+    #     print("identical predictions")
+    # else:
+    #     print("different predictions")
+    effect = np.max(np.abs(alt_prediction - ref_prediction), axis=-1)
+    # effect = alt_prediction.mean(axis=1) - ref_prediction.mean(axis=1)
+    return effect
 
 
 class EnformerScoreVariantsNormalized:
@@ -138,13 +145,13 @@ def variant_generator(vcf_file, gzipped=False):
 def one_hot_encode(sequence):
   return kipoiseq.transforms.functional.one_hot_dna(sequence).astype(np.float32)
 
-
+enformer_score_variants_pca = EnformerScoreVariantsPCANormalized(model_path, transform_path)
+enformer_score_variants = EnformerScoreVariantsRaw(model_path)
 def calculate_effect(seqs1, seqs2):
   effects = []
   for i in range(len(seqs1)):
     if i % 100 == 0:
       print(i, end=" ")
-    enformer_score_variants = EnformerScoreVariantsRaw(model_path)
     variant_scores = enformer_score_variants.predict_on_batch({"ref": seqs1[i][np.newaxis], "alt": seqs2[i][np.newaxis]})[0]
     # print(f"{np.max(variant_scores)} {np.min(variant_scores)}")
     effects.append(variant_scores)
@@ -155,8 +162,7 @@ def calculate_effect_pca(seqs1, seqs2):
   for i in range(len(seqs1)):
     if i % 50 == 0:
       print(i, end=" ")
-    enformer_score_variants = EnformerScoreVariantsPCANormalized(model_path, transform_path)
-    variant_scores = enformer_score_variants.predict_on_batch({"ref": seqs1[i][np.newaxis], "alt": seqs2[i][np.newaxis]})[0]
+    variant_scores = enformer_score_variants_pca.predict_on_batch({"ref": seqs1[i][np.newaxis], "alt": seqs2[i][np.newaxis]})[0]
     # print(f"{np.max(variant_scores)} {np.min(variant_scores)}")
     effects.append(variant_scores)
   return np.asarray(effects)

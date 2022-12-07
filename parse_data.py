@@ -10,7 +10,6 @@ import re
 import math
 import time
 import copy
-import main
 import pickle
 import itertools as it
 import traceback
@@ -89,8 +88,6 @@ def parse_tracks(p):
 
 def parse_some_tracks(q, p, some_tracks, ga, bin_size, tracks_folder, meta):
     for track in some_tracks:
-        # if Path(main.p.parsed_tracks_folder + track).is_file():
-        #     continue
         try:
             fn = tracks_folder + track
             track_name = track
@@ -152,27 +149,26 @@ def parse_some_tracks(q, p, some_tracks, ga, bin_size, tracks_folder, meta):
             #     continue
 
             max_val = -1
-            cid = 0
             for key in gast.keys():
                 if "scend5" in track.lower():
-                    gast[key] = np.log10(np.exp(gast[key]))
-                    cid = 1
+                    pass
                 elif meta_row is None:
                     gast[key] = np.log10(gast[key] + 1)
-                    cid = 2
                 elif meta_row["value"] == "conservation":
-                    cid = 3
                     pass
+                elif meta_row["value"] == "RNA":
+                    gast[key] = np.log10(gast[key] + 1)
+                    # gast[key] = np.log10(gast[key] * (1000000.0 / total_reads) + 1)
                 else:
-                    cid = 4
                     gast[key] = np.log10(gast[key] + 1)
                 max_val = max(np.max(gast[key]), max_val)
             for key in gast.keys():
+                # if not ".RNA.ctss" in track:
                 gast[key] = gast[key] / max_val
-                gast[key] = gaussian_filter(gast[key], sigma=1.0)
+                # gast[key] = gaussian_filter(gast[key], sigma=1.0)
                 gast[key] = gast[key].astype(np.float16)            
             joblib.dump(gast, new_path, compress="lz4")
-            print(f"Parsed {track}. Max value: {max_val}. Sum: {total_reads}. Total bins: {total_bins}. CID: {cid}")
+            print(f"Parsed {track}. Max value: {max_val}. Sum: {total_reads}. Total bins: {total_bins}.")
             print(f"{track_name}, {total_reads}")
         except Exception as exc:
             print(exc)
@@ -366,7 +362,7 @@ def load_data_sum_temp(mp_q, p, tracks, scores, t, t_end):
             # 3 or 6 bins?
             pt = parsed_track[scores[j][0]]
             mid = int(scores[j][1])
-            scores_after_loading[j, i] = np.sum(pt[mid - 3: mid + 3])
+            scores_after_loading[j, i] = pt[mid - 1] + pt[mid] + pt[mid + 1]
     joblib.dump(scores_after_loading, f"{p.temp_folder}tdata{t}", compress="lz4")
     mp_q.put(None)
 

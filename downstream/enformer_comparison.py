@@ -340,8 +340,10 @@ def eval_perf(eval_gt, final_pred):
         a = []
         b = []
         for gene in eval_gt.keys():
-            a.append(final_pred[gene][track])
-            b.append(eval_gt[gene][track])
+            if eval_gt[gene][track] > 0.6:
+                a.append(final_pred[gene][track])
+                b.append(eval_gt[gene][track])
+        print(f"{len(eval_gt.keys())}\t{len(a)}")
         a = np.nan_to_num(a, neginf=0, posinf=0)
         b = np.nan_to_num(b, neginf=0, posinf=0)
         if np.sum(b)==0:
