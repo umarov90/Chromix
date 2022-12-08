@@ -10,6 +10,7 @@ import re
 import math
 import time
 import copy
+import main
 import pickle
 import itertools as it
 import traceback
@@ -54,17 +55,17 @@ def parse_tracks(p):
 
         print(f"Number of tracks {len(track_names)}")
 
-        step_size = 50
+        step_size = 100
         q = mp.Queue()
         ps = []
         start = 0
-        nproc = 28
+        nproc = mp.cpu_count()
         end = len(track_names)
         for t in range(start, end, step_size):
             t_end = min(t+step_size, end)
             sub_tracks = track_names[t:t_end]
             proc = mp.Process(target=parse_some_tracks,
-                           args=(q, p, sub_tracks, ga, p.bin_size, tracks_folder,meta,))
+                           args=(q, p, sub_tracks, ga, p.bin_size, tracks_folder,meta,t,))
             proc.start()
             ps.append(proc)
             if len(ps) >= nproc:
@@ -86,8 +87,11 @@ def parse_tracks(p):
     return track_names
 
 
-def parse_some_tracks(q, p, some_tracks, ga, bin_size, tracks_folder, meta):
+def parse_some_tracks(q, p, some_tracks, ga, bin_size, tracks_folder, meta, t):
+    maxes = []
     for track in some_tracks:
+        # if Path(main.p.parsed_tracks_folder + track).is_file():
+        #     continue
         try:
             fn = tracks_folder + track
             track_name = track
@@ -118,7 +122,7 @@ def parse_some_tracks(q, p, some_tracks, ga, bin_size, tracks_folder, meta):
             total_reads = df['score'].sum()
             # print(df.iloc[df['score'].argmax()])
             if meta_row is not None and meta_row["value"] == "RNA" and total_reads < 1000000:
-                print(f"Skipping: {track}")
+                print(f"Skipping: {track} {total_reads}")
                 continue
 
             df["mid"] = df["mid"].astype(int)
@@ -131,6 +135,7 @@ def parse_some_tracks(q, p, some_tracks, ga, bin_size, tracks_folder, meta):
             grouped_scores = df.groupby("chr").agg(list)
 
             # for each key, value in the dictionary...
+            non_zero_all = []
             for key, val in gast.items():
                 if key not in chrd:
                     continue
@@ -139,6 +144,19 @@ def parse_some_tracks(q, p, some_tracks, ga, bin_size, tracks_folder, meta):
                 # fancy indexing
                 gast[key][pos] += score
                 total_bins += np.count_nonzero(gast[key])
+                non_zero = gast[key][np.where(gast[key] != 0)]
+                non_zero_all.append(non_zero)
+
+            non_zero_all = np.concatenate(non_zero_all, axis=0, dtype=np.float32)
+            mx = np.max(non_zero_all)
+            t1 = 0.01 * mx
+            t2 = 0.1 * mx
+            # non_zero_all = np.sort(non_zero_all)
+            # qnts = np.quantile(non_zero_all, [0.99, 0.998])
+            # print(f"{track} {np.max(non_zero_all)}", end=": ")
+            # for qnt in qnts:
+            #     print(qnt, end=" ")
+            # print("")
 
             # if meta_row is not None and meta_row["value"] == "RNA" and total_bins < 200000:
             #     print(f"Skipping: {track} {total_bins}")
@@ -150,17 +168,12 @@ def parse_some_tracks(q, p, some_tracks, ga, bin_size, tracks_folder, meta):
 
             max_val = -1
             for key in gast.keys():
-                if "scend5" in track.lower():
-                    pass
-                elif meta_row is None:
-                    gast[key] = np.log10(gast[key] + 1)
-                elif meta_row["value"] == "conservation":
+                if meta_row["value"] == "conservation":
                     pass
                 elif meta_row["value"] == "RNA":
-                    gast[key] = np.log10(gast[key] + 1)
-                    # gast[key] = np.log10(gast[key] * (1000000.0 / total_reads) + 1)
+                    gast[key] = np.minimum(gast[key], t1 + np.sqrt(np.maximum(0, gast[key] - t1)))
                 else:
-                    gast[key] = np.log10(gast[key] + 1)
+                    gast[key] = np.minimum(gast[key], t2 + np.sqrt(np.maximum(0, gast[key] - t2)))
                 max_val = max(np.max(gast[key]), max_val)
             for key in gast.keys():
                 # if not ".RNA.ctss" in track:
@@ -168,12 +181,14 @@ def parse_some_tracks(q, p, some_tracks, ga, bin_size, tracks_folder, meta):
                 # gast[key] = gaussian_filter(gast[key], sigma=1.0)
                 gast[key] = gast[key].astype(np.float16)            
             joblib.dump(gast, new_path, compress="lz4")
-            print(f"Parsed {track}. Max value: {max_val}. Sum: {total_reads}. Total bins: {total_bins}.")
-            print(f"{track_name}, {total_reads}")
+            print(f"Parsed {track}. Max value: {max_val}. Sum: {total_reads}. Total bins: {total_bins}. {mx} {t1} {t2}")
+            maxes.append(f"{track_name}\t{max_val}")
         except Exception as exc:
             print(exc)
             traceback.print_exc()
             print("\n\n\nCould not parse! " + track)
+    with open(f"maxes/{t}", 'w+') as f:
+        f.write('\n'.join(maxes))
     q.put(None)
 
 

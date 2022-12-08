@@ -57,14 +57,8 @@ class EnformerScoreVariantsRaw:
   def predict_on_batch(self, inputs):
     ref_prediction = self._model.predict_on_batch(inputs['ref'])[self._organism]
     alt_prediction = self._model.predict_on_batch(inputs['alt'])[self._organism]
-    # if (inputs['ref']==inputs['alt']).all():
-    #     print("identical seqs provided!")
-    # if (alt_prediction==ref_prediction).all():
-    #     print("identical predictions")
-    # else:
-    #     print("different predictions")
-    effect = np.max(np.abs(alt_prediction - ref_prediction), axis=-1)
-    # effect = alt_prediction.mean(axis=1) - ref_prediction.mean(axis=1)
+    # effect = np.max(np.abs(alt_prediction - ref_prediction), axis=-1)
+    effect = alt_prediction.mean(axis=1) - ref_prediction.mean(axis=1)
     return effect
 
 

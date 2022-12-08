@@ -2,12 +2,10 @@ import os
 # os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 # os.environ["CUDA_VISIBLE_DEVICES"] = '1,2,3'
 import shutil
-import math
 import logging
 import joblib
 import gc
 import random
-import time
 import pandas as pd
 import numpy as np
 import common as cm
@@ -19,10 +17,8 @@ import parse_data as parser
 from datetime import datetime
 import traceback
 import multiprocessing as mp
-import evaluation
+from evaluation import evaluation
 from main_params import MainParams
-from scipy.ndimage import gaussian_filter
-import cooler
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 logging.getLogger("tensorflow").setLevel(logging.ERROR)
@@ -271,7 +267,7 @@ def check_perf(mp_q):
             valid_eval_chr_info.append(info)
         print(f"Valid set {len(valid_eval_chr_info)}")
         valid_result = evaluation.eval_perf(p, our_model, heads, valid_eval_chr_info,
-                                             False, current_epoch, "valid", one_hot)
+                                            False, current_epoch, "valid", one_hot)
         with open(p.model_name + "_history.tsv", "a+") as myfile:
             myfile.write(training_result + "\t" + valid_result + "\n")
         new_folder = p.model_folder + valid_result + "/"

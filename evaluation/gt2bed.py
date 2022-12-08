@@ -1,12 +1,6 @@
 from main_params import MainParams
 import joblib
-import numpy as np
-import pandas as pd
-import parse_data as parser
-from pathlib import Path
-from scipy import stats
 import seaborn as sns
-import matplotlib.pyplot as plt
 sns.set_theme(style="white", rc={"axes.facecolor": (0, 0, 0, 0)}, font_scale=2.0)
 p = MainParams()
 heads = joblib.load(f"{p.pickle_folder}heads.gz")
@@ -80,18 +74,13 @@ heads = joblib.load(f"{p.pickle_folder}heads.gz")
 # sc = stats.spearmanr(v1, v2)[0]
 # print(f"{pc} {sc}")
 for n, track in enumerate(heads["expression"]):
-    # print(track)
-    # if "scEnd5" not in track:
-    #     continue
-    if "CNhs12119" not in track:
+    if "FANTOM5" not in track or "response" in track:
         continue
-    # if "FANTOM5" not in track or "response" in track:
-    #     continue
     parsed_track = joblib.load(p.parsed_tracks_folder + track)
     with open("bed_output/f5_" + track + ".bedGraph", 'w+') as f:
         for i, val in enumerate(parsed_track["chr1"]):
-            f.write(f"chr1\t{i * p.bin_size}\t{(i + 1) * p.bin_size}\t{val}")
-            f.write("\n")
-    break
+            if val > 0:
+                f.write(f"chr1\t{i * p.bin_size}\t{(i + 1) * p.bin_size}\t{val}")
+                f.write("\n")
     if n > 5:
         break

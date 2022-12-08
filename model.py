@@ -1,14 +1,9 @@
-import math
-
 import tensorflow as tf
 from tensorflow.keras.layers import LeakyReLU, LayerNormalization, MultiHeadAttention, \
     Concatenate, GaussianDropout, GaussianNoise, Add, Embedding, Layer, Dropout, Reshape, \
     Dense, Conv1D, Input, Flatten, Activation, BatchNormalization, LocallyConnected1D, DepthwiseConv1D, DepthwiseConv2D
 from tensorflow.keras.models import Model
-from keras import backend as K
 import numpy as np
-import scipy
-from numba import jit
 
 
 def make_model(input_size, num_features, num_regions, hic_num, hic_size, one_d_heads):
@@ -68,19 +63,16 @@ def make_head(track_num, num_regions, output1d, name):
 
 
 def resnet(input_x, input_size):
-    print("Version 1.40")
+    print("Version 1.41")
     # Initial number of filters
-    num_filters = 1280
+    num_filters = 1024 # 768 #
     mlp_start_block = 6
-    num_blocks = 12
+    num_blocks = 14
     patchify_val = 4
     # replace with hardcoded values
     filter_nums = exponential_linspace_int(num_filters, 2 * num_filters, mlp_start_block, divisible_by=128)
     # Patchify layer
-    x = Conv1D(num_filters,
-               strides=patchify_val,
-               kernel_size=patchify_val,
-               name="patchify")(input_x)
+    x = Conv1D(num_filters,strides=patchify_val,kernel_size=patchify_val,name="patchify")(input_x)
     x = LayerNormalization(epsilon=1e-6)(x)
     current_len = input_size // patchify_val
     for block in range(num_blocks):
@@ -94,29 +86,33 @@ def resnet(input_x, input_size):
             x = Conv1D(num_filters, kernel_size=strides, strides=strides, padding="same", name=cname + "downsample")(x)
         y = x
         y = GaussianDropout(0.01)(y)
-        y1 = DepthwiseConv1D(kernel_size=7, name=cname + "depthwise", padding="same")(y)
         # Spatial MLP for long range interactions
         if block >= mlp_start_block:
-            y2 = tf.transpose(y, [0, 2, 1])
-            y2 = Dense(current_len // 2, name=cname + "mlp_1")(y2)
-            y2 = Activation(tf.nn.gelu)(y2)
-            # y2 = MonteCarloDropout(0.1)(y2)
-            y2 = Dense(current_len, name=cname + "mlp_2")(y2)
-            y2 = tf.transpose(y2, [0, 2, 1])
-            y = Concatenate(axis=-1)([y1, y2]) # y1 + y2
+            y = tf.transpose(y, [0, 2, 1])
+            y = Dense(current_len * 2, name=cname + "mlp_1")(y)
+            y = Activation(tf.nn.gelu)(y)
+            y = Dropout(0.1)(y)
+            y = Dense(current_len, name=cname + "mlp_2")(y)
+            y = tf.transpose(y, [0, 2, 1])
         else:
-            y = y1
+            y = DepthwiseConv1D(kernel_size=7, name=cname + "depthwise", padding="same")(y)
         y = LayerNormalization(epsilon=1e-6)(y)
         # Pointwise to mix the channels
         y = Conv1D(4 * num_filters, kernel_size=1, padding="same", name=cname + "pointwise_1")(y)
         y = Activation(tf.nn.gelu)(y)
-        # y = MonteCarloDropout(0.1)(y)
+        y = Dropout(0.1)(y)
         y = Conv1D(num_filters, kernel_size=1, padding="same", name=cname + "pointwise_2")(y)
         x = x + y
 
     x = LayerNormalization(epsilon=1e-6)(x)
     x = Conv1D(2 * num_filters, kernel_size=1, name="body_output", activation=tf.nn.gelu, dtype='float32')(x)
     return x
+
+# @tf.function
+# def my_tf_round(x):
+#     decimals = 4
+#     multiplier = tf.constant(10**decimals, dtype=x.dtype)
+#     return tf.round(x * multiplier) / multiplier
 
 
 @tf.function
@@ -257,11 +253,11 @@ def batch_predict_effect(p, model, seqs1, seqs2):
             p2s.append(body.predict(wrap2(seqs2[w:w + p.w_step], p.predict_batch_size), verbose = 0))
         p2 = np.mean(p2s, axis=0)
         expression = p1[:, :, p.mid_bin] 
-        # expression = np.squeeze(expression)
+        expression = np.squeeze(expression)
         expression = np.max(expression, axis=1, keepdims=True)
 
         fold_change = p2[:, :, p.mid_bin] / p1[:, :, p.mid_bin] 
-        # fold_change = np.squeeze(fold_change)
+        fold_change = np.squeeze(fold_change)
         fold_change = np.max(fold_change, axis=1, keepdims=True)
         # pr = model.predict(wrap2(seqs2[w:w + p.w_step], p.predict_batch_size))
         # p2 = np.concatenate((pr[0], pr[1], pr[2]), axis=1)
@@ -272,80 +268,6 @@ def batch_predict_effect(p, model, seqs1, seqs2):
         # effect3 = np.max(np.abs(p1 - p2), axis=-1)
         # effect4 = np.max(np.abs(p1 - p2), axis=-2)
         # effect = np.concatenate((effect3, effect4), axis=-1)
-        if w == 0:
-            predictions = effect
-            fold_changes = fold_change
-            expressions = expression
-        else:
-            predictions = np.concatenate((predictions, effect))
-            fold_changes = np.concatenate((fold_changes, fold_change))
-            expressions = np.concatenate((expressions, expression))
-    fold_changes = np.clip(fold_changes, 0, 100)
-    fold_changes = np.log(fold_changes + 1)
-    fold_changes[np.isnan(fold_changes)] = -1
-    return predictions, fold_changes
-
-
-@jit(nopython=True) # Set "nopython" mode for best performance, equivalent to @njit
-def cross_entropy(p, q):
-    p = p.astype(np.float64)
-    q = q.astype(np.float64)
-    q = np.where(q>1.0e-10,q,1.0e-10) #fill the zeros with 10**-10
-    return -sum([p[i]*np.log2(q[i]) for i in range(len(p))])
-
-
-# def JS_divergence(p,q):
-#     M=(p+q)/2
-#     return 0.5*scipy.stats.entropy(p,M)+0.5*scipy.stats.entropy(q, M)
-
-
-# def KL_divergence(p,q):
-#     return scipy.stats.entropy(p,q)
-
-
-@jit(nopython=True) # Set "nopython" mode for best performance, equivalent to @njit
-def normalization(data):
-    _range=np.max(data)-np.min(data)
-    return (data-np.min(data))/_range
-
-
-@jit(nopython=True) # Set "nopython" mode for best performance, equivalent to @njit
-def fast_ce(p1, p2):
-    tmp1=[]
-    for i in range(p1.shape[0]):
-        tmp2=[]
-        for j in range(p1.shape[1]):
-            #tmp2.append(JS_divergence(normalization(p1[i][j]),normalization(p2[i][j])))
-            #tmp2.append(scipy.stats.entropy(p1[i][j],p2[i][j],base=2))
-            tmp2.append(cross_entropy(normalization(p1[i][j]),normalization(p2[i][j])))
-        tmp1.append(tmp2)
-    return np.array(tmp1)
-
-def batch_predict_effect_x(p, model, seqs1, seqs2):
-    body = model.get_layer("our_resnet")
-    n_times = 1
-    for w in range(0, len(seqs1), p.w_step):
-        print(w, end=" ")
-        p1s = []
-        for i in range(n_times):
-            p1s.append(body.predict(wrap2(seqs1[w:w + p.w_step], p.predict_batch_size), verbose = 0))
-        p1 = np.mean(p1s, axis=0)
-        # pr = model.predict(wrap2(seqs1[w:w + p.w_step], p.predict_batch_size))
-        # p1 = np.concatenate((pr[0], pr[1], pr[2]), axis=1)
-        p2s = []
-        for i in range(n_times):
-            p2s.append(body.predict(wrap2(seqs2[w:w + p.w_step], p.predict_batch_size), verbose = 0))
-        p2 = np.mean(p2s, axis=0)
-        expression = p1[:, :, p.mid_bin] 
-        # expression = np.squeeze(expression)
-        expression = np.max(expression, axis=1, keepdims=True)
-        fold_change = p2[:, :, p.mid_bin] / p1[:, :, p.mid_bin] 
-        # fold_change = np.squeeze(fold_change)
-        fold_change = np.max(fold_change, axis=1, keepdims=True)
-        # pr = model.predict(wrap2(seqs2[w:w + p.w_step], p.predict_batch_size))
-        # p2 = np.concatenate((pr[0], pr[1], pr[2]), axis=1)
-        #effect = np.max(np.abs(p1 - p2), axis=-1)
-        effect = fast_ce(p1, p2)
         if w == 0:
             predictions = effect
             fold_changes = fold_change
@@ -385,8 +307,8 @@ def batch_predict_effect_long(p, model, seqs1, seqs2):
     return predictions
 
 
-def batch_predict_effect2(p, model, seqs1, seqs2): # , inds
-    n_times = 1
+def batch_predict_effect2(p, model, seqs1, seqs2, inds):
+    n_times = 2
     for w in range(0, len(seqs1), p.w_step):
         print(w, end=" ")
         # print(f"seqs shape {np.asarray(seqs1[w:w + p.w_step]).shape}")
@@ -395,13 +317,13 @@ def batch_predict_effect2(p, model, seqs1, seqs2): # , inds
             p1s.append(model.predict(wrap2(seqs1[w:w + p.w_step], p.predict_batch_size), verbose = 0))
         # print(f"p1s {np.asarray(p1s).shape}")
         p1 = np.mean(p1s, axis=0)
-        # p1 = p1[:, inds, :]
+        p1 = p1[:, inds, :]
         # print(f"p1 {p1.shape}")
         p2s = []
         for i in range(n_times):
             p2s.append(model.predict(wrap2(seqs2[w:w + p.w_step], p.predict_batch_size), verbose = 0))
         p2 = np.mean(p2s, axis=0)
-        # p2 = p2[:, inds, :]
+        p2 = p2[:, inds, :]
 
         effect = np.max(np.abs(p1 - p2), axis=-2)
         # print(f"effect {effect.shape}")

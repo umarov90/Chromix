@@ -139,54 +139,78 @@ def get_linking_AUC():
     # df_tiling = pd.read_csv("data/enhancers/tiling_tss.tsv", sep="\t")
     seqs1, seqs2, eseqs1, eseqs2, Y_label, add_features = get_seqs_and_features(df, one_hot)
 
-    true_labels = {"<40000":[], "<100000":[], ">100000":[]}
+    true_labels = {"<20000":[], "<40000":[], ">40000":[]}
     methods = ["Enformer", "Chromix"] # "Baseline", 
     pred_labels = {}
     for m in methods:
-        pred_labels[m] = {"<40000":[], "<100000":[], ">100000":[]}
+        pred_labels[m] = {"<20000":[], "<40000":[], ">40000":[]}
     auc = {}
     for features in methods:
         if features == "Chromix": 
-            import tensorflow as tf
-            import model as mo
-            from tensorflow.keras import mixed_precision
-            mixed_precision.set_global_policy('mixed_float16')
-            strategy = tf.distribute.MultiWorkerMirroredStrategy()
-            with strategy.scope():
-                our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, 0, p.hic_size, head["expression"])
-                our_model.get_layer("our_resnet").set_weights(joblib.load(p.model_path + "_res"))
-                our_model.get_layer("our_expression").set_weights(joblib.load(p.model_path + "_expression"))
+            # import tensorflow as tf
+            # import model as mo
+            # from tensorflow.keras import mixed_precision
+            # mixed_precision.set_global_policy('mixed_float16')
+            # strategy = tf.distribute.MultiWorkerMirroredStrategy()
+            # with strategy.scope():
+            #     our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, 0, p.hic_size, head)
+            #     our_model.get_layer("our_resnet").set_weights(joblib.load(p.model_path + "_res"))
+            #     our_model.get_layer("our_expression").set_weights(joblib.load(p.model_path + "_expression"))
+            #     our_model.get_layer("our_epigenome").set_weights(joblib.load(p.model_path + "_epigenome"))
+            #     our_model.get_layer("our_conservation").set_weights(joblib.load(p.model_path + "_conservation"))
             # dif, fold_changes = mo.batch_predict_effect_x(p, our_model, np.asarray(seqs1), np.asarray(seqs2))
-            dif = mo.batch_predict_effect2(p, our_model, np.asarray(seqs1), np.asarray(seqs2))
-            joblib.dump(dif, "chromix_effect.p", compress=3)
-            # dif = joblib.load("chromix_effect.p")
+            # # dif = mo.batch_predict_effect2(p, our_model, np.asarray(seqs1), np.asarray(seqs2))
+            # joblib.dump(dif, "chromix_effect.p", compress=3)
+            dif = joblib.load("chromix_effect.p")
         elif features == "Enformer":
             import enformer_usage
             dif = enformer_usage.calculate_effect(np.asarray(eseqs1), np.asarray(eseqs2))
             joblib.dump(dif, "enformer_effect.p", compress=3)
             # dif = joblib.load("enformer_effect.p")
-        yinds = np.asarray(Y_label).argsort()
-        sorted_dif = dif[yinds[::-1]]
-        fig, axs = plt.subplots(1, 1, figsize=(dif.shape[1] // 100, dif.shape[0] // 100))
-        sns.heatmap(sorted_dif, ax=axs)
-        plt.tight_layout()
-        plt.savefig(f"{features}_heatmap.png")
+        # Drawing effect heatmap
+        # yinds = np.asarray(Y_label).argsort()
+        # sorted_dif = dif[yinds[::-1]]
+        # sorted_dif = np.log10(sorted_dif + 1)
+        # sorted_y = np.asarray(Y_label)[yinds[::-1]]
+        # palette = sns.color_palette()
+        # palette_dict = dict(zip(["Significant", "Non-Significant"], palette))
+        # pair_labels = ["Significant", "Non-Significant"]
+        # pair_colors = []
+        # for y in sorted_y:
+        #     if y == True:
+        #         pair_colors.append(palette_dict["Significant"])
+        #     else:
+        #         pair_colors.append(palette_dict["Non-Significant"])
+        # cmap = sns.diverging_palette(h_neg=210, h_pos=350, s=90, l=30, as_cmap=True)
+        # g = sns.clustermap(sorted_dif,row_cluster=False, col_cluster=False,row_colors=pair_colors,
+        #                   linewidths=0, xticklabels=False, yticklabels=False)            
+        # for label in pair_labels:
+        #     g.ax_col_dendrogram.bar(0, 0, color=palette_dict[label],
+        #                             label=label, linewidth=0)
+        # g.ax_col_dendrogram.legend(loc="center", ncol=5)
+        # g.cax.set_position([.97, .2, .03, .45])
+        # g.savefig(f"{features}_heatmap.png")
+
+        print(f"Y_label shape is {np.asarray(Y_label).shape}")
+        # mid_bin = dif.shape[1] // 2
+        # mid_val = dif[:, mid_bin - 1] + dif[:, mid_bin] + dif[:, mid_bin + 1]
+        # dif = np.concatenate((np.expand_dims(mid_val, axis=1), add_features), axis=-1)
+        non_pca_num = add_features.shape[1]
         if features == "Baseline":
             dif = add_features
         else:
             dif = np.concatenate((dif, add_features), axis=-1)
-        print(f"Y_label shape is {np.asarray(Y_label).shape}")
         X_train, X_test, Y_train, Y_test = train_test_split(dif, np.asarray(Y_label), test_size=0.3, random_state=0)
-        X_train_dist = X_train[:, -1 * add_features.shape[1]:]
-        X_test_dist = X_test[:, -1 * add_features.shape[1]:]
-        X_train = X_train[:, :-1 * add_features.shape[1]]
-        X_test = X_test[:, :-1 * add_features.shape[1]]
+        X_train_dist = X_train[:, -1 * non_pca_num:]
+        X_test_dist = X_test[:, -1 * non_pca_num:]
+        X_train = X_train[:, :-1 * non_pca_num]
+        X_test = X_test[:, :-1 * non_pca_num]
 
-        if features != "Baseline":
-            pca = PCA(n_components=10)
-            pca.fit(X_train)
-            X_train = pca.transform(X_train)
-            X_test = pca.transform(X_test)
+        # if features != "Baseline":
+        #     pca = PCA(n_components=10)
+        #     pca.fit(X_train)
+        #     X_train = pca.transform(X_train)
+        #     X_test = pca.transform(X_test)
 
         X_test = np.concatenate((X_test, X_test_dist), axis=-1)
         X_train = np.concatenate((X_train, X_train_dist), axis=-1)
@@ -206,20 +230,20 @@ def get_linking_AUC():
         plt.savefig(features + "_linking.png")
 
         # Saving RF and PCA for other scripts
-        if features == "Chromix":
-            joblib.dump(clf, "RF.pkl") 
-            joblib.dump(pca, "PCA.pkl")
+        # if features == "Chromix":
+        #     joblib.dump(clf, "RF.pkl") 
+        #     joblib.dump(pca, "PCA.pkl")
 
         Y_pred = clf.predict(X_test)
         # Distance for grouping results
-        X_train_dist = X_train_dist[:, -1:]
+        X_test_dist = X_test_dist[:, -1:]
         for i in range(len(Y_pred)):
-            if X_train_dist[i] < 40000:
+            if X_test_dist[i] < 20000:
+                dist_group = "<20000"
+            elif X_test_dist[i] < 40000:
                 dist_group = "<40000"
-            elif X_train_dist[i] < 100000:
-                dist_group = "<100000"
             else:
-                dist_group = ">100000"
+                dist_group = ">40000"
             if features == methods[0]:
                 true_labels[dist_group].append(Y_test[i])
             pred_labels[features][dist_group].append(Y_pred[i])
