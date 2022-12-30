@@ -10,6 +10,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib as mpl
 import seaborn as sns
+from numba import jit
 
 transform_path = 'gs://dm-enformer/models/enformer.finetuned.SAD.robustscaler-PCA500-robustscaler.transform.pkl'
 model_path = 'https://tfhub.dev/deepmind/enformer/1'
@@ -58,7 +59,8 @@ class EnformerScoreVariantsRaw:
     ref_prediction = self._model.predict_on_batch(inputs['ref'])[self._organism]
     alt_prediction = self._model.predict_on_batch(inputs['alt'])[self._organism]
     # effect = np.max(np.abs(alt_prediction - ref_prediction), axis=-1)
-    effect = alt_prediction.mean(axis=1) - ref_prediction.mean(axis=1)
+    # effect = alt_prediction.mean(axis=1) - ref_prediction.mean(axis=1)
+    effect = fast_ce(alt_prediction, ref_prediction)
     return effect
 
 
@@ -160,3 +162,38 @@ def calculate_effect_pca(seqs1, seqs2):
     # print(f"{np.max(variant_scores)} {np.min(variant_scores)}")
     effects.append(variant_scores)
   return np.asarray(effects)
+
+
+@jit(nopython=True) # Set "nopython" mode for best performance, equivalent to @njit
+def cross_entropy(p, q):
+    p = p.astype(np.float64)
+    q = q.astype(np.float64)
+    q = np.where(q>1.0e-10,q,1.0e-10) #fill the zeros with 10**-10
+    return -sum([p[i]*np.log2(q[i]) for i in range(len(p))])
+
+# def JS_divergence(p,q):
+#     M=(p+q)/2
+#     return 0.5*scipy.stats.entropy(p,M)+0.5*scipy.stats.entropy(q, M)
+
+
+# def KL_divergence(p,q):
+#     return scipy.stats.entropy(p,q)
+
+
+@jit(nopython=True) # Set "nopython" mode for best performance, equivalent to @njit
+def normalization(data):
+    _range=np.max(data)-np.min(data)
+    return (data-np.min(data))/_range
+
+
+@jit(nopython=True) # Set "nopython" mode for best performance, equivalent to @njit
+def fast_ce(p1, p2):
+    tmp1=[]
+    for i in range(p1.shape[0]):
+        tmp2=[]
+        for j in range(p1.shape[1]):
+            #tmp2.append(JS_divergence(normalization(p1[i][j]),normalization(p2[i][j])))
+            #tmp2.append(scipy.stats.entropy(p1[i][j],p2[i][j],base=2))
+            tmp2.append(cross_entropy(normalization(p1[i][j]),normalization(p2[i][j])))
+        tmp1.append(tmp2)
+    return np.array(tmp1)

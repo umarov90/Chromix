@@ -42,7 +42,8 @@ hic_num = len(hic_keys)
 for k in hic_keys:
     print(k, end=", ")
 
-regions_tss = joblib.load(f"{p.pickle_folder}test_info.gz")
+# regions_tss = joblib.load(f"{p.pickle_folder}test_info.gz")
+regions_tss = joblib.load(f"{p.pickle_folder}train_info.gz")
 infos = random.sample(regions_tss, 100)
 
 print(f"Number of positions: {len(infos)}")
@@ -56,38 +57,28 @@ with strategy.scope():
     our_model.get_layer("our_conservation").set_weights(joblib.load(p.model_path + "_conservation"))
     our_model.get_layer("our_hic").set_weights(joblib.load(p.model_path + "_hic"))
 
-hic_output = parser.par_load_hic_data(hic_keys, p, infos, 0)
-
 test_seq = []
+hic_positions = []
 for info in infos:
     pos_hic = info[1] - (info[1] % p.hic_bin_size)
     start = pos_hic - (pos_hic % p.bin_size) - p.half_size
-    # if start in starts:
-    #     continue
-    # starts.append(start)
     extra = start + p.input_size - len(one_hot[info[0]])
-    if start < 0:
-        ns = one_hot[info[0]][0:start + p.input_size]
-        ns = np.concatenate((np.zeros((-1 * start, 5)), ns))
-    elif extra > 0:
-        ns = one_hot[info[0]][start: len(one_hot[info[0]])]
-        ns = np.concatenate((ns, np.zeros((extra, 5))))
+    if start < 0 or extra > 0:
+        continue
     else:
         ns = one_hot[info[0]][start:start + p.input_size]
-    if len(ns) != p.input_size:
-        print(f"Wrong! {ns.shape} {start} {extra} {info[1]}")
+    hic_positions.append([info[0], pos_hic])
     test_seq.append(ns[:, :-1])
 
+hic_output = parser.par_load_hic_data(hic_keys, p, hic_positions, 0)
+hic_output = np.asarray(hic_output)
 test_seq = np.asarray(test_seq, dtype=bool)
+predictions_hic = []
 for w in range(0, len(test_seq), p.w_step):
     print(w, end=" ")
     p1 = our_model.predict(mo.wrap2(test_seq[w:w + p.w_step], p.predict_batch_size))
-    if w == 0:
-        predictions_hic = p1[4]
-    else:
-        predictions_hic = np.concatenate((predictions_hic, p1[4]))
-
-hic_output = np.asarray(hic_output)
+    predictions_hic.append(p1[3])
+predictions_hic = np.concatenate(predictions_hic)
 print("drawing")
 print(predictions_hic.shape)
 print(hic_output.shape)

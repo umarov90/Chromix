@@ -17,10 +17,10 @@ class MainParams:
         self.half_num_regions = self.num_bins // 2
         self.mid_bin = self.num_bins // 2
         self.BATCH_SIZE = 1
-        self.NUM_GPU = 3
+        self.NUM_GPU = 4
         self.GLOBAL_BATCH_SIZE = self.NUM_GPU * self.BATCH_SIZE
-        self.predict_batch_size = 2 * self.GLOBAL_BATCH_SIZE
-        self.w_step = 120
+        self.predict_batch_size = 1 * self.GLOBAL_BATCH_SIZE
+        self.w_step = 50
         self.STEPS_PER_EPOCH = 250
         self.num_epochs = 1000
         self.num_features = 4
@@ -33,7 +33,7 @@ class MainParams:
         self.model_folder = folders[3]
         self.temp_folder = folders[4]
         self.pickle_folder = folders[5]
-        self.tracks_folder = folders[6]
+        # self.tracks_folder = folders[6]
         self.model_name = "chromix_600192"
         self.model_path = self.model_folder + self.model_name
         self.figures_folder = "figures_1"

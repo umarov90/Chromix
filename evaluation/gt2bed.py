@@ -73,14 +73,24 @@ heads = joblib.load(f"{p.pickle_folder}heads.gz")
 # pc = stats.pearsonr(v1, v2)[0]
 # sc = stats.spearmanr(v1, v2)[0]
 # print(f"{pc} {sc}")
+file = "CAGE.RNA.ctss.thymus_fetal_pool1.CNhs10650.FANTOM5.parsed"
+parsed_track = joblib.load(file)
+with open(f"bed_output/{file}.bedGraph", 'w+') as f:
+    for i, val in enumerate(parsed_track["chr1"]):
+        if val > 0:
+            f.write(f"chr1\t{i * p.bin_size}\t{(i + 1) * p.bin_size}\t{val}")
+            f.write("\n")
+exit()
+counter = 0
 for n, track in enumerate(heads["expression"]):
     if "FANTOM5" not in track or "response" in track:
         continue
+    counter += 1
     parsed_track = joblib.load(p.parsed_tracks_folder + track)
     with open("bed_output/f5_" + track + ".bedGraph", 'w+') as f:
         for i, val in enumerate(parsed_track["chr1"]):
             if val > 0:
                 f.write(f"chr1\t{i * p.bin_size}\t{(i + 1) * p.bin_size}\t{val}")
                 f.write("\n")
-    if n > 5:
+    if counter > 5:
         break

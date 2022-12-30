@@ -1,9 +1,10 @@
 import tensorflow as tf
-from tensorflow.keras.layers import LeakyReLU, LayerNormalization, MultiHeadAttention, \
+from tensorflow.keras.layers import LeakyReLU, LayerNormalization, \
     Concatenate, GaussianDropout, GaussianNoise, Add, Embedding, Layer, Dropout, Reshape, \
     Dense, Conv1D, Input, Flatten, Activation, BatchNormalization, LocallyConnected1D, DepthwiseConv1D, DepthwiseConv2D
 from tensorflow.keras.models import Model
 import numpy as np
+from numba import jit
 
 
 def make_model(input_size, num_features, num_regions, hic_num, hic_size, one_d_heads):
@@ -26,7 +27,7 @@ def make_model(input_size, num_features, num_regions, hic_num, hic_size, one_d_h
         hx = Dense(hic_num, name="hic_mlp_2")(hx)
         hx = tf.transpose(hx, [0, 2, 1])
 
-        hx = Activation('linear', dtype='float32')(hx)
+        hx = Activation('softplus', dtype='float32')(hx)
         our_hic = Model(hic_input, hx, name="our_hic")
 
     all_heads = []
@@ -58,7 +59,7 @@ def make_head(track_num, num_regions, output1d, name):
 
     outputs = Conv1D(track_num, kernel_size=1, strides=1, name=name + "_last_conv1d")(x)
     outputs = tf.transpose(outputs, [0, 2, 1])
-    head_output = Activation("linear", dtype='float32')(outputs)
+    head_output = Activation("softplus", dtype='float32')(outputs)
     return Model(head_input, head_output, name=name)
 
 
@@ -208,13 +209,13 @@ def wrap_for_human_training(input_sequences, output_scores, bs):
 
 
 def wrap2(input_sequences, bs):
-    with tf.device('cpu:0'):
-        train_data = tf.data.Dataset.from_tensor_slices(input_sequences)
-        train_data = train_data.batch(bs)
-        options = tf.data.Options()
-        options.experimental_distribute.auto_shard_policy = tf.data.experimental.AutoShardPolicy.DATA
-        train_data = train_data.with_options(options)
-        return train_data
+    # with tf.device('cpu:0'):
+    train_data = tf.data.Dataset.from_tensor_slices(input_sequences)
+    train_data = train_data.batch(bs)
+    options = tf.data.Options()
+    options.experimental_distribute.auto_shard_policy = tf.data.experimental.AutoShardPolicy.DATA
+    train_data = train_data.with_options(options)
+    return train_data
 
 
 def batch_predict(p, model, seqs):
@@ -282,51 +283,104 @@ def batch_predict_effect(p, model, seqs1, seqs2):
     return predictions, fold_changes
 
 
-def batch_predict_effect_long(p, model, seqs1, seqs2):
+@jit(nopython=True) # Set "nopython" mode for best performance, equivalent to @njit
+def cross_entropy(p, q):
+    p = p.astype(np.float64)
+    q = q.astype(np.float64)
+    q = np.where(q>1.0e-10,q,1.0e-10) #fill the zeros with 10**-10
+    return -sum([p[i]*np.log2(q[i]) for i in range(len(p))])
+
+# def JS_divergence(p,q):
+#     M=(p+q)/2
+#     return 0.5*scipy.stats.entropy(p,M)+0.5*scipy.stats.entropy(q, M)
+
+
+# def KL_divergence(p,q):
+#     return scipy.stats.entropy(p,q)
+
+
+@jit(nopython=True) # Set "nopython" mode for best performance, equivalent to @njit
+def normalization(data):
+    _range=np.max(data)-np.min(data)
+    return (data-np.min(data))/_range
+
+
+@jit(nopython=True) # Set "nopython" mode for best performance, equivalent to @njit
+def fast_ce(p1, p2):
+    tmp1=[]
+    for i in range(p1.shape[0]):
+        tmp2=[]
+        for j in range(p1.shape[1]):
+            #tmp2.append(JS_divergence(normalization(p1[i][j]),normalization(p2[i][j])))
+            #tmp2.append(scipy.stats.entropy(p1[i][j],p2[i][j],base=2))
+            tmp2.append(cross_entropy(normalization(p1[i][j]),normalization(p2[i][j])))
+        tmp1.append(tmp2)
+    return np.array(tmp1)
+
+
+def batch_predict_effect_x(p, model, seqs1, seqs2):
     body = model.get_layer("our_resnet")
-    n_times = 2
+    n_times = 1
     for w in range(0, len(seqs1), p.w_step):
         print(w, end=" ")
         p1s = []
         for i in range(n_times):
             p1s.append(body.predict(wrap2(seqs1[w:w + p.w_step], p.predict_batch_size), verbose = 0))
         p1 = np.mean(p1s, axis=0)
+        # pr = model.predict(wrap2(seqs1[w:w + p.w_step], p.predict_batch_size))
+        # p1 = np.concatenate((pr[0], pr[1], pr[2]), axis=1)
         p2s = []
         for i in range(n_times):
             p2s.append(body.predict(wrap2(seqs2[w:w + p.w_step], p.predict_batch_size), verbose = 0))
         p2 = np.mean(p2s, axis=0)
-        long_range = np.abs(p1 - p2)
-        mid = long_range.shape[-2] // 2
-        long_range = np.delete(long_range, np.s_[mid - 24:mid + 24], -2)
-        effect = np.max(long_range, axis=-1)
+        expression = p1[:, :, p.mid_bin] 
+        # expression = np.squeeze(expression)
+        expression = np.max(expression, axis=1, keepdims=True)
+        fold_change = p2[:, :, p.mid_bin] / p1[:, :, p.mid_bin] 
+        # fold_change = np.squeeze(fold_change)
+        fold_change = np.max(fold_change, axis=1, keepdims=True)
+        # pr = model.predict(wrap2(seqs2[w:w + p.w_step], p.predict_batch_size))
+        # p2 = np.concatenate((pr[0], pr[1], pr[2]), axis=1)
+        #effect = np.max(np.abs(p1 - p2), axis=-1)
+        effect = fast_ce(p1, p2)
         if w == 0:
             predictions = effect
-            # print(f"mid {mid} shape {long_range.shape}")
+            fold_changes = fold_change
+            expressions = expression
         else:
             predictions = np.concatenate((predictions, effect))
-    return predictions
+            fold_changes = np.concatenate((fold_changes, fold_change))
+            expressions = np.concatenate((expressions, expression))
+    fold_changes = np.clip(fold_changes, 0, 100)
+    fold_changes = np.log(fold_changes + 1)
+    fold_changes[np.isnan(fold_changes)] = -1
+    return predictions, fold_changes
 
 
-def batch_predict_effect2(p, model, seqs1, seqs2, inds):
-    n_times = 2
+def batch_predict_effect2(p, model, seqs1, seqs2): #inds     
+    n_times = 1
     for w in range(0, len(seqs1), p.w_step):
         print(w, end=" ")
         # print(f"seqs shape {np.asarray(seqs1[w:w + p.w_step]).shape}")
         p1s = []
         for i in range(n_times):
-            p1s.append(model.predict(wrap2(seqs1[w:w + p.w_step], p.predict_batch_size), verbose = 0))
+            pr = model.predict(wrap2(seqs1[w:w + p.w_step], p.predict_batch_size), verbose = 0)
+            p1 = np.concatenate((pr[0], pr[1], pr[2]), axis=1) # 
+            p1s.append(p1)
         # print(f"p1s {np.asarray(p1s).shape}")
         p1 = np.mean(p1s, axis=0)
-        p1 = p1[:, inds, :]
+        # p1 = p1[:, inds, :]
         # print(f"p1 {p1.shape}")
         p2s = []
         for i in range(n_times):
-            p2s.append(model.predict(wrap2(seqs2[w:w + p.w_step], p.predict_batch_size), verbose = 0))
+            pr = model.predict(wrap2(seqs2[w:w + p.w_step], p.predict_batch_size), verbose = 0)
+            p2 = np.concatenate((pr[0], pr[1], pr[2]), axis=1)
+            p2s.append(p2)
         p2 = np.mean(p2s, axis=0)
-        p2 = p2[:, inds, :]
+        # p2 = p2[:, inds, :]
 
-        effect = np.max(np.abs(p1 - p2), axis=-2)
-        # print(f"effect {effect.shape}")
+        effect = fast_ce(np.transpose(p1, [0, 2, 1]), np.transpose(p2, [0, 2, 1]))
+        print(f"effect {effect.shape}")
         if w == 0:
             predictions = effect
         else:

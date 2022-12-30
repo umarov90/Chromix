@@ -65,7 +65,8 @@ targets_txt = 'https://raw.githubusercontent.com/calico/basenji/master/manuscrip
 df_targets = pd.read_csv(targets_txt, sep='\t')
 SEQUENCE_LENGTH = 393216
 
-_, _, test_info_all, _ = parser.parse_sequences(p)
+train_info_all, valid_info_all, test_info_all, _ = parser.parse_sequences(p)
+all_info = train_info_all + valid_info_all + test_info_all
 test_info = []
 for info in test_info_all:
     if info[5]:
@@ -102,22 +103,16 @@ for track in enf_tracks:
             break
 
 
-print(f"Eval tracks {len(eval_tracks)}")
+print(f"Eval tracks {len(eval_tracks)}") 
 print(f"TSS {len(test_info)}")
 
 track_ind = {}
 for j, track in enumerate(eval_tracks):
     track_ind[track] = df_targets[df_targets['identifier'].str.contains(track)].index
 
-max_dict = {}
-for filename in os.listdir("maxes"):
-    with open("maxes/" + filename) as f:
-        for line in f:
-           (track, norm_max) = line.split()
-           max_dict[track] = float(norm_max)
 # ENFORMER #####################################################################################################
-#################################################################################################################
-pred_matrix = joblib.load("enformer_gene_matrix.p")
+################################################################################################################
+pred_matrix = joblib.load("pred_matrix.p")
 # class Enformer:
 
 #     def __init__(self, tfhub_url):
@@ -144,7 +139,7 @@ pred_matrix = joblib.load("enformer_gene_matrix.p")
 #         return tf.reduce_sum(input_grad, axis=-1)
 # model = Enformer(model_path)
 # pred_matrix = np.zeros((len(eval_tracks), len(test_info)))
-# counts = [0, 0, 0]
+# # counts = [0, 0, 0]
 # print("Predicting")
 # start = time.time()
 # for index, info in enumerate(test_info):
@@ -160,135 +155,91 @@ pred_matrix = joblib.load("enformer_gene_matrix.p")
 #     prediction = np.mean(model.predict_on_batch(sequence_one_hot[np.newaxis])['human'], axis=0)
 #     for j, track in enumerate(eval_tracks):
 #         t = track_ind[track]
-#         bins = [prediction[447, t], prediction[448, t], prediction[449, t]]
+#         bins = prediction[448, t] # [prediction[447, t], prediction[448, t], prediction[449, t]]
 #         gene_expression = np.sum(bins)
-#         counts[bins.index(max(bins))] += 1
+#         # counts[bins.index(max(bins))] += 1
 #         pred_matrix[j, index] = gene_expression
 
 # print("")
-# print(counts)
+# # print(counts)
 # end = time.time()
 # print("Enformer time")
 # print(end - start)
-# joblib.dump(pred_matrix, "enformer_gene_matrix.p", compress=3)
+# joblib.dump(pred_matrix, "pred_matrix.p", compress=3)
 qnorm_axis = 0
-pred_matrix = np.log10(pred_matrix + 1)
 # pred_matrix = qnorm.quantile_normalize(pred_matrix, axis=qnorm_axis)
-final_pred_enformer = {}
-for i in range(len(test_info)):
-    final_pred_enformer[test_info[i][2]] = {}
-for i in range(len(test_info)):
-    for it, track in enumerate(eval_tracks):
-        final_pred_enformer[test_info[i][2]].setdefault(track, []).append(pred_matrix[it][i])
-
-for i, gene in enumerate(final_pred_enformer.keys()):
-    if i % 10 == 0:
-        print(i, end=" ")
-    for track in eval_tracks:
-        final_pred_enformer[gene][track] = np.sum(final_pred_enformer[gene][track])
 # OUR MODEL #####################################################################################################
 #################################################################################################################
-# pred_matrix_our = joblib.load("chromix_gene_matrix.p")
+pred_matrix_our = joblib.load("pred_matrix_our.p")
 # print(f"{np.max(pred_matrix_our)}\t{np.std(pred_matrix_our)}\t{np.mean(pred_matrix_our)}\t{np.median(pred_matrix_our)}")
-from tensorflow.keras import mixed_precision
-mixed_precision.set_global_policy('mixed_float16')
-heads = joblib.load(f"{p.pickle_folder}heads.gz")
-strategy = tf.distribute.MirroredStrategy()
-with strategy.scope():
-    our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, 0, p.hic_size, heads["expression"])
-    our_model.get_layer("our_resnet").set_weights(joblib.load(p.model_path + "_res"))
-    our_model.get_layer("our_expression").set_weights(joblib.load(p.model_path + "_expression"))
+# from tensorflow.keras import mixed_precision
+# mixed_precision.set_global_policy('mixed_float16')
+# heads = joblib.load(f"{p.pickle_folder}heads.gz")
+# strategy = tf.distribute.MirroredStrategy()
+# with strategy.scope():
+#     our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, 0, p.hic_size, heads["expression"])
+#     our_model.get_layer("our_resnet").set_weights(joblib.load(p.model_path + "_res"))
+#     our_model.get_layer("our_expression").set_weights(joblib.load(p.model_path + "_expression"))
+# pred_matrix_our = np.zeros((len(eval_tracks), len(test_info)))
 
-pred_matrix_our = np.zeros((len(eval_tracks), len(test_info)))
-test_seq = []
-for index, info in enumerate(test_info):
-    seq = get_seq([info[0], info[1]], p.input_size)
-    test_seq.append(seq)
-test_seq = np.asarray(test_seq, dtype=bool)
-start = time.time()
-for w in range(0, len(test_seq), p.w_step):
-    print(w, end=" ")
-    pr = our_model.predict(mo.wrap2(test_seq[w:w + p.w_step], p.predict_batch_size))
-    p2 = pr[:, :, p.mid_bin - 1] + pr[:, :, p.mid_bin] + pr[:, :, p.mid_bin + 1]
-    if w == 0:
-        predictions = p2
-    else:
-        predictions = np.concatenate((predictions, p2), dtype=np.float16)
+# test_seq = []
+# for index, info in enumerate(test_info):
+#     seq = get_seq([info[0], info[1]], p.input_size)
+#     test_seq.append(seq)
+# test_seq = np.asarray(test_seq, dtype=bool)
+# start = time.time()
+# for w in range(0, len(test_seq), p.w_step):
+#     print(w, end=" ")
+#     pr = our_model.predict(mo.wrap2(test_seq[w:w + p.w_step], p.predict_batch_size))
+#     p2 = pr[:, :, p.mid_bin]
+#     if w == 0:
+#         predictions = p2
+#     else:
+#         predictions = np.concatenate((predictions, p2), dtype=np.float16)
 
-for index, info in enumerate(test_info):
-    for j, track in enumerate(eval_tracks):
-        t = track_ind_our[track]
-        pred_matrix_our[j, index] = predictions[index, t]
-
-print("")
-end = time.time()
-print("Our time")
-print(end - start)
-joblib.dump(pred_matrix_our, "chromix_gene_matrix.p", compress=3)
-# for i, track in enumerate(eval_tracks):
-#     pred_matrix_our[i] = pred_matrix_our[i] * max_dict[full_name[track]]
-pred_matrix_our = np.log10(pred_matrix_our + 1)
+# for index, info in enumerate(test_info):
+#     for j, track in enumerate(eval_tracks):
+#         t = track_ind_our[track]
+#         pred_matrix_our[j, index] = predictions[index, t]
+# print("")
+# end = time.time()
+# print("Our time")
+# print(end - start)
+# joblib.dump(pred_matrix_our, "pred_matrix_our.p", compress=3)
 # pred_matrix_our = qnorm.quantile_normalize(pred_matrix_our, axis=qnorm_axis)
-final_pred_our = {}
-for i in range(len(test_info)):
-    final_pred_our[test_info[i][2]] = {}
-for i in range(len(test_info)):
-    for it, track in enumerate(eval_tracks):
-        final_pred_our[test_info[i][2]].setdefault(track, []).append(pred_matrix_our[it][i])
-
-for i, gene in enumerate(final_pred_our.keys()):
-    if i % 10 == 0:
-        print(i, end=" ")
-    for track in eval_tracks:
-        final_pred_our[gene][track] = np.sum(final_pred_our[gene][track])
 
 # GT DATA #####################################################################################################
 #################################################################################################################
+eval_track_names = []
+for track in eval_tracks:
+    eval_track_names.append(full_name[track])
 load_info = []
 for j, info in enumerate(test_info):
     mid = int(info[1] / p.bin_size)
     load_info.append([info[0], mid])
 print("Loading ground truth tracks")
-eval_track_names = []
-for track in eval_tracks:
-    eval_track_names.append(full_name[track])
 gt_matrix = parser.par_load_data(load_info, eval_track_names, p).T
 print(gt_matrix.shape)
-gt_matrix = np.log10(gt_matrix + 1)
-# for i, track in enumerate(eval_tracks):
-#     gt_matrix[i] = gt_matrix[i] * max_dict[full_name[track]]
 
 # gt_matrix = qnorm.quantile_normalize(gt_matrix, axis=qnorm_axis)
-
-eval_gt = {}
-for i in range(len(test_info)):
-    eval_gt[test_info[i][2]] = {}
-for i in range(len(test_info)):
-    for it, track in enumerate(eval_tracks):
-        eval_gt[test_info[i][2]].setdefault(track, []).append(gt_matrix[it][i])
-
-for i, gene in enumerate(eval_gt.keys()):
-    if i % 10 == 0:
-        print(i, end=" ")
-    for track in eval_tracks:
-        eval_gt[gene][track] = np.sum(eval_gt[gene][track])
-
 
 print("")
 def eval_perf(eval_gt, final_pred):
     scatter_data = []
     corr_s = []
     corr_p = []
-    for gene in final_pred.keys():
+    for i in range(final_pred.shape[0]):
         a = []
         b = []
-        for v, track in enumerate(eval_tracks):
-            a.append(final_pred[gene][track])
-            b.append(eval_gt[gene][track])
+        for j in range(final_pred.shape[1]):
+            a.append(final_pred[i, j])
+            if eval_gt[i, j] < 0.7:
+                b.append(0)
+            else:
+                b.append(eval_gt[i, j])
         a = np.nan_to_num(a, neginf=0, posinf=0)
         b = np.nan_to_num(b, neginf=0, posinf=0)
         if np.sum(b)==0:
-            print(gene)
             continue
         sc = stats.spearmanr(a, b)[0]
         pc = stats.pearsonr(a, b)[0]
@@ -300,23 +251,20 @@ def eval_perf(eval_gt, final_pred):
             corr_p.append(0)
 
     print("")
-    print(f"Across tracks {len(corr_s)} {np.mean(corr_s)} {np.mean(corr_p)}")
+    print(f"Across genes {len(corr_s)} {np.mean(corr_s)} {np.mean(corr_p)}")
     scatter_data.append(np.asarray(corr_s))
     corr_s = []
     corr_p = []
-    for track in eval_tracks:
+    for i in range(final_pred.shape[1]):
         a = []
         b = []
-        for gene in eval_gt.keys():
-            # if eval_gt[gene][track] > 0.7:
-            a.append(final_pred[gene][track])
-            b.append(eval_gt[gene][track])
+        for j in range(final_pred.shape[0]):
+            a.append(final_pred[j, i])
+            b.append(eval_gt[j, i])
         a = np.nan_to_num(a, neginf=0, posinf=0)
         b = np.nan_to_num(b, neginf=0, posinf=0)
         if np.sum(b)==0:
-            print(track)
             continue
-        # print(len(a))
         sc = stats.spearmanr(a, b)[0]
         pc = stats.pearsonr(a, b)[0]
         if not math.isnan(sc):
@@ -325,7 +273,7 @@ def eval_perf(eval_gt, final_pred):
         else:
             corr_s.append(0)
             corr_p.append(0)
-    print(f"Across genes {len(corr_s)} {np.mean(corr_s)} {np.mean(corr_p)}")
+    print(f"Across tracks {len(corr_s)} {np.mean(corr_s)} {np.mean(corr_p)}")
     scatter_data.append(np.asarray(corr_s))
     return scatter_data
     
@@ -333,9 +281,9 @@ np.savetxt("gt_matrix.csv", np.mean(gt_matrix, axis=0), delimiter=",")
 np.savetxt("pred_matrix_enformer.csv", np.mean(pred_matrix, axis=0), delimiter=",")
 np.savetxt("pred_matrix_our.csv", np.mean(pred_matrix_our, axis=0), delimiter=",")
 print("Enformer =================================================")
-scatter_data_enf = eval_perf(eval_gt, final_pred_enformer)
+scatter_data_enf = eval_perf(gt_matrix, pred_matrix)
 print("OUR =================================================")
-scatter_data_our = eval_perf(eval_gt, final_pred_our)
+scatter_data_our = eval_perf(gt_matrix, pred_matrix_our)
 
 
 fig, axs = plt.subplots(1,2,figsize=(20, 10))

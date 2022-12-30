@@ -66,7 +66,7 @@ def get_signals(positions, head, kw, do_mean=True):
             if mark in track.lower():
                 chosen_tracks1.append(track)
         print(f"{len(chosen_tracks1)} {mark} tracks found")
-        signal = parser.par_load_data_temp(positions, chosen_tracks1, p)
+        signal = parser.par_load_data(positions, chosen_tracks1, p)
         if do_mean:
             signal = np.mean(signal, axis=-1, keepdims=True)
         if signals is None:
@@ -121,7 +121,7 @@ def get_seqs_and_features(df, one_hot):
     # signals_tss = get_signals(tss_pos, head["epigenome"], marks)
 
     # hic_keys = pd.read_csv("data/good_hic.tsv", sep="\t", header=None).iloc[:, 0]
-    # hic_signal = parser.par_load_hic_data_one(hic_keys, p, picked_regions_hic)
+    # hic_signal = parser.par_load_hic_data(hic_keys, p, picked_regions_hic)
     # hic_signal[np.isnan(hic_signal)] = 0
     # hic_signal = np.expand_dims(hic_signal, axis=1)
     
@@ -134,13 +134,16 @@ def get_seqs_and_features(df, one_hot):
 
 def get_linking_AUC():
     head = joblib.load(f"{p.pickle_folder}heads.gz")
+    if 'sc' in head: del head['sc']
+    for key in head.keys():
+        print(f"Number of tracks in head {key}: {len(head[key])}")
     one_hot = joblib.load(f"{p.pickle_folder}one_hot.gz")
     df = pd.read_csv("data/enhancers/all.tsv", sep="\t")
     # df_tiling = pd.read_csv("data/enhancers/tiling_tss.tsv", sep="\t")
     seqs1, seqs2, eseqs1, eseqs2, Y_label, add_features = get_seqs_and_features(df, one_hot)
 
     true_labels = {"<20000":[], "<40000":[], ">40000":[]}
-    methods = ["Enformer", "Chromix"] # "Baseline", 
+    methods = ["Chromix", "Enformer"] # "Baseline", 
     pred_labels = {}
     for m in methods:
         pred_labels[m] = {"<20000":[], "<40000":[], ">40000":[]}
@@ -153,43 +156,42 @@ def get_linking_AUC():
             # mixed_precision.set_global_policy('mixed_float16')
             # strategy = tf.distribute.MultiWorkerMirroredStrategy()
             # with strategy.scope():
-            #     our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, 0, p.hic_size, head)
+            #     our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, 0, p.hic_size, head["expression"])
             #     our_model.get_layer("our_resnet").set_weights(joblib.load(p.model_path + "_res"))
-            #     our_model.get_layer("our_expression").set_weights(joblib.load(p.model_path + "_expression"))
-            #     our_model.get_layer("our_epigenome").set_weights(joblib.load(p.model_path + "_epigenome"))
-            #     our_model.get_layer("our_conservation").set_weights(joblib.load(p.model_path + "_conservation"))
+            #     # our_model.get_layer("our_expression").set_weights(joblib.load(p.model_path + "_expression"))
+            #     # our_model.get_layer("our_epigenome").set_weights(joblib.load(p.model_path + "_epigenome"))
+            #     # our_model.get_layer("our_conservation").set_weights(joblib.load(p.model_path + "_conservation"))
             # dif, fold_changes = mo.batch_predict_effect_x(p, our_model, np.asarray(seqs1), np.asarray(seqs2))
             # # dif = mo.batch_predict_effect2(p, our_model, np.asarray(seqs1), np.asarray(seqs2))
             # joblib.dump(dif, "chromix_effect.p", compress=3)
             dif = joblib.load("chromix_effect.p")
         elif features == "Enformer":
-            import enformer_usage
-            dif = enformer_usage.calculate_effect(np.asarray(eseqs1), np.asarray(eseqs2))
-            joblib.dump(dif, "enformer_effect.p", compress=3)
-            # dif = joblib.load("enformer_effect.p")
-        # Drawing effect heatmap
-        # yinds = np.asarray(Y_label).argsort()
-        # sorted_dif = dif[yinds[::-1]]
+            # import enformer_usage
+            # dif = enformer_usage.calculate_effect(np.asarray(eseqs1), np.asarray(eseqs2))
+            # joblib.dump(dif, "enformer_effect.p", compress=3)
+            dif = joblib.load("enformer_effect.p")
+        yinds = np.asarray(Y_label).argsort()
+        sorted_dif = dif[yinds[::-1]]
         # sorted_dif = np.log10(sorted_dif + 1)
-        # sorted_y = np.asarray(Y_label)[yinds[::-1]]
-        # palette = sns.color_palette()
-        # palette_dict = dict(zip(["Significant", "Non-Significant"], palette))
-        # pair_labels = ["Significant", "Non-Significant"]
-        # pair_colors = []
-        # for y in sorted_y:
-        #     if y == True:
-        #         pair_colors.append(palette_dict["Significant"])
-        #     else:
-        #         pair_colors.append(palette_dict["Non-Significant"])
-        # cmap = sns.diverging_palette(h_neg=210, h_pos=350, s=90, l=30, as_cmap=True)
-        # g = sns.clustermap(sorted_dif,row_cluster=False, col_cluster=False,row_colors=pair_colors,
-        #                   linewidths=0, xticklabels=False, yticklabels=False)            
-        # for label in pair_labels:
-        #     g.ax_col_dendrogram.bar(0, 0, color=palette_dict[label],
-        #                             label=label, linewidth=0)
-        # g.ax_col_dendrogram.legend(loc="center", ncol=5)
-        # g.cax.set_position([.97, .2, .03, .45])
-        # g.savefig(f"{features}_heatmap.png")
+        sorted_y = np.asarray(Y_label)[yinds[::-1]]
+        palette = sns.color_palette()
+        palette_dict = dict(zip(["Significant", "Non-Significant"], palette))
+        pair_labels = ["Significant", "Non-Significant"]
+        pair_colors = []
+        for y in sorted_y:
+            if y == True:
+                pair_colors.append(palette_dict["Significant"])
+            else:
+                pair_colors.append(palette_dict["Non-Significant"])
+        cmap = sns.diverging_palette(h_neg=210, h_pos=350, s=90, l=30, as_cmap=True)
+        g = sns.clustermap(sorted_dif,row_cluster=False, col_cluster=False,row_colors=pair_colors,
+                          linewidths=0, xticklabels=False, yticklabels=False)            
+        for label in pair_labels:
+            g.ax_col_dendrogram.bar(0, 0, color=palette_dict[label],
+                                    label=label, linewidth=0)
+        g.ax_col_dendrogram.legend(loc="center", ncol=5)
+        g.cax.set_position([.97, .2, .03, .45])
+        g.savefig(f"{features}_heatmap.png")
 
         print(f"Y_label shape is {np.asarray(Y_label).shape}")
         # mid_bin = dif.shape[1] // 2
@@ -230,8 +232,8 @@ def get_linking_AUC():
         plt.savefig(features + "_linking.png")
 
         # Saving RF and PCA for other scripts
-        # if features == "Chromix":
-        #     joblib.dump(clf, "RF.pkl") 
+        if features == "Chromix":
+            joblib.dump(clf, "RF.pkl") 
         #     joblib.dump(pca, "PCA.pkl")
 
         Y_pred = clf.predict(X_test)
@@ -276,10 +278,10 @@ def linking_proba(chrom, tss, enhancer_mids, one_hot, our_model):
                     columns =['chr', 'tss', 'mid', 'Significant'])
     seqs1, seqs2, eseqs1, eseqs2, Y_label, add_features = get_seqs_and_features(df, one_hot)
     clf = joblib.load("RF.pkl") 
-    pca = joblib.load("PCA.pkl")
+    # pca = joblib.load("PCA.pkl")
     if len(seqs1) > 0:
         dif, fold_changes = mo.batch_predict_effect_x(p, our_model, np.asarray(seqs1), np.asarray(seqs2))
-        dif = pca.transform(dif)
+        # dif = pca.transform(dif)
         pred = clf.predict_proba(np.concatenate((dif, add_features), axis=-1))[:,1]
         with open(f"snp_linking/{chrom}_{enhancer_mids[0]}_{max(pred)}.bedGraph", 'w+') as file:
             for i in range(len(pred)):

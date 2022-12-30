@@ -69,7 +69,7 @@ for filename in sorted(os.listdir(VCF_DIR)):
 vcf_names.sort()
 # Number of files to use!
 vcf_names = vcf_names[6:12] 
-AUCs = []
+AUCs = {}
 print(f"Num vcf: {len(vcf_names)}")
 data = {}
 for name in vcf_names:
@@ -130,44 +130,52 @@ for name in vcf_names:
 
     enhancer_scores = np.expand_dims(np.asarray(enhancer_scores), axis=1)
     bn_enhancer_scores = np.expand_dims(np.asarray(bn_enhancer_scores), axis=1)
-    # joblib.dump(enhancer_scores, "enhancer_scores.p", compress=3)
+    joblib.dump(enhancer_scores, "enhancer_scores.p", compress=3)
     # enhancer_scores = joblib.load("enhancer_scores.p")
+    print("===========================================================")
+    print(enhancer_scores.shape)
+    print(bn_enhancer_scores.shape)
     #############################################################
     print(f"Predicting {len(seqs1)}")
     # Turn the two outputs into feature vectors for Random Forests
     dif, fold_changes = mo.batch_predict_effect_x(p, our_model, np.asarray(seqs1), np.asarray(seqs2))
+    joblib.dump(dif, "dif_gtex.p", compress=3)
+    # dif = joblib.load("dif_gtex.p")
     # dif = calculate_effect_pca(np.asarray(seqs1), np.asarray(seqs2))
     print("Done")
-    for add_features in [bn_enhancer_scores, enhancer_scores]:
-        dif = np.concatenate((dif, add_features), axis=-1)
+    for method in ["Baseline", "Binary score", "Enhancer score"]:
+        print(method)
+        if method != "Baseline":
+            if method == "Binary score":
+                add_features = bn_enhancer_scores
+            else:
+                add_features = enhancer_scores
+            dif = np.concatenate((dif, add_features), axis=-1)
 
         X_train, X_test, Y_train, Y_test = train_test_split(dif, np.asarray(Y_label), test_size=0.3, random_state=1)
-
-        X_train_dist = X_train[:, -1 * add_features.shape[1]:]
-        X_test_dist = X_test[:, -1 * add_features.shape[1]:]
-        X_train = X_train[:, :-1 * add_features.shape[1]]
-        X_test = X_test[:, :-1 * add_features.shape[1]]
+        if method != "Baseline":
+            X_train_dist = X_train[:, -1 * add_features.shape[1]:]
+            X_test_dist = X_test[:, -1 * add_features.shape[1]:]
+            X_train = X_train[:, :-1 * add_features.shape[1]]
+            X_test = X_test[:, :-1 * add_features.shape[1]]
 
         pca = PCA(n_components=10)
         pca.fit(X_train)
 
         X_train = pca.transform(X_train)
         X_test = pca.transform(X_test)
-        clf = RandomForestClassifier() 
-        clf.fit(X_train, Y_train)
-        Y_pred = clf.predict_proba(X_test)[:,1]
-        auc1 = roc_auc_score(Y_test, Y_pred)
-        print(f"{name} AUC1: {auc1}")
 
-        X_train = np.concatenate((X_train, X_train_dist), axis=-1)
-        X_test = np.concatenate((X_test, X_test_dist), axis=-1)
+        if method != "Baseline":
+            X_train = np.concatenate((X_train, X_train_dist), axis=-1)
+            X_test = np.concatenate((X_test, X_test_dist), axis=-1)
+
         clf = RandomForestClassifier()
         clf.fit(X_train, Y_train)
         Y_pred = clf.predict_proba(X_test)[:,1]
-        auc2 = roc_auc_score(Y_test, Y_pred)
-        print(f"{name} AUC2: {auc2}")
+        auc = roc_auc_score(Y_test, Y_pred)
+        print(f"{name} AUC: {auc}")
 
-    AUCs.append(auc2)
+        AUCs.setdefault(method, []).append(auc)
 
     # fig, axs = plt.subplots(1,1,figsize=(15, 15))
     # RocCurveDisplay.from_estimator(clf, X_test, Y_test, ax=axs, name=name)
@@ -178,14 +186,8 @@ for name in vcf_names:
     # plt.ylabel("True Positive Rate") 
     # plt.tight_layout()
     # plt.savefig(name + "_roc_pca.png")
+for method in AUCs.keys():
+    print(f"{method} average AUC: {np.mean(AUCs[method])}")
 
-
-
-# We used principal component analysis (PCA) to reduce 5,313 variant effect features from Enformer to 20 principle components.
-# We used variant effect scores from 1000 Genomes SNPs on chromosome 9 and performed the following steps:
-# (1) subtracted the median and divided by standard deviation estimated from the interquartile range as implemented in RobustScaler in scikit-learn (v0.23.2);
-# (2) reduced the dimensionality to 20 principle components using TruncatedSVD from scikit-learn; and 
-# (3) normalized the resulting principal component features using RobustScaler to obtain z-scores.
-
-# Turn off dropout!!!!!!!!!! or multiple eval
-print(f"Average AUC: {np.mean(AUCs)}")
+df = pd.DataFrame.from_dict(AUCs)
+df.to_csv('gtex_auc.csv', index=False)
