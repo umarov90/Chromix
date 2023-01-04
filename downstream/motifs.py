@@ -11,20 +11,8 @@ import logomaker
 from sklearn.cluster import KMeans
 from main_params import MainParams
 import parse_data as parser
-os.environ["CUDA_VISIBLE_DEVICES"] = '-1'
 
-MAX_TRACKS = 1
 MAX_PROMOTERS = 5
-k = 40
-OUT_DIR = "motifs/"
-
-
-def find_nearest(array, value):
-    array = np.asarray(array)
-    idx = (np.abs(array - value)).argmin()
-    return array[idx]
-
-
 p = MainParams()
 head = joblib.load(f"{p.pickle_folder}heads.gz")
 head_tracks = head["expression"]
@@ -57,31 +45,42 @@ for info in eval_infos:
     test_seq.append(ns[:, :-1])
 test_seq = np.asarray(test_seq, dtype=bool)
 
-tracks_count = 0
+attributions = []
+att_len = 200
+for si, seq in enumerate(test_seq):
+    if si % 1 == 0:
+        print(si, end=" ")
+    if si > MAX_PROMOTERS:
+        break
+    seqs_to_explain.append(seq[p.half_size - att_len // 2: p.half_size + att_len // 2, :])
+    # attribution
+    batch = []
+    batch.append(seq)
+    inds = []
+    for i in range(p.half_size - att_len // 2, p.half_size + att_len // 2, 1):
+        seq2 = seq.copy()
+        ind = a.argmax(seq2[i])
+        inds.append(ind)
+        seq2[i, ind] = 0
+        batch.append(seq2)
+    for w in range(0, len(seqs), p.w_step):
+        print(w, end=" ")
+        pr = our_model.predict(mo.wrap2(batch[w:w + p.w_step], p.predict_batch_size))
+        pr = pr[:, :, p.mid_bin]
+        if w == 0:
+            predictions = pr
+        else:
+            predictions = np.concatenate((predictions, pr))
+    attribution = np.zeros((att_len, 4, len(head_tracks)))
+    for i in range(1, len(predictions), 1):
+        dif =  predictions[0] - predictions[i]
+        attribution[i, inds[i]] = dif
+    attributions.append(attribution)
+
+attributions = np.asarray(attributions)      
+Path(self.model_folder).mkdir(parents=True, exist_ok=True)
+np.savez_compressed("attributions/ohe.npz", np.asarray(seqs_to_explain))
 for track_to_use, track in enumerate(head_tracks):
     if "FANTOM5" not in track or "K562" not in track or "response" in track:
         continue
-    seqs_to_explain = []
-    shap_values = []
-    print(track)
-    for si, seq in enumerate(test_seq):
-        if si % 1 == 0:
-            print(si, end=" ")
-        if si > MAX_PROMOTERS:
-            break
-        seqs_to_explain.append(seq)
-        # attribution
-        baseline = tf.zeros(shape=(p.input_size, p.num_features))
-        image = seq.astype('float32')
-        ig_attributions = attribution.integrated_gradients(our_model, baseline=baseline,
-                                                           image=image,
-                                                           target_class_idx=[p.mid_bin, track_to_use],
-                                                           m_steps=10)
-
-        attribution_mask = tf.squeeze(ig_attributions).numpy()
-        shap_values.append(attribution_mask)
-
-    np.savez_compressed("ohe.npz", np.asarray(seqs_to_explain))
-    np.savez_compressed("shap.npz", np.asarray(seqs_to_explain))
-
-
+    np.savez_compressed(f"attributions/attribution_{track}.npz", np.asarray(attributions[:, :, :, track_to_use]))

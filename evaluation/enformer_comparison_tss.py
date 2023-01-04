@@ -68,12 +68,14 @@ SEQUENCE_LENGTH = 393216
 train_info_all, valid_info_all, test_info_all, _ = parser.parse_sequences(p)
 all_info = train_info_all + valid_info_all + test_info_all
 test_info = []
-for info in test_info_all:
-    if info[5]:
+for info in test_info_all: # test_info_all
+    if info[5]: 
         continue
     # if info[0] != "chr14":
     #     continue
     test_info.append(info)
+    # if len(test_info) > 6000:
+    #     break
 cor_tracks = pd.read_csv("data/fantom_tracks.tsv", sep="\t").iloc[:, 0].tolist()
 # test_info = test_info[:100]
 enf_tracks = df_targets[df_targets['description'].str.contains("CAGE")]['identifier'].tolist()
@@ -167,11 +169,10 @@ pred_matrix = joblib.load("pred_matrix.p")
 # print(end - start)
 # joblib.dump(pred_matrix, "pred_matrix.p", compress=3)
 qnorm_axis = 0
-# pred_matrix = qnorm.quantile_normalize(pred_matrix, axis=qnorm_axis)
+pred_matrix = qnorm.quantile_normalize(pred_matrix, axis=qnorm_axis)
 # OUR MODEL #####################################################################################################
 #################################################################################################################
 pred_matrix_our = joblib.load("pred_matrix_our.p")
-# print(f"{np.max(pred_matrix_our)}\t{np.std(pred_matrix_our)}\t{np.mean(pred_matrix_our)}\t{np.median(pred_matrix_our)}")
 # from tensorflow.keras import mixed_precision
 # mixed_precision.set_global_policy('mixed_float16')
 # heads = joblib.load(f"{p.pickle_folder}heads.gz")
@@ -206,7 +207,8 @@ pred_matrix_our = joblib.load("pred_matrix_our.p")
 # print("Our time")
 # print(end - start)
 # joblib.dump(pred_matrix_our, "pred_matrix_our.p", compress=3)
-# pred_matrix_our = qnorm.quantile_normalize(pred_matrix_our, axis=qnorm_axis)
+print(f"{np.max(pred_matrix_our)}\t{np.std(pred_matrix_our)}\t{np.mean(pred_matrix_our)}\t{np.median(pred_matrix_our)}")
+pred_matrix_our = qnorm.quantile_normalize(pred_matrix_our, axis=qnorm_axis)
 
 # GT DATA #####################################################################################################
 #################################################################################################################
@@ -220,8 +222,16 @@ for j, info in enumerate(test_info):
 print("Loading ground truth tracks")
 gt_matrix = parser.par_load_data(load_info, eval_track_names, p).T
 print(gt_matrix.shape)
+load_info = []
+for j, info in enumerate(all_info):
+    mid = int(info[1] / p.bin_size)
+    load_info.append([info[0], mid])
+gt_matrix_all = parser.par_load_data(load_info, eval_track_names, p).T
+gt_matrix_all = gt_matrix_all.astype(np.float32)
+gt_matrix_all = np.sum(gt_matrix_all, axis=1)
+print(gt_matrix_all.shape)
 
-# gt_matrix = qnorm.quantile_normalize(gt_matrix, axis=qnorm_axis)
+gt_matrix = qnorm.quantile_normalize(gt_matrix, axis=qnorm_axis)
 
 print("")
 def eval_perf(eval_gt, final_pred):
@@ -259,10 +269,14 @@ def eval_perf(eval_gt, final_pred):
         a = []
         b = []
         for j in range(final_pred.shape[0]):
+            # a.append((final_pred[j, i] * 1000000) / gt_matrix_all[j])
+            # b.append((eval_gt[j, i] * 1000000) / gt_matrix_all[j])
             a.append(final_pred[j, i])
             b.append(eval_gt[j, i])
         a = np.nan_to_num(a, neginf=0, posinf=0)
         b = np.nan_to_num(b, neginf=0, posinf=0)
+        if np.mean(b) < 10 or np.var(b) < 10:
+            continue
         if np.sum(b)==0:
             continue
         sc = stats.spearmanr(a, b)[0]

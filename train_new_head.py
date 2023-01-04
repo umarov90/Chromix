@@ -179,12 +179,12 @@ def check_perf(mp_q):
         import model as mo
         strategy = tf.distribute.MultiWorkerMirroredStrategy()
         with strategy.scope():
-            our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, 0, p.hic_size, heads)
+            our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, 0, p.hic_size, track_names)
             our_model.get_layer("our_resnet").set_weights(joblib.load(p.model_path + "_res"))
             our_model.get_layer("our_expression").set_weights(joblib.load(p.model_path + "_expression"))
         train_eval_info = random.sample(train_info, len(train_info) // 10)
         print(f"Training set {len(train_eval_info)}")
-        training_result = evaluation.eval_perf(p, our_model, heads, train_eval_info,
+        training_result = evaluation.eval_perf(p, our_model, track_names, train_eval_info,
                                                False, current_epoch, "train", one_hot)
         # training_result = "0"
         valid_eval_chr_info = []
@@ -192,7 +192,7 @@ def check_perf(mp_q):
             # if info[0] == "chr2":
             valid_eval_chr_info.append(info)
         print(f"Valid set {len(valid_eval_chr_info)}")
-        valid_result = evaluation.eval_perf(p, our_model, heads, valid_eval_chr_info,
+        valid_result = evaluation.eval_perf(p, our_model, track_names, valid_eval_chr_info,
                                             False, current_epoch, "valid", one_hot)
         with open(p.model_name + "_history.tsv", "a+") as myfile:
             myfile.write(training_result + "\t" + valid_result + "\t" + str(auc) + "\n")
@@ -223,7 +223,7 @@ p = MainParams()
 dry_run_regions = []
 if __name__ == '__main__':
     train_info, valid_info, test_info, protein_coding = parser.parse_sequences(p)
-    track_names = parser.parse_new_tracks(p)
+    track_names = joblib.load(f"{p.pickle_folder}track_names.gz")
     print(f"Number of tracks: {len(track_names)}")
     import tensorflow_addons as tfa
     loss_weights = {}
@@ -234,7 +234,7 @@ if __name__ == '__main__':
             if line.startswith("#"):
                 continue
             (key, weight, lr, wd) = line.split()
-            if hic_num == 0 and key == "our_hic":
+            if key == "our_hic":
                 continue
             if key != "our_resnet":
                 loss_weights[key] = float(weight)
@@ -254,8 +254,8 @@ if __name__ == '__main__':
     fit_epochs = 1
     try:
         for current_epoch in range(start_epoch, p.num_epochs, 1):
-            # check_perf(mp_q)
-            # exit()
+            check_perf(mp_q)
+            exit()
             last_proc = get_data_and_train(last_proc, fit_epochs)
             if current_epoch % 50 == 0 and current_epoch != 0:  # and current_epoch != 0:
                 print("Eval epoch")

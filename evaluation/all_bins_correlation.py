@@ -76,6 +76,7 @@ for w in range(0, len(test_seq), p.w_step):
     else:
         predictions = np.concatenate((predictions, pr), dtype=np.float16)
 
+predictions = np.log10(predictions + 1)
 print(predictions.shape)
 meta = pd.read_csv("data/ML_all_track.metadata.2022053017.tsv", sep="\t")
 track_types = {}
