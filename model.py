@@ -9,7 +9,7 @@ import numpy as np
 def make_model(input_size, num_features, num_regions, hic_num, hic_size, one_d_heads):
     inputs = Input(shape=(input_size, num_features))
     x = inputs
-    output1d = body_c(x, input_size)
+    output1d = body_d(x, input_size)
     our_resnet = Model(inputs, output1d, name="our_resnet")
     outs = our_resnet(inputs)
 
@@ -99,7 +99,7 @@ def body_d(input_x, input_size):
     
     
 def body_c(input_x, input_size):
-    num_filters = 256
+    num_filters = 512 + 256
     filter_nums = exponential_linspace_int(num_filters, 2 * num_filters, 6, divisible_by=128)
     x = Conv1D(num_filters,strides=1,kernel_size=15, padding="same")(input_x)
     x = conv_block(x, num_filters, 1, True)
@@ -111,7 +111,7 @@ def body_c(input_x, input_size):
         x = MaxPooling1D()(x)
 
     current_len = input_size // 128
-    for block in range(8):
+    for block in range(6):
         y = LayerNormalization(epsilon=1e-6)(x)
         y = tf.transpose(y, [0, 2, 1])
         y = Dense(4096)(y)

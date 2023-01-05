@@ -39,7 +39,7 @@ def parse_hic(p):
         return hic_keys
 
 
-def parse_tracks(p, infos):
+def parse_tracks(p):
     track_names_col = {}
     meta = pd.read_csv("data/ML_all_track.metadata.2022053017.tsv", sep="\t")
     for specie in p.species:
@@ -50,11 +50,10 @@ def parse_tracks(p, infos):
             tracks_folder = p.tracks_folder + specie + "/"
             track_names = []
             for filename in os.listdir(tracks_folder):
-                if filename.endswith(".gz"):
-                    fn = tracks_folder + filename
-                    size = os.path.getsize(fn)
-                    if size > 200000 or filename.startswith("sc"):
-                        track_names.append(filename)
+                fn = tracks_folder + filename
+                size = os.path.getsize(fn)
+                if size > 20000:
+                    track_names.append(filename)
 
             print(f"{specie} {len(track_names)}")
 
@@ -69,7 +68,7 @@ def parse_tracks(p, infos):
                 sub_tracks = track_names[t:t_end]
                 # parse_some_tracks(q, sub_tracks, ga, p.bin_size, tracks_folder,meta)
                 proc = mp.Process(target=parse_some_tracks,
-                               args=(q, p, sub_tracks, ga, p.bin_size, tracks_folder, meta, t, infos,))
+                               args=(q, p, sub_tracks, ga, p.bin_size, tracks_folder, meta, t,))
                 proc.start()
                 ps.append(proc)
 
@@ -77,13 +76,22 @@ def parse_tracks(p, infos):
                 for proc in ps:
                     proc.join()
                 print(q.get())
-            joblib.dump(track_names, f"{p.pickle_folder}track_names_{specie}.gz", compress="lz4")
-        track_names_col[specie] = track_names
+            track_names_final = []
+            for track in track_names:
+                if track.endswith(".64nt.bed.gz"):
+                    track = track[:-len(".64nt.bed.gz")]
+                track += ".parsed"
+                new_path = p.parsed_tracks_folder + track
+                if Path(new_path).exists():
+                    track_names_final.append(track)
+            print(f"{specie} final tracks {len(track_names)}")
+            joblib.dump(track_names_final, f"{p.pickle_folder}track_names_{specie}.gz", compress="lz4")
+        track_names_col[specie] = track_names_final
 
     joblib.dump(track_names_col, f"{p.pickle_folder}track_names_col.gz", compress="lz4")
     return track_names_col
 
-def parse_some_tracks(q, p, some_tracks, ga, bin_size, tracks_folder, meta, t, infos):
+def parse_some_tracks(q, p, some_tracks, ga, bin_size, tracks_folder, meta, t):
     maxes = []
     for track in some_tracks:
         # if Path(main.p.parsed_tracks_folder + track).is_file():
@@ -100,17 +108,19 @@ def parse_some_tracks(q, p, some_tracks, ga, bin_size, tracks_folder, meta, t, i
                 meta_row = meta_row.iloc[0]
             else:
                 meta_row = None
-                continue
             # if "FANTOM5" not in track:
             #     continue
-            # delete in case it already exists
             if Path(new_path).exists():
-                Path(new_path).unlink()
+                continue
+                # Path(new_path).unlink()
             gast = copy.deepcopy(ga)
             df = pd.read_csv(fn, delim_whitespace=True, header=None, index_col=False)
             if len(df.columns) == 4:
                 df = df.rename(columns={0: "chr", 1: "start", 2: "end", 3: "score"})
                 df["mid"] = (df["start"] + (df["end"] - df["start"]) / 2) / bin_size
+            elif len(df.columns) == 6:
+                df = df.rename(columns={0: "chr", 1: "start", 2: "end", 3: "id", 4: "score", 5: "strand"})
+                df["mid"] = df["start"] // bin_size
             else:
                 df = df.rename(columns={0: "chr", 1: "start", 2: "end", 3: "id", 4: "score", 5: "strand", 6: "tss"})
                 df["mid"] = df["tss"] // bin_size
@@ -125,40 +135,20 @@ def parse_some_tracks(q, p, some_tracks, ga, bin_size, tracks_folder, meta, t, i
             df = df[["chr", "start", "end", "score", "mid"]]
             chrd = list(df["chr"].unique())
 
-            total_bins = 0
             # group the scores over `key` and gather them in a list
             grouped_scores = df.groupby("chr").agg(list)
 
-            non_zero_all = []
             for key, val in gast.items():
                 if key not in chrd:
                     continue
                 pos, score = grouped_scores.loc[key, ["mid", "score"]]
                 add_fast(gast[key], np.asarray(pos), np.asarray(score, dtype=np.float32))
-                total_bins += np.count_nonzero(gast[key])
-                non_zero = gast[key][np.where(gast[key] != 0)]
-                non_zero_all.append(non_zero)
-            
-            non_zero_all = np.concatenate(non_zero_all, axis=0, dtype=np.float32)
-            if meta_row["value"] == "RNA":
-                tss_vals = []
-                for info in infos:
-                    tss_vals.append(gast[info[0]][info[1] // p.bin_size])
-                qnts = np.quantile(tss_vals, [0.95, 0.97])
-            else:
-                qnts = np.quantile(non_zero_all, [0.95, 0.97])
 
-            
-            # if meta_row is not None and meta_row["value"] == "RNA" and total_bins < 200000:
-            #     print(f"Skipping: {track} {total_bins}")
-            #     continue
-
-            # if total_bins < 20000:
-            #     print(f"Skipping nonrna: {track} {total_bins}")
-            #     continue
 
             for key in gast.keys():
-                if meta_row["value"] == "conservation":
+                if meta_row is None:
+                    gast[key] = np.minimum(gast[key], 384 + np.sqrt(np.maximum(0, gast[key] - 384)))
+                elif meta_row["value"] == "conservation":
                     pass
                 elif meta_row["value"] == "RNA":
                     gast[key] = np.minimum(gast[key], 384 + np.sqrt(np.maximum(0, gast[key] - 384)))
@@ -169,18 +159,16 @@ def parse_some_tracks(q, p, some_tracks, ga, bin_size, tracks_folder, meta, t, i
 
             max_val = -1
             for key in gast.keys():
-                # if meta_row["value"] != "RNA":
                 # gast[key] = gaussian_filter(gast[key], sigma=1.0)
                 max_val = max(np.max(gast[key]), max_val)
 
             for key in gast.keys():
-                # if meta_row["value"] != "RNA":
                 # gast[key] = gast[key] / max_val
                 gast[key] = np.round(gast[key], 3)
                 gast[key] = gast[key].astype(np.float16)
 
             joblib.dump(gast, new_path, compress="lz4")
-            print(f"Parsed {track}. Max value: {max_val}. Sum: {total_reads}. Total bins: {total_bins}. {qnts}. {np.max(non_zero_all)}")
+            print(f"Parsed {track}. Max value: {max_val}. Sum: {total_reads}.")
             maxes.append(f"{track_name}\t{max_val}")
         except Exception as exc:
             print(exc)

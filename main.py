@@ -59,6 +59,8 @@ def get_data_and_train(last_proc, fit_epochs, head_id):
         output_scores_info.append([info[0], start_bin, start_bin + p.num_bins])
 
     print(datetime.now().strftime('[%H:%M:%S] ') + "Loading parsed tracks")
+    # half of sequences will be reverse-complemented
+    half = len(input_sequences) // 2
     if head_id == 0:
         output_conservation = parser.par_load_data(output_scores_info, heads[p.species[head_id]]["conservation"], p)
         output_expression = parser.par_load_data(output_scores_info, heads[p.species[head_id]]["expression"], p)
@@ -67,8 +69,6 @@ def get_data_and_train(last_proc, fit_epochs, head_id):
         output_hic = parser.par_load_hic_data(hic_keys, p, picked_regions, half)
     else:
         output_expression = parser.par_load_data(output_scores_info, heads[p.species[head_id]], p)
-    # half of sequences will be reverse-complemented
-    half = len(input_sequences) // 2
     gc.collect()
     print_memory()
     input_sequences = np.asarray(input_sequences, dtype=bool)
@@ -132,7 +132,7 @@ def make_model_and_train(heads, head_name, input_sequences, all_outputs, fit_epo
         with strategy.scope():
             our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, hic_num if head_name == "hg38" else 0, p.hic_size, heads)
             optimizers_and_layers = [(optimizers["our_resnet"], our_model.get_layer("our_resnet")),
-                                     (optimizers["our_expression"], our_model.get_layer("our_expression"))]
+                                     (optimizers["our_expression_" + head_name], our_model.get_layer("our_expression"))]
             if head_name == "hg38":
                 if hic_num > 0:
                     optimizers_and_layers.append((optimizers["our_hic"], our_model.get_layer("our_hic")))
@@ -159,14 +159,17 @@ def make_model_and_train(heads, head_name, input_sequences, all_outputs, fit_epo
                 if hic_num > 0:
                     losses["our_hic"] = "mse"
             else:
-                our_model.compile(optimizer=optimizer, loss="poisson")
+                losses = "poisson"
             if os.path.exists(p.model_folder + "loss_scale"):
                 initial_scale = joblib.load(p.model_folder + "loss_scale")
                 print(f"Initial scale: {initial_scale}")
             else:
                 initial_scale = 1
             opt_scaled = tf.keras.mixed_precision.LossScaleOptimizer(optimizer, initial_scale=initial_scale, dynamic_growth_steps=200)
-            our_model.compile(optimizer=opt_scaled, loss=losses, loss_weights=loss_weights)
+            if head_name == "hg38": 
+                our_model.compile(optimizer=opt_scaled, loss=losses, loss_weights=loss_weights)
+            else:
+                our_model.compile(optimizer=opt_scaled, loss=losses)
             if current_epoch == 0 and os.path.exists(p.model_path + "_opt_resnet"):
                 # need to init the optimizers
                 # to prevent bug with fp16 loss being too big for initial scaling
@@ -186,9 +189,9 @@ def make_model_and_train(heads, head_name, input_sequences, all_outputs, fit_epo
                 # loading the previous optimizer weights
                 if os.path.exists(p.model_path + "_opt_expression_" + head_name):
                     print("loading expression optimizer")
-                    optimizers["our_expression"].set_weights(joblib.load(p.model_path + "_opt_expression_" + head_name))
-                    optimizers["our_expression"].learning_rate.assign(learning_rates["our_expression"])
-                    optimizers["our_expression"].weight_decay.assign(weight_decays["our_expression"])
+                    optimizers["our_expression_" + head_name].set_weights(joblib.load(p.model_path + "_opt_expression_" + head_name))
+                    optimizers["our_expression_" + head_name].learning_rate.assign(learning_rates["our_expression"])
+                    optimizers["our_expression_" + head_name].weight_decay.assign(weight_decays["our_expression"])
                 if os.path.exists(p.model_path + "_opt_resnet"):
                     print("loading resnet optimizer")
                     optimizers["our_resnet"].set_weights(joblib.load(p.model_path + "_opt_resnet"))
@@ -229,20 +232,14 @@ def make_model_and_train(heads, head_name, input_sequences, all_outputs, fit_epo
         return None
 
     try:
-        def scheduler(epoch, lr):
-            if epoch == 0 and lr == learning_rates["our_resnet"]:
-                return 0
-            else:
-                return lr
-        callback = tf.keras.callbacks.LearningRateScheduler(scheduler)
-        our_model.fit(train_data, epochs=fit_epochs, batch_size=p.GLOBAL_BATCH_SIZE, callbacks=[callback])
+        our_model.fit(train_data, epochs=fit_epochs, batch_size=p.GLOBAL_BATCH_SIZE)
         del train_data
         gc.collect()
         Path(p.model_folder + "temp/").mkdir(parents=True, exist_ok=True)
         joblib.dump(our_model.get_layer("our_resnet").get_weights(), p.model_folder + "temp/" + p.model_name + "_res", compress="lz4")
         joblib.dump(optimizers["our_resnet"].get_weights(), p.model_folder + "temp/" + p.model_name + "_opt_resnet", compress="lz4")
         joblib.dump(our_model.get_layer("our_expression").get_weights(), p.model_folder + "temp/" + p.model_name + "_expression_" + head_name, compress="lz4")
-        joblib.dump(optimizers["our_expression"].get_weights(), p.model_folder + "temp/" + p.model_name + "_opt_expression_" + head_name, compress="lz4")
+        joblib.dump(optimizers["our_expression_" + head_name].get_weights(), p.model_folder + "temp/" + p.model_name + "_opt_expression_" + head_name, compress="lz4")
         if head_name == "hg38":
             if hic_num > 0:
                 joblib.dump(optimizers["our_hic"].get_weights(), p.model_folder + "temp/" + p.model_name + "_opt_hic", compress="lz4")
@@ -280,10 +277,11 @@ def check_perf(mp_q):
             our_model.get_layer("our_expression").set_weights(joblib.load(p.model_path + "_expression_hg38"))
             our_model.get_layer("our_epigenome").set_weights(joblib.load(p.model_path + "_epigenome"))
             our_model.get_layer("our_conservation").set_weights(joblib.load(p.model_path + "_conservation"))
+        one_hot = joblib.load(f"{p.pickle_folder}hg38_one_hot.gz")
         auc = 0 # get_linking_AUC()
         train_eval_info = random.sample(train_info, len(train_info) // 10)
         print(f"Training set {len(train_eval_info)}")
-        training_result = evaluation.eval_perf(p, our_model, heads, train_eval_info,
+        training_result = evaluation.eval_perf(p, our_model, heads["hg38"], train_eval_info,
                                                False, current_epoch, "train", one_hot)
         # training_result = "0"
         valid_eval_chr_info = []
@@ -291,7 +289,7 @@ def check_perf(mp_q):
             # if info[0] == "chr2":
             valid_eval_chr_info.append(info)
         print(f"Valid set {len(valid_eval_chr_info)}")
-        valid_result = evaluation.eval_perf(p, our_model, heads, valid_eval_chr_info,
+        valid_result = evaluation.eval_perf(p, our_model, heads["hg38"], valid_eval_chr_info,
                                             False, current_epoch, "valid", one_hot)
         with open(p.model_name + "_history.tsv", "a+") as myfile:
             myfile.write(training_result + "\t" + valid_result + "\t" + str(auc) + "\n")
@@ -325,7 +323,7 @@ if __name__ == '__main__':
     if Path(f"{p.pickle_folder}track_names_col.gz").is_file():
         track_names_col = joblib.load(f"{p.pickle_folder}track_names_col.gz")
     else:
-        track_names_col = parser.parse_tracks(p, train_info+valid_info+test_info)
+        track_names_col = parser.parse_tracks(p)
 
     if Path(f"{p.pickle_folder}heads.gz").is_file():
         heads = joblib.load(f"{p.pickle_folder}heads.gz")
@@ -334,6 +332,9 @@ if __name__ == '__main__':
         for specie in p.species:
             shuffled_tracks = random.sample(track_names_col[specie], len(track_names_col[specie]))
             if specie == "hg38":
+                sc_head = [x for x in shuffled_tracks if x.startswith(("scAtlas", "scATAC"))]
+                shuffled_tracks = [x for x in shuffled_tracks if not x.startswith(("scAtlas", "scATAC", "scEnd5"))]
+                joblib.dump(sc_head, f"{p.pickle_folder}sc_head.gz", compress="lz4")
                 meta = pd.read_csv("data/ML_all_track.metadata.2022053017.tsv", sep="\t")
                 new_head = {"expression": [x for x in shuffled_tracks if
                                            meta.loc[meta['file_name'] == x].iloc[0]["technology"].startswith(
@@ -378,14 +379,11 @@ if __name__ == '__main__':
             weight_decays[key] = float(wd)
     optimizers = {}
     optimizers["our_resnet"] = tfa.optimizers.AdamW(learning_rate=learning_rates["our_resnet"], weight_decay=weight_decays["our_resnet"])
-    optimizers["our_expression"] = tfa.optimizers.AdamW(learning_rate=learning_rates["our_expression"], weight_decay=weight_decays["our_expression"])
+    for specie in p.species:
+        optimizers["our_expression_" + specie] = tfa.optimizers.AdamW(learning_rate=learning_rates["our_expression"], weight_decay=weight_decays["our_expression"])
     optimizers["our_epigenome"] = tfa.optimizers.AdamW(learning_rate=learning_rates["our_epigenome"], weight_decay=weight_decays["our_epigenome"])
     optimizers["our_conservation"] = tfa.optimizers.AdamW(learning_rate=learning_rates["our_conservation"], weight_decay=weight_decays["our_conservation"])
     optimizers["our_hic"] = tfa.optimizers.AdamW(learning_rate=learning_rates["our_hic"], weight_decay=weight_decays["our_hic"])
-
-    training_regions = joblib.load(f"{p.pickle_folder}regions.gz")
-    training_regions_tss = joblib.load(f"{p.pickle_folder}train_info.gz")
-    one_hot = joblib.load(f"{p.pickle_folder}one_hot.gz")
 
     mp_q = mp.Queue()
     print("Training starting")
@@ -399,11 +397,13 @@ if __name__ == '__main__':
                 head_id = 1 + (current_epoch - math.ceil(current_epoch / 2)) % (len(heads) - 1)
             if head_id == 0:
                 p.STEPS_PER_EPOCH = 300
+                fit_epochs = 2
             else:
                 p.STEPS_PER_EPOCH = 600
+                fit_epochs = 1
             # check_perf(mp_q)
             # exit()
-            last_proc = get_data_and_train(last_proc, fit_epochs)
+            last_proc = get_data_and_train(last_proc, fit_epochs, head_id)
             if current_epoch % 50 == 0 and current_epoch != 0:  # and current_epoch != 0:
                 print("Eval epoch")
                 print(mp_q.get())
