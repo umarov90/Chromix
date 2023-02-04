@@ -73,8 +73,9 @@ heads = joblib.load(f"{p.pickle_folder}heads.gz")
 # pc = stats.pearsonr(v1, v2)[0]
 # sc = stats.spearmanr(v1, v2)[0]
 # print(f"{pc} {sc}")
-file = "CAGE.RNA.ctss.thymus_fetal_pool1.CNhs10650.FANTOM5.parsed"
-parsed_track = joblib.load(file)
+file = "locus_coeruleus_adult_donor8633.CNhs14172.10388-105I1.rheMac8.ctss.bed.gz.parsed"
+file_path = "parsed_tracks/" + file
+parsed_track = joblib.load(file_path)
 with open(f"bed_output/{file}.bedGraph", 'w+') as f:
     for i, val in enumerate(parsed_track["chr1"]):
         if val > 0:

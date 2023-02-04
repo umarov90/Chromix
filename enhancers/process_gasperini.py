@@ -10,7 +10,12 @@ train_info, valid_info, test_info, protein_coding = parser.parse_sequences(p)
 infos = train_info + valid_info + test_info
 
 df = pd.read_csv("data/enhancers/gasperini_original.tsv", sep="\t")
-df = df.loc[df['high_confidence_subset'] == True]
+df_neg = pd.read_csv("data/enhancers/gasperini_all_original.tsv", sep="\t")
+# Drop rows from df_neg that have matching values in df
+merged = df_neg.merge(df, how='inner', on=['chr.candidate_enhancer', 'start.candidate_enhancer'])
+df_neg.drop(merged.index, inplace=True)
+
+# df = df.loc[df['high_confidence_subset'] == True]
 a = df['ENSG'].unique()
 head = joblib.load(f"{p.pickle_folder}heads.gz")["expression"]
 f5_tracks = []

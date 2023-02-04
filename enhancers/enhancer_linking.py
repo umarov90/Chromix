@@ -24,6 +24,7 @@ from scipy import stats
 import bisect 
 from sklearn.metrics import confusion_matrix
 import seaborn as sns
+from sklearn.model_selection import KFold
 sns.set(font_scale = 2.5)
 
 
@@ -77,7 +78,7 @@ def get_signals(positions, head, kw, do_mean=True):
     return signals
 
 
-def get_seqs_and_features(df, one_hot):
+def get_seqs_and_features(df, one_hot, head):
     seqs1 = []
     seqs2 = []
     eseqs1 = []
@@ -119,28 +120,39 @@ def get_seqs_and_features(df, one_hot):
     # marks = ["h3k4me1", "h3k4me3", "h3k27me3", "h3k9me3", "h3k36me3", "h3k27ac"]
     # signals = get_signals(mark_pos, head["epigenome"], marks)
     # signals_tss = get_signals(tss_pos, head["epigenome"], marks)
-
+    #
     # hic_keys = pd.read_csv("data/good_hic.tsv", sep="\t", header=None).iloc[:, 0]
-    # hic_signal = parser.par_load_hic_data(hic_keys, p, picked_regions_hic)
+    # hic_signal = parser.par_load_hic_data_one(hic_keys, p, picked_regions_hic)
     # hic_signal[np.isnan(hic_signal)] = 0
     # hic_signal = np.expand_dims(hic_signal, axis=1)
     
     distances = np.expand_dims(np.asarray(distances), axis=1)
     add_features = distances
-    # add_features = np.concatenate((signals, signals_tss, hic_signal, distances), axis=-1)
+    # add_features = np.concatenate((signals, signals_tss, hic_signal, distances), axis=-1) # signals, signals_tss,
     # print(f"Additional features shape is {add_features.shape}")
     return seqs1, seqs2, eseqs1, eseqs2, Y_label, add_features
 
 
 def get_linking_AUC():
-    head = joblib.load(f"{p.pickle_folder}heads.gz")
+    df = pd.read_csv("data/enhancers/fulco2019_processed.tsv", sep="\t")
+    print(f"Total rows: {len(df)}")
+    print(f"Number of unique TSS: {df['tss'].nunique()}") 
+    print(df['Significant'].value_counts())
+    combination_counts = df.groupby(['tss', 'Significant']).size().reset_index(name='counts')
+    print(combination_counts)
+    print(df['Significant'].value_counts())
+    print(df[df['Significant'] == True]['tss'].nunique())
+    print(df[df['Significant'] == False]['tss'].nunique())
+    grouped = df.groupby('tss')
+    group_indices = [group[1].index.tolist() for group in grouped]
+    kf = KFold(n_splits=5)
+    head = joblib.load(f"{p.pickle_folder}heads.gz")["hg38"]
     if 'sc' in head: del head['sc']
     for key in head.keys():
         print(f"Number of tracks in head {key}: {len(head[key])}")
-    one_hot = joblib.load(f"{p.pickle_folder}one_hot.gz")
-    df = pd.read_csv("data/enhancers/all.tsv", sep="\t")
+    one_hot = joblib.load(f"{p.pickle_folder}hg38_one_hot.gz")
     # df_tiling = pd.read_csv("data/enhancers/tiling_tss.tsv", sep="\t")
-    seqs1, seqs2, eseqs1, eseqs2, Y_label, add_features = get_seqs_and_features(df, one_hot)
+    seqs1, seqs2, eseqs1, eseqs2, Y_label, add_features = get_seqs_and_features(df, one_hot, head)
 
     true_labels = {"<20000":[], "<40000":[], ">40000":[]}
     methods = ["Chromix", "Enformer"] # "Baseline", 
@@ -148,30 +160,32 @@ def get_linking_AUC():
     for m in methods:
         pred_labels[m] = {"<20000":[], "<40000":[], ">40000":[]}
     auc = {}
+    
+    # import tensorflow as tf
+    # import model as mo
+    # from tensorflow.keras import mixed_precision
+    # mixed_precision.set_global_policy('mixed_float16')
+    # strategy = tf.distribute.MultiWorkerMirroredStrategy()
+    # with strategy.scope():
+    #     our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, 6, p.hic_size, head["expression"])
+    #     our_model.get_layer("our_resnet").set_weights(joblib.load(p.model_path + "_res"))
+    #     our_model.get_layer("our_expression").set_weights(joblib.load(p.model_path + "_expression_hg38"))
+    #     # our_model.get_layer("our_epigenome").set_weights(joblib.load(p.model_path + "_epigenome"))
+    #     # our_model.get_layer("our_conservation").set_weights(joblib.load(p.model_path + "_conservation"))
+    #     our_model.get_layer("our_hic").set_weights(joblib.load(p.model_path + "_hic"))
+    # effects_e, effects_h, fold_changes = mo.batch_predict_effect(p, our_model, np.asarray(seqs1), np.asarray(seqs2))
+    # joblib.dump((effects_e, effects_h, fold_changes), "chromix_full_effect.p", compress=3)
+    effects_e, effects_h, fold_changes = joblib.load("chromix_full_effect.p")
+
+    import enformer_usage
+    effects_e = enformer_usage.calculate_effect(np.asarray(eseqs1), np.asarray(eseqs2))
+    joblib.dump(effects_e, "enformer_effect.p", compress=3)
+    # effects_e = joblib.load("enformer_effect.p")
+
     for features in methods:
-        if features == "Chromix": 
-            # import tensorflow as tf
-            # import model as mo
-            # from tensorflow.keras import mixed_precision
-            # mixed_precision.set_global_policy('mixed_float16')
-            # strategy = tf.distribute.MultiWorkerMirroredStrategy()
-            # with strategy.scope():
-            #     our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, 0, p.hic_size, head["expression"])
-            #     our_model.get_layer("our_resnet").set_weights(joblib.load(p.model_path + "_res"))
-            #     # our_model.get_layer("our_expression").set_weights(joblib.load(p.model_path + "_expression"))
-            #     # our_model.get_layer("our_epigenome").set_weights(joblib.load(p.model_path + "_epigenome"))
-            #     # our_model.get_layer("our_conservation").set_weights(joblib.load(p.model_path + "_conservation"))
-            # dif, fold_changes = mo.batch_predict_effect_x(p, our_model, np.asarray(seqs1), np.asarray(seqs2))
-            # # dif = mo.batch_predict_effect2(p, our_model, np.asarray(seqs1), np.asarray(seqs2))
-            # joblib.dump(dif, "chromix_effect.p", compress=3)
-            dif = joblib.load("chromix_effect.p")
-        elif features == "Enformer":
-            # import enformer_usage
-            # dif = enformer_usage.calculate_effect(np.asarray(eseqs1), np.asarray(eseqs2))
-            # joblib.dump(dif, "enformer_effect.p", compress=3)
-            dif = joblib.load("enformer_effect.p")
+        print(features)
         yinds = np.asarray(Y_label).argsort()
-        sorted_dif = dif[yinds[::-1]]
+        sorted_dif = effects_e[yinds[::-1]]
         # sorted_dif = np.log10(sorted_dif + 1)
         sorted_y = np.asarray(Y_label)[yinds[::-1]]
         palette = sns.color_palette()
@@ -193,82 +207,103 @@ def get_linking_AUC():
         g.cax.set_position([.97, .2, .03, .45])
         g.savefig(f"{features}_heatmap.png")
 
-        print(f"Y_label shape is {np.asarray(Y_label).shape}")
-        # mid_bin = dif.shape[1] // 2
-        # mid_val = dif[:, mid_bin - 1] + dif[:, mid_bin] + dif[:, mid_bin + 1]
-        # dif = np.concatenate((np.expand_dims(mid_val, axis=1), add_features), axis=-1)
-        non_pca_num = add_features.shape[1]
-        if features == "Baseline":
-            dif = add_features
-        else:
-            dif = np.concatenate((dif, add_features), axis=-1)
-        X_train, X_test, Y_train, Y_test = train_test_split(dif, np.asarray(Y_label), test_size=0.3, random_state=0)
-        X_train_dist = X_train[:, -1 * non_pca_num:]
-        X_test_dist = X_test[:, -1 * non_pca_num:]
-        X_train = X_train[:, :-1 * non_pca_num]
-        X_test = X_test[:, :-1 * non_pca_num]
-
-        # if features != "Baseline":
-        #     pca = PCA(n_components=10)
-        #     pca.fit(X_train)
-        #     X_train = pca.transform(X_train)
-        #     X_test = pca.transform(X_test)
-
-        X_test = np.concatenate((X_test, X_test_dist), axis=-1)
-        X_train = np.concatenate((X_train, X_train_dist), axis=-1)
-
-        clf = RandomForestClassifier()
-        clf.fit(X_train, Y_train)
-        Y_pred = clf.predict_proba(X_test)[:,1]
-        auc[features] = roc_auc_score(Y_test, Y_pred)
-        print(f"AUC: {auc[features]}")
-
-        # Saving ROC curve
-        plt.clf()
-        fig, axs = plt.subplots(1,1,figsize=(10, 10))
-        metrics.plot_roc_curve(clf, X_test, Y_test, ax=axs, name="Random Forest")
-        axs.plot([0, 1], [0, 1], color="navy", lw=2, linestyle="--")
-        plt.tight_layout()
-        plt.savefig(features + "_linking.png")
-
-        # Saving RF and PCA for other scripts
-        if features == "Chromix":
-            joblib.dump(clf, "RF.pkl") 
-        #     joblib.dump(pca, "PCA.pkl")
-
-        Y_pred = clf.predict(X_test)
-        # Distance for grouping results
-        X_test_dist = X_test_dist[:, -1:]
-        for i in range(len(Y_pred)):
-            if X_test_dist[i] < 20000:
-                dist_group = "<20000"
-            elif X_test_dist[i] < 40000:
-                dist_group = "<40000"
+    for train_indices, test_indices in kf.split(group_indices):
+        train_indices = np.concatenate([group_indices[i] for i in train_indices])
+        test_indices = np.concatenate([group_indices[i] for i in test_indices])
+        for features in methods:
+            # mid_bin = dif.shape[1] // 2
+            # mid_val = dif[:, mid_bin - 1] + dif[:, mid_bin] + dif[:, mid_bin + 1]
+            # dif = np.concatenate((np.expand_dims(mid_val, axis=1), add_features), axis=-1)
+            non_pca_num = add_features.shape[1]
+            if features == "Baseline":
+                all_features = add_features
             else:
-                dist_group = ">40000"
-            if features == methods[0]:
-                true_labels[dist_group].append(Y_test[i])
-            pred_labels[features][dist_group].append(Y_pred[i])
+                all_features = effects_e
+            indices = np.arange(len(Y_label))
+            X_train = all_features[train_indices]
+            Y_train = np.asarray(Y_label)[train_indices]
+            X_test = all_features[test_indices]
+            Y_test = np.asarray(Y_label)[test_indices]
 
-    for metric in ["Recall", "Precision"]:
-        df = pd.DataFrame(columns=['Distance', 'Method', metric])
-        for key in true_labels.keys():
-            for m in methods:
-                cf = confusion_matrix(true_labels[key], pred_labels[m][key])
-                tn = cf[0][0]
-                fp = cf[0][1]
-                fn = cf[1][0]
-                tp = cf[1][1]
-                if metric == "Recall":
-                    v = tp/(tp+fn)
+            X_train_dist = add_features[train_indices]
+            X_test_dist = add_features[test_indices]
+
+            if features != "Baseline":
+                pca = PCA(n_components=10)
+                pca.fit(X_train)
+                X_train = pca.transform(X_train)
+                X_test = pca.transform(X_test)
+
+                # if features == "Chromix":
+                #     X_train_h = effects_h[indices_train, :]
+                #     X_test_h = effects_h[indices_test, :]
+                #     pca2 = PCA(n_components=10)
+                #     pca2.fit(X_train_h)
+                #     X_train_h = pca2.transform(X_train_h)
+                #     X_test_h = pca2.transform(X_test_h)
+                #
+                #     X_train = X_train_h
+                #     X_test = X_test_h
+
+                    # X_train = np.concatenate((X_train, X_train_h), axis=-1)
+                    # X_test = np.concatenate((X_test, X_test_h), axis=-1)
+
+            X_test = np.concatenate((X_test, X_test_dist), axis=-1)
+            X_train = np.concatenate((X_train, X_train_dist), axis=-1)
+
+            clf = RandomForestClassifier()
+            print(f"Fitting {X_train.shape}")
+            clf.fit(X_train, Y_train)
+            Y_pred = clf.predict_proba(X_test)[:,1]
+            auc[features] = roc_auc_score(Y_test, Y_pred)
+            print(f"AUC: {auc[features]}")
+
+            # Saving ROC curve
+            plt.clf()
+            fig, axs = plt.subplots(1,1,figsize=(10, 10))
+            metrics.plot_roc_curve(clf, X_test, Y_test, ax=axs, name="Random Forest")
+            axs.plot([0, 1], [0, 1], color="navy", lw=2, linestyle="--")
+            plt.tight_layout()
+            plt.savefig(features + "_linking.png")
+
+            # Saving RF and PCA for other scripts
+            if features == "Chromix":
+                joblib.dump(clf, "RF.pkl") 
+                joblib.dump(pca, "PCA.pkl")
+
+            Y_pred = clf.predict(X_test)
+            # Distance for grouping results
+            X_test_dist = X_test_dist[:, -1:]
+            for i in range(len(Y_pred)):
+                if X_test_dist[i] < 20000:
+                    dist_group = "<20000"
+                elif X_test_dist[i] < 40000:
+                    dist_group = "<40000"
                 else:
-                    v = tp/(tp+fp)
-                df.loc[len(df.index)] = [f"{key} ({tp+fn})", m, v]
-        plt.clf()
-        fig, axs = plt.subplots(1,1,figsize=(20, 10))
-        sns.barplot(x="Distance", hue="Method", y=metric, data=df, palette="Set2", ax=axs)
-        plt.tight_layout()
-        plt.savefig(f"linking_comparison_{metric}.png")
+                    dist_group = ">40000"
+                if features == methods[0]:
+                    true_labels[dist_group].append(Y_test[i])
+                pred_labels[features][dist_group].append(Y_pred[i])
+
+        for metric in ["Recall", "Precision"]:
+            df = pd.DataFrame(columns=['Distance', 'Method', metric])
+            for key in true_labels.keys():
+                for m in methods:
+                    cf = confusion_matrix(true_labels[key], pred_labels[m][key])
+                    tn = cf[0][0]
+                    fp = cf[0][1]
+                    fn = cf[1][0]
+                    tp = cf[1][1]
+                    if metric == "Recall":
+                        v = tp/(tp+fn)
+                    else:
+                        v = tp/(tp+fp)
+                    df.loc[len(df.index)] = [f"{key} ({tp+fn})", m, v]
+            plt.clf()
+            fig, axs = plt.subplots(1,1,figsize=(20, 10))
+            sns.barplot(x="Distance", hue="Method", y=metric, data=df, palette="Set2", ax=axs)
+            plt.tight_layout()
+            plt.savefig(f"linking_comparison_{metric}.png")
     return auc["Chromix"]
 
 

@@ -41,7 +41,7 @@ def rev_comp(s):
 
 
 p = MainParams()
-one_hot = joblib.load(f"{p.pickle_folder}one_hot.gz")
+one_hot = joblib.load(f"{p.pickle_folder}hg38_one_hot.gz")
 def get_seq(info, input_size, sub_half=False):
     start = int(info[1] - (info[1] % p.bin_size) - input_size // 2)
     if sub_half:
@@ -169,46 +169,46 @@ pred_matrix = joblib.load("pred_matrix.p")
 # print(end - start)
 # joblib.dump(pred_matrix, "pred_matrix.p", compress=3)
 qnorm_axis = 0
-pred_matrix = qnorm.quantile_normalize(pred_matrix, axis=qnorm_axis)
+# pred_matrix = qnorm.quantile_normalize(pred_matrix, axis=qnorm_axis)
 # OUR MODEL #####################################################################################################
 #################################################################################################################
-pred_matrix_our = joblib.load("pred_matrix_our.p")
-# from tensorflow.keras import mixed_precision
-# mixed_precision.set_global_policy('mixed_float16')
-# heads = joblib.load(f"{p.pickle_folder}heads.gz")
-# strategy = tf.distribute.MirroredStrategy()
-# with strategy.scope():
-#     our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, 0, p.hic_size, heads["expression"])
-#     our_model.get_layer("our_resnet").set_weights(joblib.load(p.model_path + "_res"))
-#     our_model.get_layer("our_expression").set_weights(joblib.load(p.model_path + "_expression"))
-# pred_matrix_our = np.zeros((len(eval_tracks), len(test_info)))
+# pred_matrix_our = joblib.load("pred_matrix_our.p")
+from tensorflow.keras import mixed_precision
+mixed_precision.set_global_policy('mixed_float16')
+heads = joblib.load(f"{p.pickle_folder}heads.gz")
+strategy = tf.distribute.MirroredStrategy()
+with strategy.scope():
+    our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, 0, p.hic_size, heads["expression"])
+    our_model.get_layer("our_resnet").set_weights(joblib.load(p.model_path + "_res"))
+    our_model.get_layer("our_expression").set_weights(joblib.load(p.model_path + "_expression"))
+pred_matrix_our = np.zeros((len(eval_tracks), len(test_info)))
 
-# test_seq = []
-# for index, info in enumerate(test_info):
-#     seq = get_seq([info[0], info[1]], p.input_size)
-#     test_seq.append(seq)
-# test_seq = np.asarray(test_seq, dtype=bool)
-# start = time.time()
-# for w in range(0, len(test_seq), p.w_step):
-#     print(w, end=" ")
-#     pr = our_model.predict(mo.wrap2(test_seq[w:w + p.w_step], p.predict_batch_size))
-#     p2 = pr[:, :, p.mid_bin]
-#     if w == 0:
-#         predictions = p2
-#     else:
-#         predictions = np.concatenate((predictions, p2), dtype=np.float16)
+test_seq = []
+for index, info in enumerate(test_info):
+    seq = get_seq([info[0], info[1]], p.input_size)
+    test_seq.append(seq)
+test_seq = np.asarray(test_seq, dtype=bool)
+start = time.time()
+for w in range(0, len(test_seq), p.w_step):
+    print(w, end=" ")
+    pr = our_model.predict(mo.wrap2(test_seq[w:w + p.w_step], p.predict_batch_size))
+    p2 = pr[:, :, p.mid_bin]
+    if w == 0:
+        predictions = p2
+    else:
+        predictions = np.concatenate((predictions, p2), dtype=np.float16)
 
-# for index, info in enumerate(test_info):
-#     for j, track in enumerate(eval_tracks):
-#         t = track_ind_our[track]
-#         pred_matrix_our[j, index] = predictions[index, t]
-# print("")
-# end = time.time()
-# print("Our time")
-# print(end - start)
-# joblib.dump(pred_matrix_our, "pred_matrix_our.p", compress=3)
+for index, info in enumerate(test_info):
+    for j, track in enumerate(eval_tracks):
+        t = track_ind_our[track]
+        pred_matrix_our[j, index] = predictions[index, t]
+print("")
+end = time.time()
+print("Our time")
+print(end - start)
+joblib.dump(pred_matrix_our, "pred_matrix_our.p", compress=3)
 print(f"{np.max(pred_matrix_our)}\t{np.std(pred_matrix_our)}\t{np.mean(pred_matrix_our)}\t{np.median(pred_matrix_our)}")
-pred_matrix_our = qnorm.quantile_normalize(pred_matrix_our, axis=qnorm_axis)
+# pred_matrix_our = qnorm.quantile_normalize(pred_matrix_our, axis=qnorm_axis)
 
 # GT DATA #####################################################################################################
 #################################################################################################################
@@ -217,21 +217,19 @@ for track in eval_tracks:
     eval_track_names.append(full_name[track])
 load_info = []
 for j, info in enumerate(test_info):
-    mid = int(info[1] / p.bin_size)
-    load_info.append([info[0], mid])
+    load_info.append([info[0], info[1] // p.bin_size])
 print("Loading ground truth tracks")
 gt_matrix = parser.par_load_data(load_info, eval_track_names, p).T
 print(gt_matrix.shape)
 load_info = []
 for j, info in enumerate(all_info):
-    mid = int(info[1] / p.bin_size)
-    load_info.append([info[0], mid])
+    load_info.append([info[0], info[1] // p.bin_size])
 gt_matrix_all = parser.par_load_data(load_info, eval_track_names, p).T
 gt_matrix_all = gt_matrix_all.astype(np.float32)
 gt_matrix_all = np.sum(gt_matrix_all, axis=1)
 print(gt_matrix_all.shape)
 
-gt_matrix = qnorm.quantile_normalize(gt_matrix, axis=qnorm_axis)
+# gt_matrix = qnorm.quantile_normalize(gt_matrix, axis=qnorm_axis)
 
 print("")
 def eval_perf(eval_gt, final_pred):
@@ -243,10 +241,7 @@ def eval_perf(eval_gt, final_pred):
         b = []
         for j in range(final_pred.shape[1]):
             a.append(final_pred[i, j])
-            if eval_gt[i, j] < 0.7:
-                b.append(0)
-            else:
-                b.append(eval_gt[i, j])
+            b.append(eval_gt[i, j])
         a = np.nan_to_num(a, neginf=0, posinf=0)
         b = np.nan_to_num(b, neginf=0, posinf=0)
         if np.sum(b)==0:

@@ -47,14 +47,13 @@ regions_tss = joblib.load(f"{p.pickle_folder}train_info.gz")
 infos = random.sample(regions_tss, 100)
 
 print(f"Number of positions: {len(infos)}")
-one_hot = joblib.load(f"{p.pickle_folder}one_hot.gz")
+one_hot = joblib.load(f"{p.pickle_folder}hg38_one_hot.gz")
+from tensorflow.keras import mixed_precision
+mixed_precision.set_global_policy('mixed_float16')
 strategy = tf.distribute.MultiWorkerMirroredStrategy()
 with strategy.scope():
-    our_model =mo.make_model(p.input_size, p.num_features, p.num_bins, hic_num, p.hic_size, heads)
+    our_model =mo.make_model(p.input_size, p.num_features, p.num_bins, hic_num, p.hic_size, heads["hg38"])
     our_model.get_layer("our_resnet").set_weights(joblib.load(p.model_path + "_res"))
-    our_model.get_layer("our_expression").set_weights(joblib.load(p.model_path + "_expression"))
-    our_model.get_layer("our_epigenome").set_weights(joblib.load(p.model_path + "_epigenome"))
-    our_model.get_layer("our_conservation").set_weights(joblib.load(p.model_path + "_conservation"))
     our_model.get_layer("our_hic").set_weights(joblib.load(p.model_path + "_hic"))
 
 test_seq = []

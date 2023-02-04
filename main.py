@@ -248,6 +248,7 @@ def make_model_and_train(heads, head_name, input_sequences, all_outputs, fit_epo
             joblib.dump(our_model.get_layer("our_epigenome").get_weights(), p.model_folder + "temp/" + p.model_name + "_epigenome", compress="lz4")
             joblib.dump(optimizers["our_conservation"].get_weights(), p.model_folder + "temp/" + p.model_name + "_opt_conservation", compress="lz4")
             joblib.dump(our_model.get_layer("our_conservation").get_weights(), p.model_folder + "temp/" + p.model_name + "_conservation", compress="lz4")
+        joblib.dump(opt_scaled.loss_scale.numpy(), p.model_folder + "temp/" + "loss_scale")
         file_names = os.listdir(p.model_folder + "temp/")
         for file_name in file_names:
             shutil.copy(p.model_folder + "temp/" + file_name, p.model_folder + file_name)
@@ -279,7 +280,11 @@ def check_perf(mp_q):
             our_model.get_layer("our_conservation").set_weights(joblib.load(p.model_path + "_conservation"))
         one_hot = joblib.load(f"{p.pickle_folder}hg38_one_hot.gz")
         auc = 0 # get_linking_AUC()
-        train_eval_info = random.sample(train_info, len(train_info) // 10)
+        # train_eval_info = random.sample(train_info, len(train_info) // 10)
+        train_eval_info = []
+        for info in train_info:
+            if info[0] == "chr1":
+                train_eval_info.append(info)
         print(f"Training set {len(train_eval_info)}")
         training_result = evaluation.eval_perf(p, our_model, heads["hg38"], train_eval_info,
                                                False, current_epoch, "train", one_hot)
@@ -295,10 +300,9 @@ def check_perf(mp_q):
             myfile.write(training_result + "\t" + valid_result + "\t" + str(auc) + "\n")
         new_folder = p.model_folder + valid_result + "_" + str(auc) + "/"
         Path(new_folder).mkdir(parents=True, exist_ok=True)
-        file_names = os.listdir(p.model_folder)
+        file_names = os.listdir(p.model_folder + "temp/")
         for file_name in file_names:
-            if file_name.startswith(p.model_name) and os.path.isfile(os.path.join(p.model_folder, file_name)):
-                shutil.copy(p.model_folder + file_name, new_folder + file_name)
+            shutil.copy(p.model_folder + "temp/" + file_name, new_folder + file_name)
     except Exception as e:
         print(e)
         traceback.print_exc()
@@ -395,14 +399,22 @@ if __name__ == '__main__':
                 head_id = 0
             else:
                 head_id = 1 + (current_epoch - math.ceil(current_epoch / 2)) % (len(heads) - 1)
-            if head_id == 0:
-                p.STEPS_PER_EPOCH = 300
-                fit_epochs = 2
+            if current_epoch < 2:
+                p.STEPS_PER_EPOCH = 50
             else:
-                p.STEPS_PER_EPOCH = 600
-                fit_epochs = 1
-            # check_perf(mp_q)
-            # exit()
+                if head_id == 0:
+                    p.STEPS_PER_EPOCH = 300
+                    fit_epochs = 2
+                else:
+                    p.STEPS_PER_EPOCH = 600
+                    fit_epochs = 1
+            if current_epoch % 10 == 0:
+                Path(p.model_folder + "backup/" + str(current_epoch)).mkdir(parents=True, exist_ok=True)
+                file_names = os.listdir(p.model_folder + "temp/")
+                for file_name in file_names:
+                    shutil.copy(p.model_folder + "temp/" + file_name, p.model_folder + "backup/" + str(current_epoch))
+            check_perf(mp_q)
+            exit()
             last_proc = get_data_and_train(last_proc, fit_epochs, head_id)
             if current_epoch % 50 == 0 and current_epoch != 0:  # and current_epoch != 0:
                 print("Eval epoch")

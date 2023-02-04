@@ -39,10 +39,10 @@ def get_signals(mark_positions):
 p = MainParams()
 
 
-one_hot = joblib.load(f"{p.pickle_folder}one_hot.gz")
+one_hot = joblib.load(f"{p.pickle_folder}hg38_one_hot.gz")
 step = 640
 output_scores_info = []
-head = joblib.load(f"{p.pickle_folder}heads.gz")
+head = joblib.load(f"{p.pickle_folder}heads.gz")["hg38"]
 
 inds = []
 for i, track in enumerate(head["expression"]):
@@ -59,7 +59,7 @@ strategy = tf.distribute.MultiWorkerMirroredStrategy()
 with strategy.scope():
     our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, 0, p.hic_size, head["expression"])
     our_model.get_layer("our_resnet").set_weights(joblib.load(p.model_path + "_res"))
-    our_model.get_layer("our_expression").set_weights(joblib.load(p.model_path + "_expression"))
+    our_model.get_layer("our_expression").set_weights(joblib.load(p.model_path + "_expression_hg38"))
 
 clf = joblib.load("RF.pkl")
 pca = joblib.load("PCA.pkl")
@@ -93,16 +93,17 @@ for i, info in enumerate(infos):
         seqs2.append(seq)
     
     print(f"Number of sequences {len(seqs1)}")
-    marks = ["h3k4me1", "h3k4me3", "h3k27me3", "h3k9me3", "h3k36me3", "h3k27ac"]
-    signals = get_signals(mark_pos)
+    # marks = ["h3k4me1", "h3k4me3", "h3k27me3", "h3k9me3", "h3k36me3", "h3k27ac"]
+    # signals = get_signals(mark_pos)
 
-    dif, fold_changes = mo.batch_predict_effect(p, our_model, np.asarray(seqs1), np.asarray(seqs2))
+    _, fold_changes = mo.batch_predict_effect(p, our_model, np.asarray(seqs1), np.asarray(seqs2))
+    dif = mo.batch_predict_effect_x(p, our_model, np.asarray(seqs1), np.asarray(seqs2))
     joblib.dump([dif, fold_changes], "irf8.p", compress=3)
     # dump = joblib.load("irf8.p")
     # dif = dump[0]
     # fold_changes = dump[1]
     distances = np.expand_dims(np.asarray(distances), axis=1)
-    add_features = np.concatenate((signals, distances, fold_changes), axis=-1)
+    add_features = distances # np.concatenate((signals, distances, fold_changes), axis=-1)
     dif = pca.transform(dif)
     pred = clf.predict_proba(np.concatenate((dif, add_features), axis=-1))[:,1]
     print(f"RF output shape {pred.shape}")

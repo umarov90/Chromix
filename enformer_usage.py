@@ -169,7 +169,11 @@ def cross_entropy(p, q):
     p = p.astype(np.float64)
     q = q.astype(np.float64)
     q = np.where(q>1.0e-10,q,1.0e-10) #fill the zeros with 10**-10
-    return -sum([p[i]*np.log2(q[i]) for i in range(len(p))])
+    sl = [p[i]*np.log2(q[i]) for i in range(len(p))]
+    sm = 0
+    for a in sl:
+        sm = sm + a
+    return sm
 
 # def JS_divergence(p,q):
 #     M=(p+q)/2

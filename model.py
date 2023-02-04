@@ -1,9 +1,13 @@
 import tensorflow as tf
+import tensorflow_addons as tfa
+from tensorflow.keras import layers
+from tensorflow import keras
 from tensorflow.keras.layers import LeakyReLU, LayerNormalization, MaxPooling1D, BatchNormalization, \
     Concatenate, GaussianDropout, GaussianNoise, Add, Embedding, Layer, Dropout, Reshape, \
     Dense, Conv1D, Input, Flatten, Activation, BatchNormalization, LocallyConnected1D, DepthwiseConv1D, DepthwiseConv2D
 from tensorflow.keras.models import Model
 import numpy as np
+from numba import jit
 
 
 def make_model(input_size, num_features, num_regions, hic_num, hic_size, one_d_heads):
@@ -62,9 +66,12 @@ def make_head(track_num, num_regions, output1d, name):
     return Model(head_input, head_output, name=name)
 
 
-def conv_block(ix, filters, width, r, dr=1):
-    x = BatchNormalization()(ix)
-    x = Activation(tf.nn.gelu)(x)
+def conv_block(ix, filters, width, r, dr=1, b=True, a=True):
+    x = ix
+    if b:
+        x = BatchNormalization()(x)
+    if a:
+        x = Activation(tf.nn.gelu)(x)
     x = Conv1D(filters, kernel_size=width, dilation_rate=dr, padding="same")(x)
     if r:
         x = x + ix
@@ -94,12 +101,13 @@ def body_d(input_x, input_size):
     
     x = conv_block(x, 2 * num_filters, 1, False)
     x = Dropout(0.05)(x)
-    x = Activation(tf.nn.gelu)(x)
+    x = Activation(tf.nn.gelu, dtype='float32')(x)
     return x
     
     
 def body_c(input_x, input_size):
-    num_filters = 512 + 256
+    print("body c ver 1.05")
+    num_filters = 1024
     filter_nums = exponential_linspace_int(num_filters, 2 * num_filters, 6, divisible_by=128)
     x = Conv1D(num_filters,strides=1,kernel_size=15, padding="same")(input_x)
     x = conv_block(x, num_filters, 1, True)
@@ -109,43 +117,50 @@ def body_c(input_x, input_size):
         x = conv_block(x, num_filters, 5, False)
         x = conv_block(x, num_filters, 1, True)
         x = MaxPooling1D()(x)
-
+    
     current_len = input_size // 128
-    for block in range(6):
-        y = LayerNormalization(epsilon=1e-6)(x)
-        y = tf.transpose(y, [0, 2, 1])
-        y = Dense(4096)(y)
-        y = Activation(tf.nn.gelu)(y)
-        y = Dropout(0.1)(y)
-        y = Dense(current_len)(y)
-        y = tf.transpose(y, [0, 2, 1])
-        x = x + y
-
-        y = LayerNormalization(epsilon=1e-6)(x)
-        y = Dense(num_filters * 2)(y)
-        y = Activation(tf.nn.gelu)(y)
-        y = Dropout(0.1)(y)
-        y = Dense(num_filters)(y)
-        x = x + y
-          
+    num_block = 16
+    for block in range(num_block):
+        y = x
+        y = gMLPLayer(current_len, num_filters, 0.1)(y)
+        y = LayerScale(0.001, num_filters)(y)
+        survival_probability = 1 - ( (block + 1) / num_block) * 0.5
+        x = tfa.layers.StochasticDepth(survival_probability)([x, y])
+    
     x = conv_block(x, 2 * num_filters, 1, False)
     x = Dropout(0.05)(x)
-    x = Activation(tf.nn.gelu)(x)
+    x = Activation(tf.nn.gelu, dtype='float32')(x)
     return x
     
+                
+class LayerScale(layers.Layer):
+    """LayerScale as introduced in CaiT: https://arxiv.org/abs/2103.17239.
+
+    Args:
+        init_values (float): value to initialize the diagonal matrix of LayerScale.
+        projection_dim (int): projection dimension used in LayerScale.
+    """
+
+    def __init__(self, init_values: float, projection_dim: int, **kwargs):
+        super().__init__(**kwargs)
+        self.gamma = tf.Variable(init_values * tf.ones((projection_dim,)))
+
+    def call(self, x, training=False):
+        return x * tf.cast(self.gamma, tf.float16) 
         
-def resnet(input_x, input_size):
+         
+def body_cx(input_x, input_size):
     print("Version 1.44")
     # Initial number of filters
-    num_filters = 1024 # 768 #
+    num_filters = 1280 # 768 #
     mlp_start_block = 6
-    num_blocks = 14
+    num_blocks = 18
     patchify_val = 4
     # replace with hardcoded values
     filter_nums = exponential_linspace_int(num_filters, 2 * num_filters, mlp_start_block, divisible_by=128)
     # Patchify layer
     x = Conv1D(num_filters,strides=patchify_val,kernel_size=patchify_val,name="patchify")(input_x)
-    x = LayerNormalization(epsilon=1e-6)(x)
+    x = LayerNormalization()(x)
     current_len = input_size // patchify_val
     for block in range(num_blocks):
         cname = "body_block_" + str(block) + "_"
@@ -154,152 +169,40 @@ def resnet(input_x, input_size):
             num_filters = filter_nums[block]
             strides = 2
             current_len = current_len // strides
-            x = LayerNormalization(epsilon=1e-6)(x)
+            x = LayerNormalization()(x)
             x = Conv1D(num_filters, kernel_size=strides, strides=strides, padding="same", name=cname + "downsample")(x)
         y = x
-        # y = GaussianDropout(0.01)(y)
+        y = GaussianDropout(0.01)(y)
         # Spatial MLP for long range interactions
         if block >= mlp_start_block:
-            y = tf.transpose(y, [0, 2, 1])
-            y = Dense(current_len * 2, name=cname + "mlp_1")(y)
-            y = Activation(tf.nn.gelu)(y)
-            y = Dropout(0.4)(y)
-            y = Dense(current_len, name=cname + "mlp_2")(y)
-            y = tf.transpose(y, [0, 2, 1])
+            z = y
+            z = LayerNormalization()(z)
+            z = tf.transpose(z, [0, 2, 1])
+            z = Dense(5120, name=cname + "mlp_1")(z)
+            z = Activation(tf.nn.gelu)(z)
+            z = Dropout(0.1)(z)
+            z = Dense(current_len, name=cname + "mlp_2")(z)
+            z = tf.transpose(z, [0, 2, 1])
+            z = LayerScale(0.001, num_filters)(z)
+            y = z + y
         else:
             y = DepthwiseConv1D(kernel_size=7, name=cname + "depthwise", padding="same")(y)
-        y = LayerNormalization(epsilon=1e-6)(y)
+        y = LayerNormalization()(y)
         # Pointwise to mix the channels
-        y = Conv1D(4 * num_filters, kernel_size=1, padding="same", name=cname + "pointwise_1")(y)
+        y = Conv1D(2 * num_filters, kernel_size=1, padding="same", name=cname + "pointwise_1")(y)
         y = Activation(tf.nn.gelu)(y)
-        y = Dropout(0.4)(y)
+        y = Dropout(0.1)(y)
         y = Conv1D(num_filters, kernel_size=1, padding="same", name=cname + "pointwise_2")(y)
-        x = x + y
+        y = LayerScale(0.001, num_filters)(y)
+        survival_probability = 1 - ( (block + 1) / num_blocks) * 0.5
+        x = tfa.layers.StochasticDepth(survival_probability)([x, y])
 
-    x = LayerNormalization(epsilon=1e-6)(x)
+    x = LayerNormalization()(x)
     x = Conv1D(2 * num_filters, kernel_size=1, name="body_output", activation=tf.nn.gelu, dtype='float32')(x)
-    x = Dropout(0.05)(x)
+    x = Dropout(0.1)(x)
     return x
-
-# @tf.function
-# def my_tf_round(x):
-#     decimals = 4
-#     multiplier = tf.constant(10**decimals, dtype=x.dtype)
-#     return tf.round(x * multiplier) / multiplier
-
-
-@tf.function
-def fast_mse005(y_true, y_pred):
-    normal_mse = tf.reduce_mean(tf.square(y_true - y_pred))
-    y_pred_positive = tf.gather_nd(y_pred, tf.where(y_true > 0))
-    y_true_positive = tf.gather_nd(y_true, tf.where(y_true > 0))
-    non_zero_mse = tf.reduce_mean(tf.square(y_true_positive - y_pred_positive))
-    non_zero_mse = tf.where(tf.math.is_nan(non_zero_mse), tf.zeros_like(non_zero_mse), non_zero_mse)
-    total_loss = normal_mse + 0.05 * non_zero_mse
-    return total_loss
     
     
-@tf.function
-def fast_mse01(y_true, y_pred):
-    normal_mse = tf.reduce_mean(tf.square(y_true - y_pred))
-    y_pred_positive = tf.gather_nd(y_pred, tf.where(y_true > 0))
-    y_true_positive = tf.gather_nd(y_true, tf.where(y_true > 0))
-    non_zero_mse = tf.reduce_mean(tf.square(y_true_positive - y_pred_positive))
-    non_zero_mse = tf.where(tf.math.is_nan(non_zero_mse), tf.zeros_like(non_zero_mse), non_zero_mse)
-    total_loss = normal_mse + 0.1 * non_zero_mse
-    return total_loss
-    
-    
-@tf.function
-def log10(x):
-  numerator = tf.math.log(x)
-  denominator = tf.math.log(tf.constant(10, dtype=numerator.dtype))
-  return numerator / denominator
-  
-  
-@tf.function
-def fast_msle01(y_true, y_pred):
-    all_msle = tf.reduce_mean(tf.square(log10(y_true + 1) - log10(y_pred + 1)))
-    # y_pred_positive = tf.gather_nd(y_pred, tf.where(y_true > 0))
-    # y_true_positive = tf.gather_nd(y_true, tf.where(y_true > 0))
-    # non_zero_msle = tf.reduce_mean(tf.square(log10(y_true_positive + 1) - log10(y_pred_positive + 1)))
-    # non_zero_msle = tf.where(tf.math.is_nan(non_zero_msle), tf.zeros_like(non_zero_msle), non_zero_msle)
-    total_loss = all_msle # + 0.1 * non_zero_msle
-    return total_loss
-    
-    
-@tf.function
-def fast_msle0201(y_true, y_pred):
-    all_msle = tf.reduce_mean(tf.square(log10(y_true + 2) - log10(y_pred + 2)))
-    y_pred_positive = tf.gather_nd(y_pred, tf.where(y_true > 0))
-    y_true_positive = tf.gather_nd(y_true, tf.where(y_true > 0))
-    non_zero_msle = tf.reduce_mean(tf.square(log10(y_true_positive + 2) - log10(y_pred_positive + 2)))
-    non_zero_msle = tf.where(tf.math.is_nan(non_zero_msle), tf.zeros_like(non_zero_msle), non_zero_msle)
-    total_loss = all_msle + 0.1 * non_zero_msle
-    return total_loss
-
-
-@tf.function
-def fast_mse_msle(y_true, y_pred):
-    normal_mse = tf.reduce_mean(tf.square(y_true - y_pred))
-    y_pred_positive = tf.gather_nd(y_pred, tf.where(y_true > 0.0))
-    y_true_positive = tf.gather_nd(y_true, tf.where(y_true > 0.0))
-    non_zero_msle = tf.math.square(tf.math.log(y_true_positive + 1.) - tf.math.log(y_pred_positive + 1.))
-    non_zero_msle = tf.where(tf.math.is_nan(non_zero_msle), tf.zeros_like(non_zero_msle), non_zero_msle)
-    total_loss = normal_mse + non_zero_msle
-    return total_loss  
-
-
-@tf.function
-def fast_mse1(y_true, y_pred):
-    normal_mse = tf.reduce_mean(tf.square(y_true - y_pred))
-    y_pred_positive = tf.gather_nd(y_pred, tf.where(y_true > 0))
-    y_true_positive = tf.gather_nd(y_true, tf.where(y_true > 0))
-    non_zero_mse = tf.reduce_mean(tf.square(y_true_positive - y_pred_positive))
-    non_zero_mse = tf.where(tf.math.is_nan(non_zero_mse), tf.zeros_like(non_zero_mse), non_zero_mse)
-    total_loss = normal_mse + 1 * non_zero_mse
-    return total_loss
-
-@tf.function
-def fast_mse5(y_true, y_pred):
-    normal_mse = tf.reduce_mean(tf.square(y_true - y_pred))
-    y_pred_positive = tf.gather_nd(y_pred, tf.where(y_true > 0))
-    y_true_positive = tf.gather_nd(y_true, tf.where(y_true > 0))
-    non_zero_mse = tf.reduce_mean(tf.square(y_true_positive - y_pred_positive))
-    non_zero_mse = tf.where(tf.math.is_nan(non_zero_mse), tf.zeros_like(non_zero_mse), non_zero_mse)
-    total_loss = normal_mse + 2 * non_zero_mse
-    return total_loss
-
-@tf.function
-def mse_plus_cor(y_true, y_pred):
-    normal_mse = tf.reduce_mean(tf.square(y_true - y_pred))
-    y_pred_positive = tf.gather_nd(y_pred, tf.where(y_true > 0))
-    y_true_positive = tf.gather_nd(y_true, tf.where(y_true > 0))
-
-    non_zero_mse = tf.reduce_mean(tf.square(y_true_positive - y_pred_positive))
-    non_zero_mse = tf.where(tf.math.is_nan(non_zero_mse), tf.zeros_like(non_zero_mse), non_zero_mse)
-
-    cor = cor_loss(y_pred_positive, y_true_positive, -1)
-    total_loss = normal_mse + 0.2 * non_zero_mse + 0.001 * tf.math.reduce_mean(cor)
-
-    return total_loss
-
-
-@tf.function
-def cor_loss(x, y, cor_axis):
-    mx = tf.math.reduce_mean(x, axis=cor_axis)
-    my = tf.math.reduce_mean(y, axis=cor_axis)
-    xm, ym = x - mx, y - my
-    r_num = tf.math.reduce_mean(xm * ym, axis=cor_axis)
-    r_den = tf.math.reduce_std(xm, axis=cor_axis) * tf.math.reduce_std(ym, axis=cor_axis)
-    r_den = r_den + 0.0000001
-    r = r_num / r_den
-    r = tf.math.maximum(tf.math.minimum(r, 1.0), -1.0)
-    cor = 1 - r
-    cor = tf.where(tf.math.is_nan(cor), tf.zeros_like(cor), cor)
-    return cor
-
-
 def wrap(input_sequences, output_scores, bs):
     with tf.device('cpu:0'):
         train_data = tf.data.Dataset.from_tensor_slices((input_sequences, output_scores))
@@ -360,9 +263,80 @@ def batch_predict(p, model, seqs):
     return predictions
 
 
-def batch_predict_effect(p, model, seqs1, seqs2):
+def batch_predict_effect(p, model, seqs1, seqs2, inds=None):
+    for w in range(0, len(seqs1), p.w_step):
+        print(w, end=" ")
+        p1 = model.predict(wrap2(seqs1[w:w + p.w_step], p.predict_batch_size), verbose = 0)
+        pe1 = p1[0]
+        ph1 = p1[1]
+        if inds is not None:
+            pe1 = pe1[:, inds, :]
+        p2 = model.predict(wrap2(seqs2[w:w + p.w_step], p.predict_batch_size), verbose = 0)
+        pe2 = p2[0]
+        ph2 = p2[1]
+        if inds is not None:
+            pe2 = pe2[:, inds, :]
+
+        effect_e = fast_ce(np.swapaxes(pe1, 1, 2), np.swapaxes(pe2, 1, 2))
+        effect_h = fast_ce(np.swapaxes(ph1, 1, 2), np.swapaxes(ph2, 1, 2))
+        fold_change = pe2[:, :, p.mid_bin] / pe1[:, :, p.mid_bin]
+        # fold_change = np.squeeze(fold_change)
+        # fold_change = np.max(fold_change, axis=1, keepdims=True)
+        if w == 0:
+            effects_e = effect_e
+            effects_h = effect_h
+            fold_changes = fold_change
+        else:
+            effects_e = np.concatenate((effects_e, effect_e))
+            effects_h = np.concatenate((effects_h, effect_h))
+            fold_changes = np.concatenate((fold_changes, fold_change))
+    fold_changes = np.clip(fold_changes, 0, 100)
+    fold_changes = np.log(fold_changes + 1)
+    fold_changes[np.isnan(fold_changes)] = -1
+    return effects_e, effects_h, fold_changes
+
+    
+@jit(nopython=True) # Set "nopython" mode for best performance, equivalent to @njit
+def cross_entropy(p, q):
+    p = p.astype(np.float64)
+    q = q.astype(np.float64)
+    q = np.where(q>1.0e-10,q,1.0e-10) #fill the zeros with 10**-10
+    sl = [p[i]*np.log2(q[i]) for i in range(len(p))]
+    sm = 0
+    for a in sl:
+        sm = sm + a
+    return sm
+
+# def JS_divergence(p,q):
+#     M=(p+q)/2
+#     return 0.5*scipy.stats.entropy(p,M)+0.5*scipy.stats.entropy(q, M)
+
+
+# def KL_divergence(p,q):
+#     return scipy.stats.entropy(p,q)
+
+
+@jit(nopython=True) # Set "nopython" mode for best performance, equivalent to @njit
+def normalization(data):
+    _range=np.max(data)-np.min(data)
+    return (data-np.min(data))/_range
+
+
+@jit(nopython=True) # Set "nopython" mode for best performance, equivalent to @njit
+def fast_ce(p1, p2):
+    tmp1=[]
+    for i in range(p1.shape[0]):
+        tmp2=[]
+        for j in range(p1.shape[1]):
+            #tmp2.append(JS_divergence(normalization(p1[i][j]),normalization(p2[i][j])))
+            #tmp2.append(scipy.stats.entropy(p1[i][j],p2[i][j],base=2))
+            tmp2.append(cross_entropy(normalization(p1[i][j]),normalization(p2[i][j])))
+        tmp1.append(tmp2)
+    return np.array(tmp1)
+
+
+def batch_predict_effect_x(p, model, seqs1, seqs2):
     body = model.get_layer("our_resnet")
-    print(f"Info {p.predict_batch_size} {p.w_step}")
     n_times = 1
     for w in range(0, len(seqs1), p.w_step):
         print(w, end=" ")
@@ -376,115 +350,14 @@ def batch_predict_effect(p, model, seqs1, seqs2):
         for i in range(n_times):
             p2s.append(body.predict(wrap2(seqs2[w:w + p.w_step], p.predict_batch_size), verbose = 0))
         p2 = np.mean(p2s, axis=0)
-        expression = p1[:, :, p.mid_bin] 
-        expression = np.squeeze(expression)
-        expression = np.max(expression, axis=1, keepdims=True)
 
-        fold_change = p2[:, :, p.mid_bin] / p1[:, :, p.mid_bin] 
-        fold_change = np.squeeze(fold_change)
-        fold_change = np.max(fold_change, axis=1, keepdims=True)
-        # pr = model.predict(wrap2(seqs2[w:w + p.w_step], p.predict_batch_size))
-        # p2 = np.concatenate((pr[0], pr[1], pr[2]), axis=1)
-        effect = np.max(np.abs(p1 - p2), axis=-1)
-        # effect = np.mean(p1, axis=-1) - np.mean(p2, axis=-1)
-        # effect1 = np.mean(p1 - p2, axis=-1)
-        # effect2 = np.mean(p1 - p2, axis=-2)
-        # effect3 = np.max(np.abs(p1 - p2), axis=-1)
-        # effect4 = np.max(np.abs(p1 - p2), axis=-2)
-        # effect = np.concatenate((effect3, effect4), axis=-1)
-        if w == 0:
-            predictions = effect
-            fold_changes = fold_change
-            expressions = expression
-        else:
-            predictions = np.concatenate((predictions, effect))
-            fold_changes = np.concatenate((fold_changes, fold_change))
-            expressions = np.concatenate((expressions, expression))
-    fold_changes = np.clip(fold_changes, 0, 100)
-    fold_changes = np.log(fold_changes + 1)
-    fold_changes[np.isnan(fold_changes)] = -1
-    return predictions, fold_changes
-
-
-def batch_predict_effect_long(p, model, seqs1, seqs2):
-    body = model.get_layer("our_resnet")
-    n_times = 2
-    for w in range(0, len(seqs1), p.w_step):
-        print(w, end=" ")
-        p1s = []
-        for i in range(n_times):
-            p1s.append(body.predict(wrap2(seqs1[w:w + p.w_step], p.predict_batch_size), verbose = 0))
-        p1 = np.mean(p1s, axis=0)
-        p2s = []
-        for i in range(n_times):
-            p2s.append(body.predict(wrap2(seqs2[w:w + p.w_step], p.predict_batch_size), verbose = 0))
-        p2 = np.mean(p2s, axis=0)
-        long_range = np.abs(p1 - p2)
-        mid = long_range.shape[-2] // 2
-        long_range = np.delete(long_range, np.s_[mid - 24:mid + 24], -2)
-        effect = np.max(long_range, axis=-1)
-        if w == 0:
-            predictions = effect
-            # print(f"mid {mid} shape {long_range.shape}")
-        else:
-            predictions = np.concatenate((predictions, effect))
-    return predictions
-
-
-def batch_predict_effect2(p, model, seqs1, seqs2, inds):
-    n_times = 2
-    for w in range(0, len(seqs1), p.w_step):
-        print(w, end=" ")
-        # print(f"seqs shape {np.asarray(seqs1[w:w + p.w_step]).shape}")
-        p1s = []
-        for i in range(n_times):
-            p1s.append(model.predict(wrap2(seqs1[w:w + p.w_step], p.predict_batch_size), verbose = 0))
-        # print(f"p1s {np.asarray(p1s).shape}")
-        p1 = np.mean(p1s, axis=0)
-        p1 = p1[:, inds, :]
-        # print(f"p1 {p1.shape}")
-        p2s = []
-        for i in range(n_times):
-            p2s.append(model.predict(wrap2(seqs2[w:w + p.w_step], p.predict_batch_size), verbose = 0))
-        p2 = np.mean(p2s, axis=0)
-        p2 = p2[:, inds, :]
-
-        effect = np.max(np.abs(p1 - p2), axis=-2)
-        # print(f"effect {effect.shape}")
-        if w == 0:
-            predictions = effect
-        else:
-            predictions = np.concatenate((predictions, effect), dtype=np.float16)
-    return predictions
-
-def batch_predict_effect_linking(p, model, seqs1, seqs2, tss_positions):
-    body = model.get_layer("our_resnet")
-    n_times = 3
-    for w in range(0, len(seqs1), p.w_step):
-        print(w, end=" ")
-        p1s = []
-        for i in range(n_times):
-            p1s.append(body.predict(wrap2(seqs1[w:w + p.w_step], p.predict_batch_size), verbose = 0))
-        p1 = np.mean(p1s, axis=0)
-        p_cutout = []
-        for j in range(len(p1)):
-            p_cutout.append(np.concatenate((p1[j][len(p1[j]) // 2 - 10: len(p1[j]) // 2 + 10], p1[j][tss_positions[w + j] - 10: tss_positions[w + j] + 10])))
-        p1 = np.asarray(p_cutout)
-        p2s = []
-        for i in range(n_times):
-            p2s.append(body.predict(wrap2(seqs2[w:w + p.w_step], p.predict_batch_size), verbose = 0))
-        p2 = np.mean(p2s, axis=0)
-        p_cutout = []
-        for j in range(len(p2)):
-            p_cutout.append(np.concatenate((p2[j][len(p2[j]) // 2 - 10: len(p2[j]) // 2 + 10], p2[j][tss_positions[w + j] - 10: tss_positions[w + j] + 10])))
-        p2 = np.asarray(p_cutout)
-        effect = np.max(np.abs(p1 - p2), axis=-1)
+        effect = fast_ce(p1, p2)
         if w == 0:
             predictions = effect
         else:
             predictions = np.concatenate((predictions, effect))
     return predictions
-    
+
 
 # from https://github.com/deepmind/deepmind-research/blob/master/enformer/enformer.py
 def exponential_linspace_int(start, end, num, divisible_by=1):

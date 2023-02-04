@@ -14,6 +14,7 @@ import seaborn as sns
 from sklearn.manifold import TSNE
 import umap
 from sklearn.decomposition import PCA
+import random
 matplotlib.use("Agg")
 
 p = MainParams()
@@ -53,7 +54,8 @@ df = pd.DataFrame(data)
 
 sns.scatterplot(x="x", y="y", hue="c", data=df, s=5, alpha=0.2, ax=axs)
 for i, track in enumerate(cor_tracks):
-    axs.text(latent_vectors[cor_inds[track], 0], latent_vectors[cor_inds[track], 1], short_name[track], color="black", fontsize=6)
+    if random.uniform(0, 1) < 0.4:
+        axs.text(latent_vectors[cor_inds[track], 0], latent_vectors[cor_inds[track], 1], short_name[track], color="black", fontsize=6)
 axs.set_title("Latent space")
 axs.set_xlabel("A1")
 axs.set_ylabel("A2")
