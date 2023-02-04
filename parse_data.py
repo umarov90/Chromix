@@ -58,25 +58,25 @@ def parse_tracks(p):
                 al = ge.agg({'tag': lambda x: list(x)})["tag"].tolist()
                 ps = []
                 for sl in al:
+                    new_track_name = ".".join(sl[0].split(".")[:-2]) + ".parsed"
+                    parsed_tracks.append(new_track_name)
                     for i in range(len(sl)):
                         sl[i] += ".64nt.bed.gz"
                     skip += sl
-                    new_track_name = ".".join(sl[0].split(".")[:-2]) + ".parsed"
-                    parsed_tracks.append(new_track_name)
 
-                #     proc = mp.Process(target=parse_some_tracks,
-                #                       args=(q, p, sl, ga, p.bin_size, tracks_folder, new_track_name, meta))
-                #     proc.start()
-                #     ps.append(proc)
-                #     if len(ps) > 40:
-                #         for proc in ps:
-                #             proc.join()
-                #         print(q.get())
-                #         ps = []
-                # if len(ps) > 0:
-                #     for proc in ps:
-                #         proc.join()
-                #     print(q.get())
+                    proc = mp.Process(target=parse_some_tracks,
+                                      args=(q, p, sl, ga, p.bin_size, tracks_folder, new_track_name, meta))
+                    proc.start()
+                    ps.append(proc)
+                    if len(ps) > 40:
+                        for proc in ps:
+                            proc.join()
+                        print(q.get())
+                        ps = []
+                if len(ps) > 0:
+                    for proc in ps:
+                        proc.join()
+                    print(q.get())
 
             # Read all other tracks averaging based on track name
             track_names = []
