@@ -41,6 +41,8 @@ def rev_comp(s):
 
 
 p = MainParams()
+heads = joblib.load("pickle/heads.gz")["hg38"]
+head_tracks = heads["expression"]
 one_hot = joblib.load(f"{p.pickle_folder}hg38_one_hot.gz")
 def get_seq(info, input_size, sub_half=False):
     start = int(info[1] - (info[1] % p.bin_size) - input_size // 2)
@@ -79,8 +81,6 @@ for info in test_info_all: # test_info_all
 cor_tracks = pd.read_csv("data/fantom_tracks.tsv", sep="\t").iloc[:, 0].tolist()
 # test_info = test_info[:100]
 enf_tracks = df_targets[df_targets['description'].str.contains("CAGE")]['identifier'].tolist()
-heads = joblib.load("pickle/heads.gz")
-head_tracks = heads["expression"]
 
 short_name = {}
 for i, t in enumerate(head_tracks):
@@ -114,7 +114,7 @@ for j, track in enumerate(eval_tracks):
 
 # ENFORMER #####################################################################################################
 ################################################################################################################
-pred_matrix = joblib.load("pred_matrix.p")
+pred_matrix = joblib.load("pred_matrix_enformer.p")
 # class Enformer:
 
 #     def __init__(self, tfhub_url):
@@ -150,7 +150,7 @@ pred_matrix = joblib.load("pred_matrix.p")
 #     # batch = []
 #     # for rvc in [True, False]:
 #     # for i in range(-1, 2, 1):
-#     sequence_one_hot = get_seq(info, SEQUENCE_LENGTH)
+#     sequence_one_hot = get_seq(info, SEQUENCE_LENGTH, sub_half=True)
 #     # if rvc:
 #     #     sequence_one_hot = rev_comp(sequence_one_hot)
 #     # batch.append(sequence_one_hot)
@@ -167,20 +167,20 @@ pred_matrix = joblib.load("pred_matrix.p")
 # end = time.time()
 # print("Enformer time")
 # print(end - start)
-# joblib.dump(pred_matrix, "pred_matrix.p", compress=3)
+# joblib.dump(pred_matrix, "pred_matrix_enformer.p", compress=3)
 qnorm_axis = 0
-# pred_matrix = qnorm.quantile_normalize(pred_matrix, axis=qnorm_axis)
+pred_matrix = qnorm.quantile_normalize(pred_matrix, axis=qnorm_axis)
 # OUR MODEL #####################################################################################################
 #################################################################################################################
 # pred_matrix_our = joblib.load("pred_matrix_our.p")
 from tensorflow.keras import mixed_precision
 mixed_precision.set_global_policy('mixed_float16')
-heads = joblib.load(f"{p.pickle_folder}heads.gz")
 strategy = tf.distribute.MirroredStrategy()
 with strategy.scope():
     our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, 0, p.hic_size, heads["expression"])
-    our_model.get_layer("our_resnet").set_weights(joblib.load(p.model_path + "_res"))
-    our_model.get_layer("our_expression").set_weights(joblib.load(p.model_path + "_expression"))
+    our_model.get_layer("our_stem").set_weights(joblib.load(p.model_path + "_stem"))
+    our_model.get_layer("our_body").set_weights(joblib.load(p.model_path + "_body"))
+    our_model.get_layer("our_expression").set_weights(joblib.load(p.model_path + "_expression_hg38"))
 pred_matrix_our = np.zeros((len(eval_tracks), len(test_info)))
 
 test_seq = []
@@ -207,8 +207,8 @@ end = time.time()
 print("Our time")
 print(end - start)
 joblib.dump(pred_matrix_our, "pred_matrix_our.p", compress=3)
+pred_matrix_our = qnorm.quantile_normalize(pred_matrix_our, axis=qnorm_axis)
 print(f"{np.max(pred_matrix_our)}\t{np.std(pred_matrix_our)}\t{np.mean(pred_matrix_our)}\t{np.median(pred_matrix_our)}")
-# pred_matrix_our = qnorm.quantile_normalize(pred_matrix_our, axis=qnorm_axis)
 
 # GT DATA #####################################################################################################
 #################################################################################################################
@@ -229,7 +229,7 @@ gt_matrix_all = gt_matrix_all.astype(np.float32)
 gt_matrix_all = np.sum(gt_matrix_all, axis=1)
 print(gt_matrix_all.shape)
 
-# gt_matrix = qnorm.quantile_normalize(gt_matrix, axis=qnorm_axis)
+gt_matrix = qnorm.quantile_normalize(gt_matrix, axis=qnorm_axis)
 
 print("")
 def eval_perf(eval_gt, final_pred):
@@ -313,7 +313,32 @@ axs[1].set(xlabel='Chromix', ylabel='Enformer')
 plt.suptitle('Enformer comparision')
 plt.tight_layout()
 plt.savefig("predictions_scatter.svg")
+plt.close(fig)
 
+pic_count = 0
+print("Drawing gene regplot")
+for i, track in enumerate(eval_tracks):
+    a = []
+    b = []
+    for j in range(final_pred.shape[1]):
+        a.append(final_pred[i, j])
+        b.append(gt_matrix[i, j])
+
+    sc = stats.spearmanr(a, b)[0]
+    fig, ax = plt.subplots(figsize=(6, 6))
+    r, p = stats.spearmanr(a, b)
+
+    sns.regplot(x=a, y=b,
+                ci=None, label="r = {0:.2f}; p = {1:.2e}".format(r, p)).legend(loc="best")
+
+    ax.set(xlabel='Predicted', ylabel='Ground truth')
+    plt.title("Gene expression prediction")
+    fig.tight_layout()
+    plt.savefig(f"{full_name[track]}_{sc}.svg")
+    plt.close(fig)
+    pic_count += 1
+    if pic_count > 10:
+        break
 
 # sns.set(font_scale = 2.5)
 # t, p = ttest_ind(scatter_data_our[1], scatter_data_enf[1])

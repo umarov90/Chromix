@@ -6,7 +6,7 @@ import pathlib
 
 class MainParams:
     def __init__(self):
-        self.input_size = 600192 # 276480
+        self.input_size = 600192
         self.half_size = self.input_size // 2
         self.bin_size = 128
         self.hic_bin_size = 5000

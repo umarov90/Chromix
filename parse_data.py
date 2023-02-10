@@ -68,7 +68,7 @@ def parse_tracks(p):
                                       args=(q, p, sl, ga, p.bin_size, tracks_folder, new_track_name, meta))
                     proc.start()
                     ps.append(proc)
-                    if len(ps) > 40:
+                    if len(ps) > 100:
                         for proc in ps:
                             proc.join()
                         print(q.get())
@@ -98,7 +98,7 @@ def parse_tracks(p):
                                   args=(q, p, sl, ga, p.bin_size, tracks_folder, new_track_name, meta))
                 proc.start()
                 ps.append(proc)
-                if len(ps) > 40:
+                if len(ps) > 100:
                     for proc in ps:
                         proc.join()
                     print(q.get())
@@ -179,12 +179,12 @@ def parse_some_tracks(q, p, some_tracks, ga, bin_size, tracks_folder, new_track_
     if count > 0:
         for key in gast.keys():
             gast[key] = gast[key] / count
-            if meta_row["value"] == "conservation":
-                pass
-            elif meta_row["value"] == "RNA":
-                gast[key] = np.minimum(gast[key], 384 + np.sqrt(np.maximum(0, gast[key] - 384)))
-            else:
-                gast[key] = np.minimum(gast[key], 32 + np.sqrt(np.maximum(0, gast[key] - 32)))
+            # if meta_row["value"] == "conservation":
+            #     pass
+            # elif meta_row["value"] == "RNA":
+            #     gast[key] = np.minimum(gast[key], 384 + np.sqrt(np.maximum(0, gast[key] - 384)))
+            # else:
+            #     gast[key] = np.minimum(gast[key], 32 + np.sqrt(np.maximum(0, gast[key] - 32)))
             gast[key] = np.round(gast[key], 3)
             gast[key] = gast[key].astype(np.float16)
         joblib.dump(gast, new_path, compress="lz4")
@@ -265,10 +265,23 @@ def parse_sequences(p):
             exclude = pd.read_csv(f"data/species/{sp}/exclude.bed", sep="\t", index_col=False,
                                   names=["chrom", "start", "end", "geneID", "score", "strand"])
             blacklist_dict = {}
-            # for index, row in encode_blacklist.iterrows():
-            #     blacklist_dict.setdefault(row["chrom"], []).append([int(row["start"]), int(row["end"])])
-            for index, row in exclude.iterrows():
-                blacklist_dict.setdefault(row["chrom"], []).append([int(row["start"]), int(row["end"])])
+            if sp == "hg38":
+                print("Excluding enformer test and valid set and encode blacklist")
+                encode_blacklist = pd.read_csv(f"data/hg38-blacklist.v2.bed", sep="\t", index_col=False,
+                                       names=["chrom", "start", "end", "reason"])
+                for index, row in encode_blacklist.iterrows():
+                    blacklist_dict.setdefault(row["chrom"], []).append([int(row["start"]), int(row["end"])])
+                enformer_valid = pd.read_csv(f"data/human_valid.bed", sep="\t", index_col=False,
+                                     names=["chrom", "start", "end", "type"])
+                enformer_test = pd.read_csv(f"data/human_test.bed", sep="\t", index_col=False,
+                                    names=["chrom", "start", "end", "type"])
+                for index, row in enformer_valid.iterrows():
+                    blacklist_dict.setdefault(row["chrom"], []).append([int(row["start"]), int(row["end"])])
+                for index, row in enformer_test.iterrows():
+                    blacklist_dict.setdefault(row["chrom"], []).append([int(row["start"]), int(row["end"])])
+            else:
+                for index, row in exclude.iterrows():
+                    blacklist_dict.setdefault(row["chrom"], []).append([int(row["start"]), int(row["end"])])
 
             one_hot = {}
             for chromosome in chromosomes:
@@ -396,4 +409,55 @@ def load_hic_data(mp_q, hic_tracks, picked_regions, t, p, half):
 
             hic_data[i].append(hic_mat)
     joblib.dump(hic_data, f"{p.temp_folder}hic_data{t}", compress="lz4")
+    mp_q.put(None)
+
+
+def par_load_hic_data_one(hic_tracks, p, picked_regions):
+    mp_q = mp.Queue()
+    ps = []
+
+    nproc = min(mp.cpu_count(), len(picked_regions))
+    print(nproc)
+    step_size = len(picked_regions) // nproc
+    end = len(picked_regions)
+
+    for t in range(0, end, step_size):
+        t_end = min(t + step_size, end)
+        load_proc = mp.Process(target=load_hic_data_one,
+                               args=(mp_q, hic_tracks, picked_regions[t:t_end], t, p,))
+        load_proc.start()
+        ps.append(load_proc)
+
+    for load_proc in ps:
+        load_proc.join()
+    print(mp_q.get())
+
+    output_scores = []
+    for t in range(0, end, step_size):
+        output_scores.append(joblib.load(f"{p.temp_folder}hic_data_one{t}"))
+    output_scores = np.concatenate(output_scores, axis=0, dtype=np.float16)
+    gc.collect()
+    return output_scores
+
+
+def load_hic_data_one(mp_q, hic_tracks, picked_regions, t, p):
+    hic_bin_size = 5000
+    hic_data = []
+    for i in range(len(picked_regions)):
+        hic_data.append([])
+
+    for hic in hic_tracks:
+        c = cooler.Cooler(p.hic_folder + hic + "::resolutions/" + str(hic_bin_size))
+        for i, info in enumerate(picked_regions):
+            start_hic = info[1] - hic_bin_size // 2 - info[1] % hic_bin_size
+            end_hic = info[2] - hic_bin_size // 2 - info[2] % hic_bin_size
+            if start_hic == end_hic:
+                end_hic = end_hic + 1
+            try:
+                hic_data[i].append(c.matrix(balance=True, field="count").fetch(f'{info[0]}:{start_hic}-{end_hic}')[0, -1])
+            except:
+                hic_data[i].append(0)
+                print(info)
+    hic_data = np.mean(hic_data, axis=-1)
+    joblib.dump(hic_data, f"{p.temp_folder}hic_data_one{t}", compress="lz4")
     mp_q.put(None)

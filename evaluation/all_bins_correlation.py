@@ -23,11 +23,11 @@ matplotlib.use("Agg")
 
 
 p = MainParams()
-one_hot = joblib.load(f"{p.pickle_folder}one_hot.gz")
-heads = joblib.load("pickle/heads.gz")
+one_hot = joblib.load(f"{p.pickle_folder}hg38_one_hot.gz")
+head = joblib.load("pickle/heads.gz")["hg38"]
 eval_track_names = []
-for key in heads.keys():
-    eval_track_names += heads[key]
+for key in head.keys():
+    eval_track_names += head[key]
 def get_seq(info, input_size):
     start = info[1]
     extra = start + input_size - len(one_hot[info[0]])
@@ -60,11 +60,13 @@ mixed_precision.set_global_policy('mixed_float16')
 import model as mo
 strategy = tf.distribute.MultiWorkerMirroredStrategy()
 with strategy.scope():
-    our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, 0, p.hic_size, heads)
-    our_model.get_layer("our_resnet").set_weights(joblib.load(p.model_path + "_res"))
-    our_model.get_layer("our_expression").set_weights(joblib.load(p.model_path + "_expression"))
+    our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, 6, p.hic_size, head)
+    our_model.get_layer("our_stem").set_weights(joblib.load(p.model_path + "_stem"))
+    our_model.get_layer("our_body").set_weights(joblib.load(p.model_path + "_body"))
+    our_model.get_layer("our_expression").set_weights(joblib.load(p.model_path + "_expression_hg38"))
     our_model.get_layer("our_epigenome").set_weights(joblib.load(p.model_path + "_epigenome"))
     our_model.get_layer("our_conservation").set_weights(joblib.load(p.model_path + "_conservation"))
+    our_model.get_layer("our_hic").set_weights(joblib.load(p.model_path + "_hic"))
 
 for w in range(0, len(test_seq), p.w_step):
     print(w, end=" ")
@@ -76,7 +78,7 @@ for w in range(0, len(test_seq), p.w_step):
     else:
         predictions = np.concatenate((predictions, pr), dtype=np.float16)
 
-predictions = np.log10(predictions + 1)
+# predictions = np.log10(predictions + 1)
 print(predictions.shape)
 meta = pd.read_csv("data/ML_all_track.metadata.2022053017.tsv", sep="\t")
 track_types = {}

@@ -9,7 +9,7 @@ df_fulco = pd.read_csv("data/enhancers/fulco2019_original.tsv", sep="\t")
 df_fulco = df_fulco[df_fulco.Reference != "Fulco2016"]
 df_fulco = df_fulco.rename(columns={'Gene TSS': 'tss'})
 df_fulco["mid"] = df_fulco["start"] + (df_fulco["end"] - df_fulco["start"]) // 2
-df_fulco = df_fulco[["chr", "tss", "mid", 'Significant']]
+df_fulco = df_fulco[["chr", "tss", "mid", 'Significant', "ABC Score"]]
 
 converter = get_lifter('hg19', 'hg38')
 for index, row in df_fulco.iterrows():   

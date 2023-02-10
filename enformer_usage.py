@@ -14,10 +14,6 @@ from numba import jit
 
 transform_path = 'gs://dm-enformer/models/enformer.finetuned.SAD.robustscaler-PCA500-robustscaler.transform.pkl'
 model_path = 'https://tfhub.dev/deepmind/enformer/1'
-fasta_file = '/root/data/genome.fa'
-clinvar_vcf = '/root/data/clinvar.vcf.gz'
-# Download targets from Basenji2 dataset 
-# Cite: Kelley et al Cross-species regulatory sequence activity prediction. PLoS Comput. Biol. 16, e1008050 (2020).
 targets_txt = 'https://raw.githubusercontent.com/calico/basenji/master/manuscripts/cross2020/targets_human.txt'
 
 
@@ -58,9 +54,8 @@ class EnformerScoreVariantsRaw:
   def predict_on_batch(self, inputs):
     ref_prediction = self._model.predict_on_batch(inputs['ref'])[self._organism]
     alt_prediction = self._model.predict_on_batch(inputs['alt'])[self._organism]
-    # effect = np.max(np.abs(alt_prediction - ref_prediction), axis=-1)
-    # effect = alt_prediction.mean(axis=1) - ref_prediction.mean(axis=1)
-    effect = fast_ce(alt_prediction, ref_prediction)
+    effect = alt_prediction.mean(axis=1) - ref_prediction.mean(axis=1)
+    # effect = fast_ce(alt_prediction, ref_prediction)
     return effect
 
 
