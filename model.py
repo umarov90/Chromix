@@ -27,13 +27,15 @@ def make_model(input_size, num_features, num_regions, hic_num, hic_size, one_d_h
         hic_input = Input(shape=(seq_len, features))
 
         hx = hic_input
+
         hx = tf.transpose(hx, [0, 2, 1])
         hx = Dense(hic_size, name="hic_dense_1")(hx)
+        # hx = Activation(gelu)(hx)
         hx = tf.transpose(hx, [0, 2, 1])
         hx = Dense(hic_num, name="hic_dense_2")(hx)
         hx = tf.transpose(hx, [0, 2, 1])
 
-        hx = Activation(tf.keras.activations.linear, dtype='float32')(hx)
+        hx = Activation(tf.keras.activations.softplus, dtype='float32')(hx)
         our_hic = Model(hic_input, hx, name="our_hic")
 
     all_heads = []
@@ -59,31 +61,28 @@ def make_head(track_num, num_regions, output1d, name):
     head_input = Input(shape=(seq_len, features))
     x = head_input
 
-    trim = (x.shape[-2] - num_regions) // 2 # 4689 - 1563
+    trim = (x.shape[-2] - num_regions) // 2  # 4689 - 1563
     x = x[..., trim:-trim, :]
 
     outputs = Conv1D(track_num, kernel_size=1, strides=1, name=name + "_last_conv1d")(x)
     outputs = tf.transpose(outputs, [0, 2, 1])
-    if "conservation" in name:
-        act = tf.keras.activations.linear
-    else:
-        act = tf.keras.activations.softplus
-    head_output = Activation(act, dtype='float32')(outputs)
+    head_output = Activation(tf.keras.activations.softplus, dtype='float32')(outputs)
     return Model(head_input, head_output, name=name)
 
 
 def reset_bn(model):
     model = model.get_layer("our_stem")
     for l in model.layers:
-        if l.name.split('_')[-1] == 'bn': # e.g. conv1_bn
-           l.moving_mean.assign(tf.zeros_like(l.moving_mean))
-           l.moving_variance.assign(tf.ones_like(l.moving_variance))
+        if l.name.split('_')[-1] == 'bn':  # e.g. conv1_bn
+            l.moving_mean.assign(tf.zeros_like(l.moving_mean))
+            l.moving_variance.assign(tf.ones_like(l.moving_variance))
 
 
-def conv_block(ix, filters, width, r, block, dr=1):
+def conv_block(ix, filters, width, r, block, dr=1, act=True):
     x = ix
     x = BatchNormalization(name=f"{block}_{filters}_{width}_bn")(x)
-    x = Activation(tf.nn.gelu)(x)
+    if act:
+        x = Activation(gelu)(x)
     x = Conv1D(filters, kernel_size=width, dilation_rate=dr, padding="same")(x)
     if r:
         x = x + ix
@@ -92,8 +91,8 @@ def conv_block(ix, filters, width, r, block, dr=1):
 
 def make_stem(input_x):
     num_filters = 512 + 256
-    filter_nums = exponential_linspace_int(num_filters, 2048, 6, divisible_by=128)
-    x = Conv1D(num_filters,strides=1,kernel_size=15, padding="same")(input_x)
+    filter_nums = exponential_linspace_int(num_filters, 2 * (1024 - 128), 6, divisible_by=128)
+    x = Conv1D(num_filters, strides=1, kernel_size=15, padding="same")(input_x)
     x = conv_block(x, num_filters, 1, True, 0)
     x = MaxPooling1D()(x)
     for block in range(6):
@@ -106,33 +105,34 @@ def make_stem(input_x):
 
 
 def make_body(x):
-    num_filters = 2048
+    num_filters = x.shape[-1]
     num_blocks = 22
     dr = 1
-    x = LayerNormalization()(x)
+    x = LayerNormalization(epsilon=1e-6)(x)
     for block in range(num_blocks):
         cname = "body_block_" + str(block) + "_"
         y = x
         y = GaussianDropout(0.01)(y)
-        y = DepthwiseConv1D(kernel_size=7, name=cname + "depthwise", dilation_rate=dr, padding="same")(y)
-        dr = min(int(math.ceil(dr * 1.5)), 1500)
+        y = DepthwiseConv1D(kernel_size=21, name=cname + "depthwise", dilation_rate=dr, padding="same")(y)
+        dr = min(int(math.ceil(dr * 1.5)), 700)
         print(dr)
-        y = LayerNormalization()(y)
+        y = LayerNormalization(epsilon=1e-6)(y)
         # Pointwise to mix the channels
-        y = Conv1D(4 * num_filters, kernel_size=1, padding="same", name=cname + "pointwise_1")(y)    
+        y = Conv1D(2 * num_filters, kernel_size=1, padding="same", name=cname + "pointwise_1")(y)
         y = Dropout(0.2)(y)
-        y = Activation(tf.nn.gelu)(y)
+        y = Activation(gelu)(y)
         y = Conv1D(num_filters, kernel_size=1, padding="same", name=cname + "pointwise_2")(y)
         y = LayerScale(1e-6, num_filters)(y)
-        x = tfa.layers.StochasticDepth(0.8)([x, y])
+        sp = 1.0 - 0.5 * min(block / 15, 1.0)
+        x = tfa.layers.StochasticDepth(sp)([x, y])
 
-    x = LayerNormalization()(x)
+    x = LayerNormalization(epsilon=1e-6)(x)
     x = Conv1D(2 * num_filters, kernel_size=1, name="body_output")(x)
     x = Dropout(0.1)(x)
-    x = Activation(tf.nn.gelu, dtype='float32')(x)
+    x = Activation(gelu, dtype='float32')(x)
     return x
-    
-    
+
+
 class LayerScale(layers.Layer):
     """LayerScale as introduced in CaiT: https://arxiv.org/abs/2103.17239.
 
@@ -146,9 +146,23 @@ class LayerScale(layers.Layer):
         self.gamma = tf.Variable(init_values * tf.ones((projection_dim,)))
 
     def call(self, x, training=False):
-        return x * tf.cast(self.gamma, tf.float16) 
-        
-        
+        return x * tf.cast(self.gamma, tf.float16)
+
+
+@tf.function
+def mse_plus01(y_true, y_pred):
+    normal_mse = tf.reduce_mean(tf.square(y_true - y_pred))
+    y_pred_positive = tf.gather_nd(y_pred, tf.where(y_true > 0))
+    y_true_positive = tf.gather_nd(y_true, tf.where(y_true > 0))
+
+    non_zero_mse = tf.reduce_mean(tf.square(y_true_positive - y_pred_positive))
+    non_zero_mse = tf.where(tf.math.is_nan(non_zero_mse), tf.zeros_like(non_zero_mse), non_zero_mse)
+
+    total_loss = normal_mse + 0.1 * non_zero_mse
+
+    return total_loss
+
+
 @tf.function
 def mse_plus_cor(y_true, y_pred):
     normal_mse = tf.reduce_mean(tf.square(y_true - y_pred))
@@ -242,24 +256,24 @@ def batch_predict(p, model, seqs):
 def batch_predict_effect(p, model, seqs1, seqs2, inds=None):
     for w in range(0, len(seqs1), p.w_step):
         print(w, end=" ")
-        p1 = model.predict(wrap2(seqs1[w:w + p.w_step], p.predict_batch_size), verbose = 0)
+        p1 = model.predict(wrap2(seqs1[w:w + p.w_step], p.predict_batch_size), verbose=0)
         pe1 = np.concatenate((p1[0], p1[1], p1[2]), axis=1)
         ph1 = p1[-1]
         if inds is not None:
             pe1 = pe1[:, inds, :]
-        p2 = model.predict(wrap2(seqs2[w:w + p.w_step], p.predict_batch_size), verbose = 0)
+        p2 = model.predict(wrap2(seqs2[w:w + p.w_step], p.predict_batch_size), verbose=0)
         pe2 = np.concatenate((p2[0], p2[1], p2[2]), axis=1)
         ph2 = p2[-1]
         if inds is not None:
             pe2 = pe2[:, inds, :]
 
-        # effect_e = np.mean(pe1 - pe2, axis=-1)
+        effect_e = np.mean(pe1 - pe2, axis=-1)
         # effect_e = np.max(np.abs(pe1 - pe2), axis=-1)
         # effect_e = fast_ce(np.swapaxes(pe1, 1, 2), np.swapaxes(pe2, 1, 2))
-        effect_e = fast_ce(pe1, pe2)
+        # effect_e = fast_ce(pe1, pe2)
         # effect_h = fast_ce(np.swapaxes(ph1, 1, 2), np.swapaxes(ph2, 1, 2))
-        effect_h = fast_ce(ph1, ph2)
-        # effect_h = np.max(np.abs(ph1 - ph2), axis=-1)
+        effect_h = np.mean(ph1 - ph2, axis=-1)
+        # effect_h = fast_ce(ph1, ph2)
         if w == 0:
             print(effect_e.shape)
             print(effect_h.shape)
@@ -279,17 +293,18 @@ def batch_predict_effect(p, model, seqs1, seqs2, inds=None):
     fold_changes[np.isnan(fold_changes)] = -1
     return effects_e, effects_h, fold_changes
 
-    
-@jit(nopython=True) # Set "nopython" mode for best performance, equivalent to @njit
+
+@jit(nopython=True)  # Set "nopython" mode for best performance, equivalent to @njit
 def cross_entropy(p, q):
     p = p.astype(np.float64)
     q = q.astype(np.float64)
-    q = np.where(q>1.0e-10,q,1.0e-10) #fill the zeros with 10**-10
-    sl = [p[i]*np.log2(q[i]) for i in range(len(p))]
+    q = np.where(q > 1.0e-10, q, 1.0e-10)  # fill the zeros with 10**-10
+    sl = [p[i] * np.log2(q[i]) for i in range(len(p))]
     sm = 0
     for a in sl:
         sm = sm + a
     return sm
+
 
 # def JS_divergence(p,q):
 #     M=(p+q)/2
@@ -300,21 +315,21 @@ def cross_entropy(p, q):
 #     return scipy.stats.entropy(p,q)
 
 
-@jit(nopython=True) # Set "nopython" mode for best performance, equivalent to @njit
+@jit(nopython=True)  # Set "nopython" mode for best performance, equivalent to @njit
 def normalization(data):
-    _range=np.max(data)-np.min(data)
-    return (data-np.min(data))/_range
+    _range = np.max(data) - np.min(data)
+    return (data - np.min(data)) / _range
 
 
-@jit(nopython=True) # Set "nopython" mode for best performance, equivalent to @njit
+@jit(nopython=True)  # Set "nopython" mode for best performance, equivalent to @njit
 def fast_ce(p1, p2):
-    tmp1=[]
+    tmp1 = []
     for i in range(p1.shape[0]):
-        tmp2=[]
+        tmp2 = []
         for j in range(p1.shape[1]):
-            #tmp2.append(JS_divergence(normalization(p1[i][j]),normalization(p2[i][j])))
-            #tmp2.append(scipy.stats.entropy(p1[i][j],p2[i][j],base=2))
-            tmp2.append(cross_entropy(normalization(p1[i][j]),normalization(p2[i][j])))
+            # tmp2.append(JS_divergence(normalization(p1[i][j]),normalization(p2[i][j])))
+            # tmp2.append(scipy.stats.entropy(p1[i][j],p2[i][j],base=2))
+            tmp2.append(cross_entropy(normalization(p1[i][j]), normalization(p2[i][j])))
         tmp1.append(tmp2)
     return np.array(tmp1)
 
@@ -325,13 +340,13 @@ def batch_predict_effect_x(p, submodel, seqs1, seqs2):
         print(w, end=" ")
         p1s = []
         for i in range(n_times):
-            p1s.append(submodel.predict(wrap2(seqs1[w:w + p.w_step], p.predict_batch_size), verbose = 0))
+            p1s.append(submodel.predict(wrap2(seqs1[w:w + p.w_step], p.predict_batch_size), verbose=0))
         p1 = np.mean(p1s, axis=0)
         # pr = model.predict(wrap2(seqs1[w:w + p.w_step], p.predict_batch_size))
         # p1 = np.concatenate((pr[0], pr[1], pr[2]), axis=1)
         p2s = []
         for i in range(n_times):
-            p2s.append(submodel.predict(wrap2(seqs2[w:w + p.w_step], p.predict_batch_size), verbose = 0))
+            p2s.append(submodel.predict(wrap2(seqs2[w:w + p.w_step], p.predict_batch_size), verbose=0))
         p2 = np.mean(p2s, axis=0)
 
         # effect = fast_ce(p1, p2)
@@ -341,7 +356,7 @@ def batch_predict_effect_x(p, submodel, seqs1, seqs2):
         else:
             predictions = np.concatenate((predictions, effect))
     return predictions
-    
+
 
 # from https://github.com/deepmind/deepmind-research/blob/master/enformer/enformer.py
 def exponential_linspace_int(start, end, num, divisible_by=1):
@@ -353,6 +368,19 @@ def exponential_linspace_int(start, end, num, divisible_by=1):
     base = np.exp(np.log(end / start) / (num - 1))
     return [_round(start * base ** i) for i in range(num)]
 
+
+def gelu(x: tf.Tensor) -> tf.Tensor:
+    """Applies the Gaussian error linear unit (GELU) activation function.
+    Using approximiation in section 2 of the original paper:
+    https://arxiv.org/abs/1606.08415
+    Args:
+      x: Input tensor to apply gelu activation.
+    Returns:
+      Tensor with gelu activation applied to it.
+    """
+    return tf.nn.sigmoid(1.702 * x) * x
+
+
 class MonteCarloDropout(Dropout):
     def call(self, inputs):
-      return super().call(inputs, training=True)
+        return super().call(inputs, training=True)

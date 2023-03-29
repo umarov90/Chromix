@@ -243,10 +243,10 @@ def get_linking_AUC():
         auc[m] = 0
     print(f"Predicting effect of {len(seqs1)} sequences")
 
-    # import enformer_usage
-    # enformer_effect = enformer_usage.calculate_effect(np.asarray(eseqs1), np.asarray(eseqs2))
-    # joblib.dump(enformer_effect, "enformer_effect_mean.p", compress=3)
-    enformer_effect = joblib.load("enformer_effect_mean.p")
+    import enformer_usage
+    enformer_effect = enformer_usage.calculate_effect(np.asarray(eseqs1), np.asarray(eseqs2))
+    joblib.dump(enformer_effect, "enformer_effect_max.p", compress=3)
+    # enformer_effect = joblib.load("enformer_effect_mean.p")
 
     # import tensorflow as tf
     # import model as mo
@@ -329,13 +329,13 @@ def get_linking_AUC():
                 X_train = pca.transform(X_train)
                 X_test = pca.transform(X_test)
 
-                if features in ["Chromix", "Chromix*"]:
-                    X_train_h = chromix_effects_h[train_indices, :]
-                    X_test_h = chromix_effects_h[test_indices, :]
-                    X_train_h = np.mean(X_train_h, axis=-1, keepdims=True)
-                    X_test_h = np.mean(X_test_h, axis=-1, keepdims=True)
-                    X_train = np.concatenate((X_train, X_train_h), axis=-1)
-                    X_test = np.concatenate((X_test, X_test_h), axis=-1)
+                # if features in ["Chromix", "Chromix*"]:
+                #     X_train_h = chromix_effects_h[train_indices, :]
+                #     X_test_h = chromix_effects_h[test_indices, :]
+                #     X_train_h = np.mean(X_train_h, axis=-1, keepdims=True)
+                #     X_test_h = np.mean(X_test_h, axis=-1, keepdims=True)
+                #     X_train = np.concatenate((X_train, X_train_h), axis=-1)
+                #     X_test = np.concatenate((X_test, X_test_h), axis=-1)
 
             X_train_dist = add_features[train_indices]
             X_test_dist = add_features[test_indices]
@@ -343,9 +343,9 @@ def get_linking_AUC():
                 if "*" in features or "3D" in features:
                     X_test = np.concatenate((X_test, X_test_dist), axis=-1)
                     X_train = np.concatenate((X_train, X_train_dist), axis=-1)
-                else:
-                    X_test = np.concatenate((X_test, X_test_dist[:, -1:]), axis=-1)
-                    X_train = np.concatenate((X_train, X_train_dist[:, -1:]), axis=-1)
+                # else:
+                #     X_test = np.concatenate((X_test, X_test_dist[:, -1:]), axis=-1)
+                #     X_train = np.concatenate((X_train, X_train_dist[:, -1:]), axis=-1)
 
             clf = RandomForestClassifier(n_estimators=100) # n_estimators=500, max_depth=10
             print(f"Fitting {X_train.shape}")

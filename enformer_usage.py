@@ -54,8 +54,10 @@ class EnformerScoreVariantsRaw:
   def predict_on_batch(self, inputs):
     ref_prediction = self._model.predict_on_batch(inputs['ref'])[self._organism]
     alt_prediction = self._model.predict_on_batch(inputs['alt'])[self._organism]
-    effect = alt_prediction.mean(axis=1) - ref_prediction.mean(axis=1)
+    # effect = alt_prediction.mean(axis=1) - ref_prediction.mean(axis=1)
     # effect = fast_ce(alt_prediction, ref_prediction)
+    # effect = np.max(np.abs(alt_prediction - ref_prediction), axis=1)
+    effect = alt_prediction[:, 447:450, :].sum(axis=1) - ref_prediction[:, 447:450, :].sum(axis=1)
     return effect
 
 

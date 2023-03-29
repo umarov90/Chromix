@@ -3,13 +3,13 @@ import os
 # os.environ["CUDA_VISIBLE_DEVICES"] = '0' 
 import multiprocessing as mp
 import math
-import tensorflow_hub as hub
 import joblib
 import pandas as pd
 import numpy as np
-import tensorflow as tf
 from scipy import stats
-import model as mo
+# import model as mo
+# import tensorflow as tf
+# import tensorflow_hub as hub
 from main_params import MainParams
 import time
 import parse_data as parser
@@ -169,45 +169,45 @@ pred_matrix = joblib.load("pred_matrix_enformer.p")
 # print(end - start)
 # joblib.dump(pred_matrix, "pred_matrix_enformer.p", compress=3)
 qnorm_axis = 0
-pred_matrix = qnorm.quantile_normalize(pred_matrix, axis=qnorm_axis)
+# pred_matrix = qnorm.quantile_normalize(pred_matrix, axis=qnorm_axis)
 # OUR MODEL #####################################################################################################
 #################################################################################################################
-# pred_matrix_our = joblib.load("pred_matrix_our.p")
-from tensorflow.keras import mixed_precision
-mixed_precision.set_global_policy('mixed_float16')
-strategy = tf.distribute.MirroredStrategy()
-with strategy.scope():
-    our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, 0, p.hic_size, heads["expression"])
-    our_model.get_layer("our_stem").set_weights(joblib.load(p.model_path + "_stem"))
-    our_model.get_layer("our_body").set_weights(joblib.load(p.model_path + "_body"))
-    our_model.get_layer("our_expression").set_weights(joblib.load(p.model_path + "_expression_hg38"))
-pred_matrix_our = np.zeros((len(eval_tracks), len(test_info)))
+pred_matrix_our = joblib.load("pred_matrix_our.p")
+# from tensorflow.keras import mixed_precision
+# mixed_precision.set_global_policy('mixed_float16')
+# strategy = tf.distribute.MirroredStrategy()
+# with strategy.scope():
+#     our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, 0, p.hic_size, heads["expression"])
+#     our_model.get_layer("our_stem").set_weights(joblib.load(p.model_path + "_stem"))
+#     our_model.get_layer("our_body").set_weights(joblib.load(p.model_path + "_body"))
+#     our_model.get_layer("our_expression").set_weights(joblib.load(p.model_path + "_expression_hg38"))
+# pred_matrix_our = np.zeros((len(eval_tracks), len(test_info)))
 
-test_seq = []
-for index, info in enumerate(test_info):
-    seq = get_seq([info[0], info[1]], p.input_size)
-    test_seq.append(seq)
-test_seq = np.asarray(test_seq, dtype=bool)
-start = time.time()
-for w in range(0, len(test_seq), p.w_step):
-    print(w, end=" ")
-    pr = our_model.predict(mo.wrap2(test_seq[w:w + p.w_step], p.predict_batch_size))
-    p2 = pr[:, :, p.mid_bin]
-    if w == 0:
-        predictions = p2
-    else:
-        predictions = np.concatenate((predictions, p2), dtype=np.float16)
+# test_seq = []
+# for index, info in enumerate(test_info):
+#     seq = get_seq([info[0], info[1]], p.input_size)
+#     test_seq.append(seq)
+# test_seq = np.asarray(test_seq, dtype=bool)
+# start = time.time()
+# for w in range(0, len(test_seq), p.w_step):
+#     print(w, end=" ")
+#     pr = our_model.predict(mo.wrap2(test_seq[w:w + p.w_step], p.predict_batch_size))
+#     p2 = pr[:, :, p.mid_bin]
+#     if w == 0:
+#         predictions = p2
+#     else:
+#         predictions = np.concatenate((predictions, p2), dtype=np.float16)
 
-for index, info in enumerate(test_info):
-    for j, track in enumerate(eval_tracks):
-        t = track_ind_our[track]
-        pred_matrix_our[j, index] = predictions[index, t]
-print("")
-end = time.time()
-print("Our time")
-print(end - start)
-joblib.dump(pred_matrix_our, "pred_matrix_our.p", compress=3)
-pred_matrix_our = qnorm.quantile_normalize(pred_matrix_our, axis=qnorm_axis)
+# for index, info in enumerate(test_info):
+#     for j, track in enumerate(eval_tracks):
+#         t = track_ind_our[track]
+#         pred_matrix_our[j, index] = predictions[index, t]
+# print("")
+# end = time.time()
+# print("Our time")
+# print(end - start)
+# joblib.dump(pred_matrix_our, "pred_matrix_our.p", compress=3)
+# pred_matrix_our = qnorm.quantile_normalize(pred_matrix_our, axis=qnorm_axis)
 print(f"{np.max(pred_matrix_our)}\t{np.std(pred_matrix_our)}\t{np.mean(pred_matrix_our)}\t{np.median(pred_matrix_our)}")
 
 # GT DATA #####################################################################################################
@@ -229,7 +229,7 @@ gt_matrix_all = gt_matrix_all.astype(np.float32)
 gt_matrix_all = np.sum(gt_matrix_all, axis=1)
 print(gt_matrix_all.shape)
 
-gt_matrix = qnorm.quantile_normalize(gt_matrix, axis=qnorm_axis)
+# gt_matrix = qnorm.quantile_normalize(gt_matrix, axis=qnorm_axis)
 
 print("")
 def eval_perf(eval_gt, final_pred):
@@ -315,26 +315,52 @@ plt.tight_layout()
 plt.savefig("predictions_scatter.svg")
 plt.close(fig)
 
+def fix1(a):
+    b = min(a, 384) + max(0, a - 384) ** 2
+    if math.isnan(b) or math.isinf(b):
+        b = 0
+        print("wrong")
+    return b
+
+def fix2(a):
+    b = min(a, 384 + math.sqrt(max(0, a - 384)))
+    if math.isnan(b) or math.isinf(b):
+        b = 0
+        print("wrong")
+    return b
+
 pic_count = 0
 print("Drawing gene regplot")
 for i, track in enumerate(eval_tracks):
+    print(track)
     a = []
     b = []
-    for j in range(final_pred.shape[1]):
-        a.append(final_pred[i, j])
-        b.append(gt_matrix[i, j])
+    c = []
+    for j in range(pred_matrix_our.shape[1]):
+        if math.isnan(gt_matrix[i, j]) or math.isinf(gt_matrix[i, j]):
+            continue
+        a.append(pred_matrix_our[i, j])
+        b.append(np.log(gt_matrix[i, j] + 1))
+        c.append(pred_matrix[i, j])
 
-    sc = stats.spearmanr(a, b)[0]
-    fig, ax = plt.subplots(figsize=(6, 6))
-    r, p = stats.spearmanr(a, b)
+    csc = stats.spearmanr(a, b)[0]
+    cpc = stats.pearsonr(a, b)[0]
+    fig, axs = plt.subplots(1, 2, figsize=(12, 6))
 
     sns.regplot(x=a, y=b,
-                ci=None, label="r = {0:.2f}; p = {1:.2e}".format(r, p)).legend(loc="best")
+                ci=None, label="sc = {0:.2f}; pc = {1:.2f}".format(csc, cpc), ax=axs[0]).legend(loc="best")
 
-    ax.set(xlabel='Predicted', ylabel='Ground truth')
-    plt.title("Gene expression prediction")
+    sc = stats.spearmanr(c, b)[0]
+    pc = stats.pearsonr(c, b)[0]
+    sns.regplot(x=c, y=b,
+                ci=None, label="sc = {0:.2f}; pc = {1:.2f}".format(sc, pc), ax=axs[1]).legend(loc="best")
+
+    axs[0].set(xlabel='Predicted', ylabel='Ground truth')
+    axs[1].set(xlabel='Predicted', ylabel='Ground truth')
+    axs[0].set_title("Chromix")
+    axs[1].set_title("Enformer")
     fig.tight_layout()
-    plt.savefig(f"{full_name[track]}_{sc}.svg")
+    plt.savefig(f"corr_debug/{full_name[track]}_{csc:.2f}_{cpc:.2f}.svg")
     plt.close(fig)
     pic_count += 1
     if pic_count > 10:

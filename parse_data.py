@@ -39,7 +39,56 @@ def parse_hic(p):
         return hic_keys
 
 
-def parse_tracks(p):
+def parse_tracks_sc(p, infos):
+    if Path(f"{p.pickle_folder}track_names_sc.gz").is_file():
+        track_names_final = joblib.load(f"{p.pickle_folder}track_names_sc.gz")
+    else:
+        ga = joblib.load(f"{p.pickle_folder}hg38_ga.gz")
+        meta = pd.read_csv("data/ML_all_track.metadata.2022053017.tsv", sep="\t")
+        track_names = []
+        for filename in os.listdir(p.tracks_folder_sc):
+            track_names.append(filename)
+        print(f"{len(track_names)}")
+        non_zero_counts = []
+        step_size = 100
+        q = mp.Queue()
+        ps = []
+        parsed_tracks = []
+        for i in range(len(track_names)):
+            new_track_name = track_names[i]
+            if new_track_name.endswith(".64nt.bed.gz"):
+                new_track_name = new_track_name[:-len(".64nt.bed.gz")]
+            new_track_name += ".parsed"
+            parsed_tracks.append(new_track_name)
+            proc = mp.Process(target=parse_some_tracks,
+                              args=(
+                              q, p, [track_names[i]], ga, p.bin_size, p.tracks_folder_sc, new_track_name, meta, infos,))
+            proc.start()
+            ps.append(proc)
+            if len(ps) > 100:
+                for proc in ps:
+                    non_zero_counts.append(q.get())
+                ps = []
+
+        if len(ps) > 0:
+            for proc in ps:
+                non_zero_counts.append(q.get())
+        print(f"Non zero mean {np.mean(non_zero_counts)} median {np.median(non_zero_counts)}")
+
+        # Some tracks will be skipped, check what was parsed
+        track_names_final = []
+        for track in parsed_tracks:
+            new_path = p.parsed_tracks_folder + track
+            if Path(new_path).exists():
+                track_names_final.append(track)
+            else:
+                print(track)
+        print(f"Final tracks {len(track_names_final)}")
+        joblib.dump(track_names_final, f"{p.pickle_folder}track_names_sc.gz", compress="lz4")
+    return track_names_final
+
+
+def parse_tracks(p, infos):
     track_names_col = {}
     meta = pd.read_csv("data/ML_all_track.metadata.2022053017.tsv", sep="\t")
     q = mp.Queue()
@@ -63,23 +112,21 @@ def parse_tracks(p):
                     for i in range(len(sl)):
                         sl[i] += ".64nt.bed.gz"
                     skip += sl
-
                     proc = mp.Process(target=parse_some_tracks,
-                                      args=(q, p, sl, ga, p.bin_size, tracks_folder, new_track_name, meta))
+                                      args=(q, p, sl, ga, p.bin_size, tracks_folder, new_track_name, meta, infos))
                     proc.start()
                     ps.append(proc)
-                    if len(ps) > 100:
+                    if len(ps) >= mp.cpu_count():
                         for proc in ps:
-                            proc.join()
-                        print(q.get())
+                            q.get()
                         ps = []
                 if len(ps) > 0:
                     for proc in ps:
-                        proc.join()
-                    print(q.get())
+                        q.get()
 
             # Read all other tracks averaging based on track name
             track_names = []
+            non_zero_counts = []
             for filename in os.listdir(tracks_folder):
                 fn = tracks_folder + filename
                 size = os.path.getsize(fn)
@@ -95,19 +142,20 @@ def parse_tracks(p):
                 new_track_name = kl[i] + ".parsed"
                 parsed_tracks.append(new_track_name)
                 proc = mp.Process(target=parse_some_tracks,
-                                  args=(q, p, sl, ga, p.bin_size, tracks_folder, new_track_name, meta))
+                                  args=(q, p, sl, ga, p.bin_size, tracks_folder, new_track_name, meta, infos))
                 proc.start()
                 ps.append(proc)
-                if len(ps) > 100:
+                if len(ps) >= 4 * mp.cpu_count():
                     for proc in ps:
-                        proc.join()
-                    print(q.get())
+                        non_zero_counts.append(q.get())
                     ps = []
             if len(ps) > 0:
                 for proc in ps:
-                    proc.join()
-                print(q.get())
+                    non_zero_counts.append(q.get())
 
+            non_zero_counts = np.asarray(non_zero_counts)
+            non_zero_counts = non_zero_counts[non_zero_counts != 0]
+            print(f"Non zero mean {np.mean(non_zero_counts)} median {np.median(non_zero_counts)}")
             # Some tracks will be skipped, check what was parsed
             track_names_final = []
             for track in parsed_tracks:
@@ -133,7 +181,7 @@ def group_names_with_rep(names):
     return list(result.keys()), list(result.values())
 
 
-def parse_some_tracks(q, p, some_tracks, ga, bin_size, tracks_folder, new_track_name, meta):
+def parse_some_tracks(q, p, some_tracks, ga, bin_size, tracks_folder, new_track_name, meta, infos):
     gast = copy.deepcopy(ga)
     new_path = p.parsed_tracks_folder + new_track_name
     count = 0
@@ -141,7 +189,8 @@ def parse_some_tracks(q, p, some_tracks, ga, bin_size, tracks_folder, new_track_
     if len(meta_row) > 0:
         meta_row = meta_row.iloc[0]
     else:
-        q.put(None)
+        print("no meta " + new_track_name)
+        q.put(0)
         return None
     for track in some_tracks:
         try:
@@ -157,9 +206,9 @@ def parse_some_tracks(q, p, some_tracks, ga, bin_size, tracks_folder, new_track_
                 df = df.rename(columns={0: "chr", 1: "start", 2: "end", 3: "id", 4: "score", 5: "strand", 6: "tss"})
                 df["mid"] = df["tss"] // bin_size
             total_reads = df['score'].sum()
-            if meta_row["value"] == "RNA" and total_reads < 1000000:
-                print(f"Skipping: {track} {total_reads}")
-                continue
+            # if meta_row["value"] == "RNA" and total_reads < 100000:
+            #     print(f"Skipping: {track} {total_reads}")
+            #     continue
             df["mid"] = df["mid"].astype(int)
             df["score"] = df["score"].astype(np.float32)
             df = df[["chr", "start", "end", "score", "mid"]]
@@ -176,19 +225,46 @@ def parse_some_tracks(q, p, some_tracks, ga, bin_size, tracks_folder, new_track_
             print(exc)
             traceback.print_exc()
             print("\n\n\nCould not parse! " + track)
+    count_non_zero = 0
     if count > 0:
+        non_zero_all = []
         for key in gast.keys():
             gast[key] = gast[key] / count
-            # if meta_row["value"] == "conservation":
-            #     pass
-            # elif meta_row["value"] == "RNA":
-            #     gast[key] = np.minimum(gast[key], 384 + np.sqrt(np.maximum(0, gast[key] - 384)))
-            # else:
-            #     gast[key] = np.minimum(gast[key], 32 + np.sqrt(np.maximum(0, gast[key] - 32)))
+            non_zero = gast[key][np.where(gast[key] != 0)]
+            non_zero_all.append(non_zero)
+        non_zero_all = np.concatenate(non_zero_all, axis=0, dtype=np.float32)
+        if meta_row["value"] == "RNA":
+            tss_vals = []
+            for info in infos:
+                binx = info[1] // p.bin_size
+                tss_vals.append(max(gast[info[0]][binx - 1], gast[info[0]][binx], gast[info[0]][binx + 1]))
+            qnts = np.quantile(tss_vals, [0.90, 0.98])
+            count_non_zero = len([element for element in tss_vals if element != 0])
+        else:
+            qnts = np.quantile(non_zero_all, [0.99, 0.99])
+        for key in gast.keys():
+            if meta_row["value"] == "conservation" or meta_row["unit"] == "logcpm":
+                pass
+            elif meta_row["value"] == "RNA":
+                if meta_row["technology"] == "scAtlas":
+                    # gast[key] = np.minimum(gast[key], qnts[1] + np.sqrt(np.maximum(0, gast[key] - qnts[1])))
+                    gast[key] = np.log10(gast[key] + 1)
+                    # gast[key] = gast[key] / np.log(qnts[1] + 1)
+                else:
+                    # gast[key] = np.minimum(gast[key], qnts[0] + np.sqrt(np.maximum(0, gast[key] - qnts[0])))
+                    gast[key] = np.log10(gast[key] + 1)
+                    # gast[key] = gast[key] / np.log(qnts[0] + 1)
+            else:
+                # gast[key] = np.minimum(gast[key], qnts[0] + np.sqrt(np.maximum(0, gast[key] - qnts[0])))
+                # if meta_row["unit"] == "read_depth"
+                gast[key] = np.log10(gast[key] + 1)
+                # gast[key] = gast[key] / np.log(qnts[0] + 1)
+            gast[key][~np.isfinite(gast[key])] = 0
             gast[key] = np.round(gast[key], 3)
             gast[key] = gast[key].astype(np.float16)
-        joblib.dump(gast, new_path, compress="lz4")
-    q.put(None)
+
+        joblib.dump(gast, new_path, compress=3)
+    q.put(count_non_zero)
 
 
 @jit(nopython=True)
@@ -268,13 +344,13 @@ def parse_sequences(p):
             if sp == "hg38":
                 print("Excluding enformer test and valid set and encode blacklist")
                 encode_blacklist = pd.read_csv(f"data/hg38-blacklist.v2.bed", sep="\t", index_col=False,
-                                       names=["chrom", "start", "end", "reason"])
-                for index, row in encode_blacklist.iterrows():
-                    blacklist_dict.setdefault(row["chrom"], []).append([int(row["start"]), int(row["end"])])
+                                               names=["chrom", "start", "end", "reason"])
+                # for index, row in encode_blacklist.iterrows():
+                #     blacklist_dict.setdefault(row["chrom"], []).append([int(row["start"]), int(row["end"])])
                 enformer_valid = pd.read_csv(f"data/human_valid.bed", sep="\t", index_col=False,
-                                     names=["chrom", "start", "end", "type"])
+                                             names=["chrom", "start", "end", "type"])
                 enformer_test = pd.read_csv(f"data/human_test.bed", sep="\t", index_col=False,
-                                    names=["chrom", "start", "end", "type"])
+                                            names=["chrom", "start", "end", "type"])
                 for index, row in enformer_valid.iterrows():
                     blacklist_dict.setdefault(row["chrom"], []).append([int(row["start"]), int(row["end"])])
                 for index, row in enformer_test.iterrows():
@@ -298,7 +374,6 @@ def parse_sequences(p):
             joblib.dump(one_hot, f"{p.pickle_folder}{sp}_one_hot.gz", compress="lz4")
             joblib.dump(ga, f"{p.pickle_folder}{sp}_ga.gz", compress=3)
             joblib.dump(regions, f"{p.pickle_folder}{sp}_regions.gz", compress="lz4")
-            gc.collect()
     return train_info, valid_info, test_info, protein_coding
 
 
@@ -308,8 +383,7 @@ def load_data(mp_q, p, tracks, scores, t, t_end):
         parsed_track = joblib.load(p.parsed_tracks_folder + track_name)
         for j in range(len(scores)):
             scores_after_loading[j, i] = parsed_track[scores[j][0]][int(scores[j][1]):int(scores[j][2])].copy()
-    joblib.dump(scores_after_loading, f"{p.temp_folder}data{t}", compress="lz4")
-    mp_q.put(None)
+    mp_q.put((t, scores_after_loading))
 
 
 def load_data_sum(mp_q, p, tracks, scores, t, t_end):
@@ -321,15 +395,14 @@ def load_data_sum(mp_q, p, tracks, scores, t, t_end):
             pt = parsed_track[scores[j][0]]
             mid = int(scores[j][1])
             scores_after_loading[j, i] = pt[mid]  # pt[mid - 1] + pt[mid] + pt[mid + 1]
-    joblib.dump(scores_after_loading, f"{p.temp_folder}data{t}", compress="lz4")
-    mp_q.put(None)
+    mp_q.put((t, scores_after_loading))
 
 
 def par_load_data(output_scores_info, tracks, p):
     mp_q = mp.Queue()
     ps = []
     start = 0
-    nproc = min(mp.cpu_count(), len(tracks))
+    nproc = min(4 * mp.cpu_count(), len(tracks))
     print(nproc)
     step_size = len(tracks) // nproc
     end = len(tracks)
@@ -344,23 +417,20 @@ def par_load_data(output_scores_info, tracks, p):
         load_proc.start()
         ps.append(load_proc)
 
+    all_scores = []
     for load_proc in ps:
-        load_proc.join()
-    print(mp_q.get())
-
-    output_scores = []
-    for t in range(start, end, step_size):
-        output_scores.append(joblib.load(f"{p.temp_folder}data{t}"))
-    output_scores = np.concatenate(output_scores, axis=1, dtype=np.float16)
-    gc.collect()
-    return output_scores
+        all_scores.append(mp_q.get())
+    all_scores = sorted(all_scores, key=lambda x: x[0])
+    all_scores = [tp[1] for tp in all_scores]
+    all_scores = np.concatenate(all_scores, axis=1, dtype=np.float16)
+    return all_scores
 
 
 def par_load_hic_data(hic_tracks, p, picked_regions, half):
     mp_q = mp.Queue()
     ps = []
 
-    nproc = min(mp.cpu_count(), len(picked_regions))
+    nproc = min(4 * mp.cpu_count(), len(picked_regions))
     print(nproc)
     step_size = len(picked_regions) // nproc
     end = len(picked_regions)
@@ -372,16 +442,13 @@ def par_load_hic_data(hic_tracks, p, picked_regions, half):
         load_proc.start()
         ps.append(load_proc)
 
+    all_scores = []
     for load_proc in ps:
-        load_proc.join()
-    print(mp_q.get())
-
-    output_scores = []
-    for t in range(0, end, step_size):
-        output_scores.append(joblib.load(f"{p.temp_folder}hic_data{t}"))
-    output_scores = np.concatenate(output_scores, axis=0, dtype=np.float16)
-    gc.collect()
-    return output_scores
+        all_scores.append(mp_q.get())
+    all_scores = sorted(all_scores, key=lambda x: x[0])
+    all_scores = [tp[1] for tp in all_scores]
+    all_scores = np.concatenate(all_scores, axis=0, dtype=np.float16)
+    return all_scores
 
 
 def load_hic_data(mp_q, hic_tracks, picked_regions, t, p, half):
@@ -390,12 +457,15 @@ def load_hic_data(mp_q, hic_tracks, picked_regions, t, p, half):
         hic_data.append([])
 
     for hic in hic_tracks:
-        c = cooler.Cooler(p.hic_folder + hic + "::resolutions/5000")
+        if hic.endswith("mcool"):
+            c = cooler.Cooler(p.hic_folder + hic + "::resolutions/5000")
+        else:
+            c = cooler.Cooler(p.hic_folder + hic)
         for i, info in enumerate(picked_regions):
             start_hic = info[1] - p.half_size_hic
             start_hic = start_hic - start_hic % p.hic_bin_size
             end_hic = start_hic + 2 * p.half_size_hic
-            hic_mat = c.matrix(balance=True, field="count").fetch(f'{info[0]}:{start_hic}-{end_hic}')
+            hic_mat = c.matrix(balance=True).fetch(f'{info[0]}:{start_hic}-{end_hic}')
             hic_mat[np.isnan(hic_mat)] = 0
             hic_mat = hic_mat - np.diag(np.diag(hic_mat, k=1), k=1) - np.diag(np.diag(hic_mat, k=-1), k=-1) - np.diag(
                 np.diag(hic_mat))
@@ -408,15 +478,14 @@ def load_hic_data(mp_q, hic_tracks, picked_regions, t, p, half):
             hic_mat = hic_mat * 100
 
             hic_data[i].append(hic_mat)
-    joblib.dump(hic_data, f"{p.temp_folder}hic_data{t}", compress="lz4")
-    mp_q.put(None)
+    mp_q.put((t, hic_data))
 
 
 def par_load_hic_data_one(hic_tracks, p, picked_regions):
     mp_q = mp.Queue()
     ps = []
 
-    nproc = min(mp.cpu_count(), len(picked_regions))
+    nproc = min(4 * mp.cpu_count(), len(picked_regions))
     print(nproc)
     step_size = len(picked_regions) // nproc
     end = len(picked_regions)
@@ -436,7 +505,6 @@ def par_load_hic_data_one(hic_tracks, p, picked_regions):
     for t in range(0, end, step_size):
         output_scores.append(joblib.load(f"{p.temp_folder}hic_data_one{t}"))
     output_scores = np.concatenate(output_scores, axis=0, dtype=np.float16)
-    gc.collect()
     return output_scores
 
 
@@ -454,7 +522,8 @@ def load_hic_data_one(mp_q, hic_tracks, picked_regions, t, p):
             if start_hic == end_hic:
                 end_hic = end_hic + 1
             try:
-                hic_data[i].append(c.matrix(balance=True, field="count").fetch(f'{info[0]}:{start_hic}-{end_hic}')[0, -1])
+                hic_data[i].append(
+                    c.matrix(balance=True, field="count").fetch(f'{info[0]}:{start_hic}-{end_hic}')[0, -1])
             except:
                 hic_data[i].append(0)
                 print(info)

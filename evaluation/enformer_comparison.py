@@ -41,7 +41,9 @@ def rev_comp(s):
 
 
 p = MainParams()
-one_hot = joblib.load(f"{p.pickle_folder}one_hot.gz")
+heads = joblib.load("pickle/heads.gz")["hg38"]
+head_tracks = heads["expression"]
+one_hot = joblib.load(f"{p.pickle_folder}hg38_one_hot.gz")
 def get_seq(info, input_size, sub_half=False):
     start = int(info[1] - (info[1] % p.bin_size) - input_size // 2)
     if sub_half:
@@ -76,8 +78,6 @@ for info in test_info_all:
 cor_tracks = pd.read_csv("data/fantom_tracks.tsv", sep="\t").iloc[:, 0].tolist()
 # test_info = test_info[:100]
 enf_tracks = df_targets[df_targets['description'].str.contains("CAGE")]['identifier'].tolist()
-heads = joblib.load("pickle/heads.gz")
-head_tracks = heads["expression"]
 
 short_name = {}
 for i, t in enumerate(head_tracks):
@@ -109,12 +109,6 @@ track_ind = {}
 for j, track in enumerate(eval_tracks):
     track_ind[track] = df_targets[df_targets['identifier'].str.contains(track)].index
 
-max_dict = {}
-for filename in os.listdir("maxes"):
-    with open("maxes/" + filename) as f:
-        for line in f:
-           (track, norm_max) = line.split()
-           max_dict[track] = float(norm_max)
 # ENFORMER #####################################################################################################
 #################################################################################################################
 pred_matrix = joblib.load("enformer_gene_matrix.p")
@@ -173,7 +167,7 @@ pred_matrix = joblib.load("enformer_gene_matrix.p")
 # joblib.dump(pred_matrix, "enformer_gene_matrix.p", compress=3)
 qnorm_axis = 0
 # pred_matrix = np.log10(pred_matrix + 1)
-# pred_matrix = qnorm.quantile_normalize(pred_matrix, axis=qnorm_axis)
+pred_matrix = qnorm.quantile_normalize(pred_matrix, axis=qnorm_axis)
 final_pred_enformer = {}
 for i in range(len(test_info)):
     final_pred_enformer[test_info[i][2]] = {}
@@ -189,15 +183,14 @@ for i, gene in enumerate(final_pred_enformer.keys()):
 # OUR MODEL #####################################################################################################
 #################################################################################################################
 pred_matrix_our = joblib.load("chromix_gene_matrix.p")
-# print(f"{np.max(pred_matrix_our)}\t{np.std(pred_matrix_our)}\t{np.mean(pred_matrix_our)}\t{np.median(pred_matrix_our)}")
 # from tensorflow.keras import mixed_precision
 # mixed_precision.set_global_policy('mixed_float16')
-# heads = joblib.load(f"{p.pickle_folder}heads.gz")
 # strategy = tf.distribute.MirroredStrategy()
 # with strategy.scope():
 #     our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, 0, p.hic_size, heads["expression"])
-#     our_model.get_layer("our_resnet").set_weights(joblib.load(p.model_path + "_res"))
-#     our_model.get_layer("our_expression").set_weights(joblib.load(p.model_path + "_expression"))
+#     our_model.get_layer("our_stem").set_weights(joblib.load(p.model_path + "_stem"))
+#     our_model.get_layer("our_body").set_weights(joblib.load(p.model_path + "_body"))
+#     our_model.get_layer("our_expression").set_weights(joblib.load(p.model_path + "_expression_hg38"))
 
 # pred_matrix_our = np.zeros((len(eval_tracks), len(test_info)))
 # test_seq = []
@@ -225,10 +218,9 @@ pred_matrix_our = joblib.load("chromix_gene_matrix.p")
 # print("Our time")
 # print(end - start)
 # joblib.dump(pred_matrix_our, "chromix_gene_matrix.p", compress=3)
-# for i, track in enumerate(eval_tracks):
-#     pred_matrix_our[i] = pred_matrix_our[i] * max_dict[full_name[track]]
 # pred_matrix_our = np.log10(pred_matrix_our + 1)
-# pred_matrix_our = qnorm.quantile_normalize(pred_matrix_our, axis=qnorm_axis)
+pred_matrix_our = qnorm.quantile_normalize(pred_matrix_our, axis=qnorm_axis)
+print(f"{np.max(pred_matrix_our)}\t{np.std(pred_matrix_our)}\t{np.mean(pred_matrix_our)}\t{np.median(pred_matrix_our)}")
 final_pred_our = {}
 for i in range(len(test_info)):
     final_pred_our[test_info[i][2]] = {}
@@ -255,10 +247,7 @@ for track in eval_tracks:
 gt_matrix = parser.par_load_data(load_info, eval_track_names, p).T
 print(gt_matrix.shape)
 # gt_matrix = np.log10(gt_matrix + 1)
-# for i, track in enumerate(eval_tracks):
-#     gt_matrix[i] = gt_matrix[i] * max_dict[full_name[track]]
-
-# gt_matrix = qnorm.quantile_normalize(gt_matrix, axis=qnorm_axis)
+gt_matrix = qnorm.quantile_normalize(gt_matrix, axis=qnorm_axis)
 
 eval_gt = {}
 for i in range(len(test_info)):

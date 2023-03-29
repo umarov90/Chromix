@@ -22,6 +22,7 @@ import matplotlib
 from matplotlib.colors import LinearSegmentedColormap
 import matplotlib.ticker as ticker
 import matplotlib.gridspec as gridspec
+import multiprocessing as mp
 # matplotlib.use('Qt5Agg')
 
 
@@ -57,22 +58,23 @@ hic_output = []
 hic_output2 = []
 n_bins = 50
 nan_counts = {}
-good_hic = pd.read_csv("data/good_hic.tsv", sep="\t", header=None).iloc[:, 0].tolist()
-directory = "hic"
+good_hic = ["ENCFF029UAL.cool", "ENCFF035BLF.cool", "ENCFF076LWH.cool", "ENCFF136XCV.cool", 
+"ENCFF163YBP.cool", "ENCFF197OWW.cool", "ENCFF281ILS.cool", "ENCFF304HMS.cool", "ENCFF355NFJ.cool",
+ "ENCFF499BVX.cool", "ENCFF512PQA.cool", "ENCFF515ZBF.cool", "ENCFF542IFE.cool", "ENCFF573OPJ.cool",
+  "ENCFF586MQY.cool", "ENCFF594KOM.cool", "ENCFF602CHT.cool", "ENCFF684YCT.cool", "ENCFF700CYI.cool", "ENCFF711XSR.cool", 
+"ENCFF736ITL.cool", "ENCFF783KQI.cool", "ENCFF807IRK.cool", "ENCFF839VMS.cool", 
+"ENCFF848RWZ.cool", "ENCFF911AHQ.cool", "ENCFF925QIF.cool", "ENCFF952JZV.cool"]
+# pd.read_csv("data/good_hic.tsv", sep="\t", header=None).iloc[:, 0].tolist()
 
-# for filename in good_hic:
-#     shutil.copyfile("hic/" + filename, "/media/user/30D4BACAD4BA9218/hic/" + filename)
-# exit()
 
 for i, info in enumerate(infos):
     hic_output.append([])
     hic_output2.append([])
 
-for filename in good_hic: # os.listdir(directory)
-    if not filename.endswith(".mcool"):
+for filename in good_hic:
+    if not filename.endswith(".cool"):
         continue
-    c = cooler.Cooler("/media/user/30D4BACAD4BA9218/hic/" + filename + "::resolutions/5000")
-    resolution = c.binsize
+    c = cooler.Cooler("/home/user/data/nhic/" + filename)
     print(filename)
     for i, info in enumerate(infos):
         start_hic = info[1] - info[1] % p.bin_size - p.half_size_hic
@@ -82,7 +84,7 @@ for filename in good_hic: # os.listdir(directory)
 
         if start_hic < 0 or end_hic >= len(one_hot[info[0]]):
             continue
-        hic_mat = c.matrix(balance=True, field="count").fetch(f'{info[0]}:{start_hic}-{end_hic}')
+        hic_mat = c.matrix(balance=True).fetch(f'{info[0]}:{start_hic}-{end_hic}')
         # count = np.count_nonzero(np.isnan(hic_mat))
         # nan_counts[filename] = nan_counts[filename] + count if filename in nan_counts else count
 
@@ -102,6 +104,7 @@ for filename in good_hic: # os.listdir(directory)
         hic_output[i].append(hic_mat)
         hic_output2[i].append(hic_mat2)
 print("Drawing")
+print(np.asarray(hic_output[i]).shape)
 # for key in nan_counts:
 #     print(f"{key}: {nan_counts[key]}")
 #
@@ -109,12 +112,12 @@ print("Drawing")
 # with open("good_hic.tsv", 'w+') as f:
 #     f.write('\n'.join(list(sorted_dict.keys())[:int(0.1 * len(sorted_dict.keys()))]))
 # exit()
-sns.set(font_scale=0.5)
+sns.set(font_scale=1.5)
 for n in range(len(hic_output)):
-    fig, axs = plt.subplots(1, len(good_hic), figsize=(100, 10))
+    fig, axs = plt.subplots(1, len(good_hic), figsize=(len(good_hic) * 10, 10))
     for i in range(len(good_hic)):
-        mat = recover_shape(hic_output[n][i], n_bins)
-        sns.heatmap(mat, linewidth=0.0, ax=axs[i], square=True, cbar=False)
+        mat = recover_shape(hic_output[n][i], p.num_hic_bins)
+        sns.heatmap(mat, linewidth=0.0, ax=axs[i], square=True)
         axs[i].set(xticklabels=[])
         axs[i].set(yticklabels=[])
         axs[i].set_title(good_hic[i])
@@ -126,7 +129,7 @@ for n in range(len(hic_output)):
         # axs[1, i].set_title("hic" + str(i + 1))
 
     fig.tight_layout()
-    plt.savefig(f"hic_check/{n}.png")
+    plt.savefig(f"hic_check/{n}.pdf")
     plt.close(fig)
     print(n)
 
