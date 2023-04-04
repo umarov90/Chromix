@@ -6,9 +6,11 @@ import math
 import common as cm
 import parse_data as parser
 import pandas as pd
+import torch
+from torch.utils.data import Dataset, DataLoader
 
 
-def eval_perf(p, our_model, head, eval_infos_all, should_draw, current_epoch, label, one_hot):
+def eval_perf(p, model, device, head, eval_infos_all, should_draw, current_epoch, label, one_hot):
     import model as mo
     print("Version 1.02")
     eval_track_names = []
@@ -55,22 +57,23 @@ def eval_perf(p, our_model, head, eval_infos_all, should_draw, current_epoch, la
         else:
             track_types[track] = "scEnd5"
     print("Predicting")
+    model.eval()
     # predictions = joblib.load("pred.gz")
-    for w in range(0, len(test_seq), p.w_step):
-        print(w, end=" ")
-        pr = our_model.predict(mo.wrap2(test_seq[w:w + p.w_step], p.predict_batch_size))
-        if isinstance(head, dict):
-            p1 = np.concatenate(pr[0:-1], axis=1)
-        else:
-            p1 = pr
-        p2 = p1[:, :, p.mid_bin]  # p1[:, :, p.mid_bin - 1] + p1[:, :, p.mid_bin] + p1[:, :, p.mid_bin + 1]
-        if w == 0:
+    dd = mo.DatasetDNA(test_seq)
+    ddl = DataLoader(dataset=dd, batch_size=p.GLOBAL_BATCH_SIZE, shuffle=False)
+    for batch, X in enumerate(ddl):
+        print(batch, end=" ")
+        X = X.to(device)
+        with torch.no_grad():
+            pr = model(X)
+        p1 = np.concatenate((pr['hg38_expression'].cpu().numpy(),
+                             pr['hg38_epigenome'].cpu().numpy(),
+                             pr['hg38_conservation'].cpu().numpy()), axis=2)
+        p2 = p1[:, p.mid_bin, :]  # p1[:, :, p.mid_bin - 1] + p1[:, :, p.mid_bin] + p1[:, :, p.mid_bin + 1]
+        if batch == 0:
             predictions = p2
         else:
             predictions = np.concatenate((predictions, p2), dtype=np.float16)
-        p1 = None
-        p2 = None
-        gc.collect()
     # joblib.dump(predictions, "pred.gz", compress="lz4")
     u_track_types = set(track_types.values())
 

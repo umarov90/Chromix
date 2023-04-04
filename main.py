@@ -1,7 +1,4 @@
 import os
-# os.environ["TF_GPU_ALLOCATOR"] = "cuda_malloc_async"
-# os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-# os.environ["CUDA_VISIBLE_DEVICES"] = '1,2,3'
 import shutil
 import math
 import joblib
@@ -19,42 +16,12 @@ import traceback
 import multiprocessing as mp
 from evaluation import evaluation
 from main_params import MainParams
-import tensorflow as tf
-from tensorflow.keras import mixed_precision
-
-mixed_precision.set_global_policy('mixed_float16')
-import tensorflow_addons as tfa
 import model as mo
-
-# os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-# logging.getLogger("tensorflow").setLevel(logging.ERROR)
+import torch
+from torch.utils.data import DataLoader
+from torch import autocast, nn
+from torch.cuda.amp import GradScaler
 matplotlib.use("agg")
-
-
-def load_old_weights():
-    our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, hic_num if head_name == "hg38" else 0,
-                              p.hic_size, heads)
-
-    our_model_old = mo.make_model(p.input_size, p.num_features, p.num_bins, 6, p.hic_size, heads)
-    our_model_old.get_layer("our_hic").set_weights(joblib.load(p.model_path + "_hic"))
-
-    print("model loaded")
-    for layer in our_model_old.get_layer("our_hic").layers:
-        layer_name = layer.name
-        layer_weights = layer.weights
-        try:
-            our_model.get_layer("our_hic").get_layer(layer_name).set_weights(layer_weights)
-        except:
-            try:
-                nw = []
-                for i, w in enumerate(our_model.get_layer("our_hic").get_layer(layer_name).get_weights()):
-                    nw.append(np.resize(layer_weights[i], w.shape))
-                our_model.get_layer("our_hic").get_layer(layer_name).set_weights(nw)
-            except:
-                print(layer_name)
-
-    joblib.dump(our_model.get_layer("our_hic").get_weights(), p.model_folder + p.model_name + "_hic")
-    print("dumped")
 
 
 def get_train_data(q, head_id):
@@ -118,7 +85,7 @@ def get_train_data(q, head_id):
         output_expression = parser.par_load_data(output_scores_info, heads[p.species[head_id]]["expression"], p)
         output_epigenome = parser.par_load_data(output_scores_info, heads[p.species[head_id]]["epigenome"], p)
         # loading corresponding 2D data
-        output_hic = parser.par_load_hic_data(hic_keys, p, picked_regions, half)
+        output_hic = parser.par_load_hic_data(p.hic_keys, p, picked_regions, half)
     else:
         output_expression = parser.par_load_data(output_scores_info, heads[p.species[head_id]], p)
     print_memory()
@@ -129,150 +96,61 @@ def get_train_data(q, head_id):
             output_epigenome[i] = np.flip(output_epigenome[i], axis=1)
             output_conservation[i] = np.flip(output_conservation[i], axis=1)
 
-    all_outputs = {"our_expression": output_expression}
+    all_outputs = {"expression": output_expression}
     if p.species[head_id] == "hg38":
-        all_outputs["our_epigenome"] = output_epigenome
-        all_outputs["our_conservation"] = output_conservation
-        if hic_num > 0:
-            all_outputs["our_hic"] = output_hic
+        all_outputs["epigenome"] = output_epigenome
+        all_outputs["conservation"] = output_conservation
+        if p.hic_num > 0:
+            all_outputs["hic"] = output_hic
     print_memory()
     if head_name == "hg38":
         q.put((input_sequences, all_outputs))
     else:
-        q.put((input_sequences, all_outputs["our_expression"]))
+        q.put((input_sequences, all_outputs["expression"]))
 
 
-def make_model(heads, head_name):
-    strategy = tf.distribute.MultiWorkerMirroredStrategy()
-    with strategy.scope():
-        our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, hic_num if head_name == "hg38" else 0,
-                                  p.hic_size, heads)
-        loss_weights = {}
-        learning_rates = {}
-        weight_decays = {}
-        with open(str(p.script_folder) + "/../loss_weights") as f:
-            for line in f:
-                if line.startswith("#"):
-                    continue
-                (key, weight, lr, wd) = line.split()
-                if hic_num == 0 and key == "our_hic":
-                    continue
-                if key not in ["our_stem", "our_body"]:
-                    loss_weights[key] = float(weight)
-                learning_rates[key] = float(lr)
-                weight_decays[key] = float(wd)
-        optimizers = {}
-        optimizers["our_stem"] = tfa.optimizers.AdamW(learning_rate=learning_rates["our_stem"],
-                                                      weight_decay=weight_decays["our_stem"], epsilon=1e-08,
-                                                      clipnorm=0.1)
-        optimizers["our_body"] = tfa.optimizers.AdamW(learning_rate=learning_rates["our_body"],
-                                                      weight_decay=weight_decays["our_body"], epsilon=1e-08,
-                                                      clipnorm=0.1)
-        for specie in p.species:
-            optimizers["our_expression_" + specie] = tfa.optimizers.AdamW(
-                learning_rate=learning_rates["our_expression"], weight_decay=weight_decays["our_expression"],
-                epsilon=1e-08)
-        optimizers["our_epigenome"] = tfa.optimizers.AdamW(learning_rate=learning_rates["our_epigenome"],
-                                                           weight_decay=weight_decays["our_epigenome"], epsilon=1e-08)
-        optimizers["our_conservation"] = tfa.optimizers.AdamW(learning_rate=learning_rates["our_conservation"],
-                                                              weight_decay=weight_decays["our_conservation"],
-                                                              epsilon=1e-08)
-        optimizers["our_hic"] = tfa.optimizers.AdamW(learning_rate=learning_rates["our_hic"],
-                                                     weight_decay=weight_decays["our_hic"], epsilon=1e-08)
-
-        optimizers_and_layers = [(optimizers["our_stem"], our_model.get_layer("our_stem")),
-                                 (optimizers["our_body"], our_model.get_layer("our_body")),
-                                 (optimizers["our_expression_" + head_name], our_model.get_layer("our_expression"))]
-        if head_name == "hg38":
-            if hic_num > 0:
-                optimizers_and_layers.append((optimizers["our_hic"], our_model.get_layer("our_hic")))
-            optimizers_and_layers.append((optimizers["our_epigenome"], our_model.get_layer("our_epigenome")))
-            optimizers_and_layers.append((optimizers["our_conservation"], our_model.get_layer("our_conservation")))
-        optimizer = tfa.optimizers.MultiOptimizer(optimizers_and_layers)
-        if head_name == "hg38":
-            losses = {
-                "our_expression": mo.mse_plus01,
-                "our_epigenome": mo.mse_plus01,
-                "our_conservation": "mse",
-            }
-            if hic_num > 0:
-                losses["our_hic"] = "mse"
-        else:
-            losses = mo.mse_plus01
-        if os.path.exists(p.model_folder + "loss_scale_" + head_name):
-            initial_scale = joblib.load(p.model_folder + "loss_scale_" + head_name) // 8
-            print(f"Initial scale: {initial_scale}")
-        else:
-            initial_scale = 1
-        opt_scaled = tf.keras.mixed_precision.LossScaleOptimizer(optimizer, initial_scale=initial_scale,
-                                                                 dynamic_growth_steps=20)
-        if head_name == "hg38":
-            our_model.compile(optimizer=opt_scaled, loss=losses, loss_weights=loss_weights)
-        else:
-            our_model.compile(optimizer=opt_scaled, loss=losses)
-    return our_model, optimizers, opt_scaled
+def make_model(p):
+    model = mo.Chromix(p).to(device)
+    print(model)
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+    model = nn.DataParallel(model)
+    return model, optimizer
 
 
-def load_weights(head_name):
-    print(f"Loading model weights {head_name}")
-    if os.path.exists(p.model_path + "_stem"):
-        our_model.get_layer("our_stem").set_weights(joblib.load(p.model_path + "_stem"))
-    if os.path.exists(p.model_path + "_body"):
-        our_model.get_layer("our_body").set_weights(joblib.load(p.model_path + "_body"))
-    if os.path.exists(p.model_path + "_expression_" + head_name):
-        our_model.get_layer("our_expression").set_weights(joblib.load(p.model_path + "_expression_" + head_name))
-    if head_name == "hg38":
-        if os.path.exists(p.model_path + "_epigenome"):
-            our_model.get_layer("our_epigenome").set_weights(joblib.load(p.model_path + "_epigenome"))
-        if hic_num > 0 and os.path.exists(p.model_path + "_hic"):
-            our_model.get_layer("our_hic").set_weights(joblib.load(p.model_path + "_hic"))
-        if os.path.exists(p.model_path + "_conservation"):
-            our_model.get_layer("our_conservation").set_weights(joblib.load(p.model_path + "_conservation"))
+def train(dataloader, head_name):
+    # torch.cuda.mem_get_info(device=None)
+    size = len(dataloader.dataset)
+    model.train()
+    for batch, (X, y) in enumerate(dataloader):
+        optimizer.zero_grad()
+        X = X.to(device)
+        yd = {}
+        for key in y.keys():
+            yd[key] = y[key].to(device)
 
+        with autocast(device_type='cuda', dtype=torch.float16):
+            # Compute prediction error
+            loss_hm = model(X, target=yd, head="human")
+            # loss_ms = model(X, target=y, head="mouse")
+            total_loss = loss_hm.mean()
+            # total_loss = loss_hm + loss_ms
+        scaler.scale(total_loss).backward()
+        # Unscales the gradients of optimizer's assigned params in-place
+        scaler.unscale_(optimizer)
 
-def train(train_data, head_name):
-    try:
-        if current_epoch == 0 and os.path.exists(p.model_path + "_opt_stem"):
-            # need to init the optimizers
-            load_weights(head_name)
-            our_model.fit(train_data, steps_per_epoch=1, epochs=1)
-            load_weights(head_name)
-            # loading the previous optimizer weights
-            if os.path.exists(p.model_path + "_opt_stem"):
-                print("loading stem optimizer")
-                optimizers["our_stem"].set_weights(joblib.load(p.model_path + "_opt_stem"))
-            if os.path.exists(p.model_path + "_opt_body"):
-                print("loading body optimizer")
-                optimizers["our_body"].set_weights(joblib.load(p.model_path + "_opt_body"))
-            if os.path.exists(p.model_path + "_opt_expression_" + head_name):
-                print("loading expression optimizer")
-                optimizers["our_expression_" + head_name].set_weights(
-                    joblib.load(p.model_path + "_opt_expression_" + head_name))
-            if head_name == "hg38":
-                if hic_num > 0 and os.path.exists(p.model_path + "_opt_hic"):
-                    print("loading hic optimizer")
-                    optimizers["our_hic"].set_weights(joblib.load(p.model_path + "_opt_hic"))
-                if os.path.exists(p.model_path + "_opt_epigenome"):
-                    print("loading epigenome optimizer")
-                    optimizers["our_epigenome"].set_weights(joblib.load(p.model_path + "_opt_epigenome"))
-                if os.path.exists(p.model_path + "_opt_conservation"):
-                    print("loading conservation optimizer")
-                    optimizers["our_conservation"].set_weights(joblib.load(p.model_path + "_opt_conservation"))
+        # Since the gradients of optimizer's assigned params are unscaled, clips as usual:
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 0.2)
 
-        from tensorflow.keras.callbacks import TerminateOnNaN
-        term = TerminateOnNaN()
-        # our_model.evaluate(train_data)
-        history = our_model.fit(train_data, epochs=fit_epochs, batch_size=p.GLOBAL_BATCH_SIZE, callbacks=[term])
-        if np.isnan(history.history['loss']).any():
-            print("Exiting because of nan")
-            exit()
-        del history
-        del term
-        train_data = None
-        print(datetime.now().strftime('[%H:%M:%S] ') + "Epoch " + str(current_epoch) + " finished.")
-    except:
-        traceback.print_exc()
-        print(datetime.now().strftime('[%H:%M:%S] ') + "Error while training.")
+        # optimizer's gradients are already unscaled, so scaler.step does not unscale them,
+        # although it still skips optimizer.step() if the gradients contain infs or NaNs.
+        scaler.step(optimizer)
+
+        # Updates the scale for next iteration.
+        scaler.update()
+
+        if batch % 2 == 0:
+            loss, current = total_loss.item(), (batch + 1) * len(X)
+            print(f"loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
 
 
 def check_perf():
@@ -280,9 +158,9 @@ def check_perf():
     try:
         one_hot = joblib.load(f"{p.pickle_folder}hg38_one_hot.gz")
         auc = 0  # get_linking_AUC()
-        train_eval_info = random.sample(train_info, len(train_info) // 10)
+        train_eval_info = random.sample(train_info, len(train_info) // 100)
         print(f"Training set {len(train_eval_info)}")
-        training_result = evaluation.eval_perf(p, our_model, heads["hg38"], train_eval_info,
+        training_result = evaluation.eval_perf(p, model, device, heads["hg38"], train_eval_info,
                                                False, current_epoch, "train", one_hot)
         # training_result = "0"
         valid_eval_chr_info = []
@@ -290,7 +168,7 @@ def check_perf():
             # if info[0] == "chr2":
             valid_eval_chr_info.append(info)
         print(f"Valid set {len(valid_eval_chr_info)}")
-        valid_result = evaluation.eval_perf(p, our_model, heads["hg38"], valid_eval_chr_info,
+        valid_result = evaluation.eval_perf(p, model, device, heads["hg38"], valid_eval_chr_info,
                                             False, current_epoch, "valid", one_hot)
         with open(p.model_name + "_history.tsv", "a+") as myfile:
             myfile.write(training_result + "\t" + valid_result + "\t" + str(auc) + "\n")
@@ -318,12 +196,25 @@ def change_seq(x):
     return cm.rev_comp(x)
 
 
+def load_weights():
+    if os.path.exists(p.model_folder + p.model_name):
+        checkpoint = torch.load(p.model_folder + p.model_name)
+        model.load_state_dict(checkpoint['model_state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        return checkpoint['epoch']
+    else:
+        return 0
+
+
+
 make_data_proc = None
 script_dir = os.path.dirname(os.path.realpath(__file__))
 print(script_dir)
 p = MainParams()
 dry_run_regions = []
 if __name__ == '__main__':
+    device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
+    print(f"Using {device} device")
     train_info, valid_info, test_info, protein_coding = parser.parse_sequences(p)
     if Path(f"{p.pickle_folder}track_names_col.gz").is_file():
         track_names_col = joblib.load(f"{p.pickle_folder}track_names_col.gz")
@@ -354,23 +245,20 @@ if __name__ == '__main__':
                 new_head = shuffled_tracks
             heads[specie] = new_head
         joblib.dump(heads, f"{p.pickle_folder}heads.gz", compress="lz4")
-
     for head_key in heads.keys():
-        if head_key == "hg38":
-            for human_key in heads[head_key]:
-                print(f"Number of tracks in head {head_key} {human_key}: {len(heads[head_key][human_key])}")
+        if isinstance(heads[head_key], dict):
+            for key2 in heads[head_key].keys():
+                print(f"Number of tracks in head {head_key} {key2}: {len(heads[head_key][key2])}")
+                p.output_heads[head_key + "_" + key2] = len(heads[head_key][key2])
         else:
             print(f"Number of tracks in head {head_key}: {len(heads[head_key])}")
+            p.output_heads[head_key + "_expression"] = len(heads[head_key])
 
-    hic_keys = pd.read_csv("data/good_hic.tsv", sep="\t", header=None).iloc[:, 0]
-    # hic_keys = []
-    hic_num = len(hic_keys)
-    print(f"hic {hic_num}")
-
+    
     print("Training starting")
-    our_model, optimizers, opt_scaled = make_model(heads[p.species[0]], p.species[0])
-    load_weights("hg38")
-    start_epoch = 0
+    model, optimizer = make_model(p)
+    scaler = GradScaler()
+    start_epoch = load_weights()
     fit_epochs = 1
     mp_q = mp.Queue()
     for current_epoch in range(start_epoch, p.num_epochs, 1):
@@ -392,44 +280,18 @@ if __name__ == '__main__':
 
             saved_train_data = mp_q.get(timeout=1000)
 
-            if head_name == "hg38":
-                train_data = mo.wrap_for_human_training(saved_train_data[0], saved_train_data[1], p.GLOBAL_BATCH_SIZE)
-            else:
-                train_data = mo.wrap(saved_train_data[0], saved_train_data[1], p.GLOBAL_BATCH_SIZE)
+            train_data = mo.CustomDataset(saved_train_data[0], saved_train_data[1])
+            train_dataloader = DataLoader(train_data, batch_size=p.GLOBAL_BATCH_SIZE)
+
             make_data_proc = mp.Process(target=get_train_data, args=(mp_q, head_id,))
             make_data_proc.start()
-            train(train_data, p.species[head_id])
+            train(train_dataloader, p.species[head_id])
             if current_epoch % 5 == 0 and current_epoch != 0:
-                Path(p.model_folder + "temp/").mkdir(parents=True, exist_ok=True)
-                joblib.dump(our_model.get_layer("our_stem").get_weights(),
-                            p.model_folder + "temp/" + p.model_name + "_stem")
-                joblib.dump(our_model.get_layer("our_body").get_weights(),
-                            p.model_folder + "temp/" + p.model_name + "_body")
-                joblib.dump(our_model.get_layer("our_expression").get_weights(),
-                            p.model_folder + "temp/" + p.model_name + "_expression_" + head_name)
-                joblib.dump(optimizers["our_body"].get_weights(), p.model_folder + "temp/" + p.model_name + "_opt_body")
-                joblib.dump(optimizers["our_stem"].get_weights(), p.model_folder + "temp/" + p.model_name + "_opt_stem")
-                joblib.dump(optimizers["our_expression_" + head_name].get_weights(),
-                            p.model_folder + "temp/" + p.model_name + "_opt_expression_" + head_name)
-                if head_name == "hg38":
-                    joblib.dump(our_model.get_layer("our_hic").get_weights(),
-                                p.model_folder + "temp/" + p.model_name + "_hic")
-                    joblib.dump(our_model.get_layer("our_epigenome").get_weights(),
-                                p.model_folder + "temp/" + p.model_name + "_epigenome")
-                    joblib.dump(our_model.get_layer("our_conservation").get_weights(),
-                                p.model_folder + "temp/" + p.model_name + "_conservation")
-                    joblib.dump(optimizers["our_hic"].get_weights(),
-                                p.model_folder + "temp/" + p.model_name + "_opt_hic")
-                    joblib.dump(optimizers["our_epigenome"].get_weights(),
-                                p.model_folder + "temp/" + p.model_name + "_opt_epigenome")
-                    joblib.dump(optimizers["our_conservation"].get_weights(),
-                                p.model_folder + "temp/" + p.model_name + "_opt_conservation")
-                joblib.dump(opt_scaled.loss_scale.numpy(), p.model_folder + "temp/" + "loss_scale_" + head_name)
-                file_names = os.listdir(p.model_folder + "temp/")
-                for file_name in file_names:
-                    shutil.copy(p.model_folder + "temp/" + file_name, p.model_folder + file_name)
-                joblib.dump(opt_scaled.loss_scale.numpy(), p.model_folder + "loss_scale")
-                print(datetime.now().strftime('[%H:%M:%S] ') + "Weights saved.")
+                torch.save({
+                    'epoch': current_epoch,
+                    'model_state_dict': model.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                }, p.model_folder + p.model_name)
             if current_epoch % 50 == 0 and current_epoch != 0:  # and current_epoch != 0:
                 print(datetime.now().strftime('[%H:%M:%S] ') + "Evaluating.")
                 check_perf()
@@ -437,6 +299,6 @@ if __name__ == '__main__':
                     text_file.write("\n".join(dry_run_regions))
         except Exception as e:
             print(f"Problem with the epoch {current_epoch}!")
-            print(e)
+            traceback.print_exc()
             make_data_proc = None
 

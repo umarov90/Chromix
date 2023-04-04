@@ -112,17 +112,17 @@ def parse_tracks(p, infos):
                     for i in range(len(sl)):
                         sl[i] += ".64nt.bed.gz"
                     skip += sl
-                    proc = mp.Process(target=parse_some_tracks,
-                                      args=(q, p, sl, ga, p.bin_size, tracks_folder, new_track_name, meta, infos))
-                    proc.start()
-                    ps.append(proc)
-                    if len(ps) >= mp.cpu_count():
-                        for proc in ps:
-                            q.get()
-                        ps = []
-                if len(ps) > 0:
-                    for proc in ps:
-                        q.get()
+                #     proc = mp.Process(target=parse_some_tracks,
+                #                       args=(q, p, sl, ga, p.bin_size, tracks_folder, new_track_name, meta, infos))
+                #     proc.start()
+                #     ps.append(proc)
+                #     if len(ps) >= mp.cpu_count():
+                #         for proc in ps:
+                #             q.get()
+                #         ps = []
+                # if len(ps) > 0:
+                #     for proc in ps: 
+                #         q.get()
 
             # Read all other tracks averaging based on track name
             track_names = []
@@ -423,6 +423,8 @@ def par_load_data(output_scores_info, tracks, p):
     all_scores = sorted(all_scores, key=lambda x: x[0])
     all_scores = [tp[1] for tp in all_scores]
     all_scores = np.concatenate(all_scores, axis=1, dtype=np.float16)
+    if len(output_scores_info[0]) == 3:
+        all_scores = all_scores.swapaxes(1, 2)
     return all_scores
 
 
@@ -448,6 +450,7 @@ def par_load_hic_data(hic_tracks, p, picked_regions, half):
     all_scores = sorted(all_scores, key=lambda x: x[0])
     all_scores = [tp[1] for tp in all_scores]
     all_scores = np.concatenate(all_scores, axis=0, dtype=np.float16)
+    all_scores = all_scores.swapaxes(1, 2)
     return all_scores
 
 

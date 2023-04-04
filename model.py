@@ -1,256 +1,276 @@
-import tensorflow as tf
-import tensorflow_addons as tfa
-from tensorflow.keras import layers
-from tensorflow import keras
-from tensorflow.keras.layers import LeakyReLU, LayerNormalization, MaxPooling1D, BatchNormalization, \
-    Concatenate, GaussianDropout, GaussianNoise, Add, Embedding, Layer, Dropout, Reshape, \
-    Dense, Conv1D, Input, Flatten, Activation, BatchNormalization, LocallyConnected1D, DepthwiseConv1D, DepthwiseConv2D
-from tensorflow.keras.models import Model
+import torch
+from torch.utils.data import Dataset
 import numpy as np
-import math
 from numba import jit
+import math
+from torch import nn, einsum
+import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint_sequential
+from einops import rearrange, reduce
+from einops.layers.torch import Rearrange
+from main_params import MainParams 
+from x_transformers import TransformerWrapper, Encoder
 
 
-def make_model(input_size, num_features, num_regions, hic_num, hic_size, one_d_heads):
-    inputs = Input(shape=(input_size, num_features))
-    stem_layer = make_stem(inputs)
-    stem = Model(inputs, stem_layer, name="our_stem")
-    body_input = Input(shape=(stem_layer.shape[-2], stem_layer.shape[-1]))
-    body_layer = make_body(body_input)
-    body = Model(body_input, body_layer, name="our_body")
-    outs = body(stem(inputs))
+# helpers
 
-    if hic_num > 0:
-        # Make hic head
-        seq_len = body_layer.shape[-2]
-        features = body_layer.shape[-1]
-        hic_input = Input(shape=(seq_len, features))
+def exists(val):
+    return val is not None
 
-        hx = hic_input
+def default(val, d):
+    return val if exists(val) else d
 
-        hx = tf.transpose(hx, [0, 2, 1])
-        hx = Dense(hic_size, name="hic_dense_1")(hx)
-        # hx = Activation(gelu)(hx)
-        hx = tf.transpose(hx, [0, 2, 1])
-        hx = Dense(hic_num, name="hic_dense_2")(hx)
-        hx = tf.transpose(hx, [0, 2, 1])
+def map_values(fn, d):
+    return {key: fn(values) for key, values in d.items()}
 
-        hx = Activation(tf.keras.activations.softplus, dtype='float32')(hx)
-        our_hic = Model(hic_input, hx, name="our_hic")
+def exponential_linspace_int(start, end, num, divisible_by = 1):
+    def _round(x):
+        return int(round(x / divisible_by) * divisible_by)
 
-    all_heads = []
-    if isinstance(one_d_heads, dict):
-        for key in one_d_heads.keys():
-            new_head = make_head(len(one_d_heads[key]), num_regions, body_layer, "our_" + key)
-            all_heads.append(new_head(outs))
-    else:
-        new_head = make_head(len(one_d_heads), num_regions, body_layer, "our_expression")
-        all_heads.append(new_head(outs))
+    base = math.exp(math.log(end / start) / (num - 1))
+    return [_round(start * base**i) for i in range(num)]
 
-    if hic_num > 0:
-        all_heads.append(our_hic(outs))
+def log(t, eps = 1e-20):
+    return torch.log(t.clamp(min = eps))
 
-    our_model = Model(inputs, all_heads, name="our_model")
-    print(our_model.summary())
-    return our_model
+# losses and metrics
 
+def poisson_loss(pred, target):
+    return (pred - target * log(pred)).mean()
 
-def make_head(track_num, num_regions, output1d, name):
-    seq_len = output1d.shape[-2]
-    features = output1d.shape[-1]
-    head_input = Input(shape=(seq_len, features))
-    x = head_input
+def pearson_corr_coef(x, y, dim = 1, reduce_dims = (-1,)):
+    x_centered = x - x.mean(dim = dim, keepdim = True)
+    y_centered = y - y.mean(dim = dim, keepdim = True)
+    return F.cosine_similarity(x_centered, y_centered, dim = dim).mean(dim = reduce_dims)
 
-    trim = (x.shape[-2] - num_regions) // 2  # 4689 - 1563
-    x = x[..., trim:-trim, :]
+# classes
 
-    outputs = Conv1D(track_num, kernel_size=1, strides=1, name=name + "_last_conv1d")(x)
-    outputs = tf.transpose(outputs, [0, 2, 1])
-    head_output = Activation(tf.keras.activations.softplus, dtype='float32')(outputs)
-    return Model(head_input, head_output, name=name)
+class Residual(nn.Module):
+    def __init__(self, fn):
+        super().__init__()
+        self.fn = fn
 
+    def forward(self, x, **kwargs):
+        return self.fn(x, **kwargs) + x
 
-def reset_bn(model):
-    model = model.get_layer("our_stem")
-    for l in model.layers:
-        if l.name.split('_')[-1] == 'bn':  # e.g. conv1_bn
-            l.moving_mean.assign(tf.zeros_like(l.moving_mean))
-            l.moving_variance.assign(tf.ones_like(l.moving_variance))
+class GELU(nn.Module):
+    def forward(self, x):
+        return torch.sigmoid(1.702 * x) * x
 
+class AttentionPool(nn.Module):
+    def __init__(self, dim, pool_size = 2):
+        super().__init__()
+        self.pool_size = pool_size
+        self.pool_fn = Rearrange('b d (n p) -> b d n p', p = pool_size)
 
-def conv_block(ix, filters, width, r, block, dr=1, act=True):
-    x = ix
-    x = BatchNormalization(name=f"{block}_{filters}_{width}_bn")(x)
-    if act:
-        x = Activation(gelu)(x)
-    x = Conv1D(filters, kernel_size=width, dilation_rate=dr, padding="same")(x)
-    if r:
-        x = x + ix
-    return x
+        self.to_attn_logits = nn.Conv2d(dim, dim, 1, bias = False)
 
+        nn.init.dirac_(self.to_attn_logits.weight)
 
-def make_stem(input_x):
-    num_filters = 512 + 256
-    filter_nums = exponential_linspace_int(num_filters, 2 * (1024 - 128), 6, divisible_by=128)
-    x = Conv1D(num_filters, strides=1, kernel_size=15, padding="same")(input_x)
-    x = conv_block(x, num_filters, 1, True, 0)
-    x = MaxPooling1D()(x)
-    for block in range(6):
-        num_filters = filter_nums[block]
-        x = conv_block(x, num_filters, 5, False, block + 1)
-        x = conv_block(x, num_filters, 1, True, block + 1)
-        x = MaxPooling1D()(x)
-    x = Activation(tf.keras.activations.linear, dtype='float32')(x)
-    return x
+        with torch.no_grad():
+            self.to_attn_logits.weight.mul_(2)
 
+    def forward(self, x):
+        b, _, n = x.shape
+        remainder = n % self.pool_size
+        needs_padding = remainder > 0
 
-def make_body(x):
-    num_filters = x.shape[-1]
-    num_blocks = 22
-    dr = 1
-    x = LayerNormalization(epsilon=1e-6)(x)
-    for block in range(num_blocks):
-        cname = "body_block_" + str(block) + "_"
-        y = x
-        y = GaussianDropout(0.01)(y)
-        y = DepthwiseConv1D(kernel_size=21, name=cname + "depthwise", dilation_rate=dr, padding="same")(y)
-        dr = min(int(math.ceil(dr * 1.5)), 700)
-        print(dr)
-        y = LayerNormalization(epsilon=1e-6)(y)
-        # Pointwise to mix the channels
-        y = Conv1D(2 * num_filters, kernel_size=1, padding="same", name=cname + "pointwise_1")(y)
-        y = Dropout(0.2)(y)
-        y = Activation(gelu)(y)
-        y = Conv1D(num_filters, kernel_size=1, padding="same", name=cname + "pointwise_2")(y)
-        y = LayerScale(1e-6, num_filters)(y)
-        sp = 1.0 - 0.5 * min(block / 15, 1.0)
-        x = tfa.layers.StochasticDepth(sp)([x, y])
+        if needs_padding:
+            x = F.pad(x, (0, remainder), value = 0)
+            mask = torch.zeros((b, 1, n), dtype = torch.bool, device = x.device)
+            mask = F.pad(mask, (0, remainder), value = True)
 
-    x = LayerNormalization(epsilon=1e-6)(x)
-    x = Conv1D(2 * num_filters, kernel_size=1, name="body_output")(x)
-    x = Dropout(0.1)(x)
-    x = Activation(gelu, dtype='float32')(x)
-    return x
+        x = self.pool_fn(x)
+        logits = self.to_attn_logits(x)
 
+        if needs_padding:
+            mask_value = -torch.finfo(logits.dtype).max
+            logits = logits.masked_fill(self.pool_fn(mask), mask_value)
 
-class LayerScale(layers.Layer):
-    """LayerScale as introduced in CaiT: https://arxiv.org/abs/2103.17239.
+        attn = logits.softmax(dim = -1)
 
-    Args:
-        init_values (float): value to initialize the diagonal matrix of LayerScale.
-        projection_dim (int): projection dimension used in LayerScale.
-    """
+        return (x * attn).sum(dim = -1)
 
-    def __init__(self, init_values: float, projection_dim: int, **kwargs):
-        super().__init__(**kwargs)
-        self.gamma = tf.Variable(init_values * tf.ones((projection_dim,)))
+class TargetLengthCrop(nn.Module):
+    def __init__(self, target_length):
+        super().__init__()
+        self.target_length = target_length
 
-    def call(self, x, training=False):
-        return x * tf.cast(self.gamma, tf.float16)
+    def forward(self, x):
+        seq_len, target_len = x.shape[-2], self.target_length
 
+        if target_len == -1:
+            return x
 
-@tf.function
-def mse_plus01(y_true, y_pred):
-    normal_mse = tf.reduce_mean(tf.square(y_true - y_pred))
-    y_pred_positive = tf.gather_nd(y_pred, tf.where(y_true > 0))
-    y_true_positive = tf.gather_nd(y_true, tf.where(y_true > 0))
+        if seq_len < target_len:
+            raise ValueError(f'sequence length {seq_len} is less than target length {target_len}')
 
-    non_zero_mse = tf.reduce_mean(tf.square(y_true_positive - y_pred_positive))
-    non_zero_mse = tf.where(tf.math.is_nan(non_zero_mse), tf.zeros_like(non_zero_mse), non_zero_mse)
+        trim = (target_len - seq_len) // 2
 
-    total_loss = normal_mse + 0.1 * non_zero_mse
+        if trim == 0:
+            return x
 
-    return total_loss
+        return x[:, -trim:trim]
 
+def ConvBlock(dim, dim_out = None, kernel_size = 1):
+    return nn.Sequential(
+        nn.BatchNorm1d(dim),
+        GELU(),
+        nn.Conv1d(dim, default(dim_out, dim), kernel_size, padding = kernel_size // 2)
+    )
 
-@tf.function
-def mse_plus_cor(y_true, y_pred):
-    normal_mse = tf.reduce_mean(tf.square(y_true - y_pred))
-    y_pred_positive = tf.gather_nd(y_pred, tf.where(y_true > 0))
-    y_true_positive = tf.gather_nd(y_true, tf.where(y_true > 0))
+# main class
 
-    non_zero_mse = tf.reduce_mean(tf.square(y_true_positive - y_pred_positive))
-    non_zero_mse = tf.where(tf.math.is_nan(non_zero_mse), tf.zeros_like(non_zero_mse), non_zero_mse)
+class Chromix(nn.Module):
 
-    cor = cor_loss(y_pred_positive, y_true_positive, -1)
-    total_loss = normal_mse + 0.2 * non_zero_mse + 0.001 * tf.math.reduce_mean(cor)
+    def __init__(self, config):
+        super().__init__()
+        self.dim = config.dim
+        self.loss_weights = config.loss_weights
+        half_dim = config.dim // 2
+        twice_dim = config.dim * 2
 
-    return total_loss
+        # create stem
 
+        self.stem = nn.Sequential(
+            nn.Conv1d(4, half_dim, 15, padding = 7),
+            Residual(ConvBlock(half_dim)),
+            AttentionPool(half_dim, pool_size = 2)
+        )
 
-@tf.function
-def cor_loss(x, y, cor_axis):
-    mx = tf.math.reduce_mean(x, axis=cor_axis)
-    my = tf.math.reduce_mean(y, axis=cor_axis)
-    xm, ym = x - mx, y - my
-    r_num = tf.math.reduce_mean(xm * ym, axis=cor_axis)
-    r_den = tf.math.reduce_std(xm, axis=cor_axis) * tf.math.reduce_std(ym, axis=cor_axis)
-    r_den = r_den + 0.0000001
-    r = r_num / r_den
-    r = tf.math.maximum(tf.math.minimum(r, 1.0), -1.0)
-    cor = 1 - r
-    cor = tf.where(tf.math.is_nan(cor), tf.zeros_like(cor), cor)
-    return cor
+        # create conv tower
 
+        filter_list = exponential_linspace_int(half_dim, config.dim, num = 6, divisible_by = 2)
+        filter_list = [half_dim, *filter_list]
 
-def wrap(input_sequences, output_scores, bs):
-    with tf.device('cpu:0'):
-        train_data = tf.data.Dataset.from_tensor_slices((input_sequences, output_scores))
-        train_data = train_data.batch(bs)
-        options = tf.data.Options()
-        options.experimental_distribute.auto_shard_policy = tf.data.experimental.AutoShardPolicy.DATA
-        train_data = train_data.with_options(options)
-        return train_data
+        conv_layers = []
+        for dim_in, dim_out in zip(filter_list[:-1], filter_list[1:]):
+            conv_layers.append(nn.Sequential(
+                ConvBlock(dim_in, dim_out, kernel_size = 5),
+                Residual(ConvBlock(dim_out, dim_out, 1)),
+                AttentionPool(dim_out, pool_size = 2)
+            ))
 
+        self.conv_tower = nn.Sequential(*conv_layers)
 
-def wrap_with_hic(input_sequences, output_scores, bs):
-    with tf.device('cpu:0'):
-        train_data = tf.data.Dataset.from_tensor_slices(
-            (input_sequences, {"our_head": output_scores[0], "our_hic": output_scores[1]}))
-        train_data = train_data.batch(bs)
-        options = tf.data.Options()
-        options.experimental_distribute.auto_shard_policy = tf.data.experimental.AutoShardPolicy.DATA
-        train_data = train_data.with_options(options)
-        return train_data
+        # transformer
+        # Bidirectional like BERT
+        transformer = Encoder(
+            dim = config.dim,
+            depth = 4,
+            heads = 4,
+            rel_pos_max_distance = config.num_bins,
+            rel_pos_num_buckets = 256,
+            rel_pos_bias = True  # adds relative positional bias to all attention layers, a la T5
+        )
 
+        self.transformer = transformer
 
-def wrap_for_human_training(input_sequences, output_scores, bs):
-    with tf.device('cpu:0'):
-        train_data = tf.data.Dataset.from_tensor_slices((input_sequences, output_scores))
-        train_data = train_data.batch(bs)
-        options = tf.data.Options()
-        options.experimental_distribute.auto_shard_policy = tf.data.experimental.AutoShardPolicy.DATA
-        train_data = train_data.with_options(options)
-        return train_data
+        # target cropping
 
+        self.target_length = config.num_bins
+        self.crop_final = TargetLengthCrop(config.num_bins)
 
-def wrap2(input_sequences, bs):
-    with tf.device('cpu:0'):
-        train_data = tf.data.Dataset.from_tensor_slices(input_sequences)
-        train_data = train_data.batch(bs)
-        options = tf.data.Options()
-        options.experimental_distribute.auto_shard_policy = tf.data.experimental.AutoShardPolicy.DATA
-        train_data = train_data.with_options(options)
-        return train_data
+        # final pointwise
 
+        self.final_pointwise = nn.Sequential(
+            Rearrange('b n d -> b d n'),
+            ConvBlock(filter_list[-1], twice_dim, 1),
+            Rearrange('b d n -> b n d'),
+            nn.Dropout(0.05),
+            GELU()
+        )
 
-def batch_predict(p, model, seqs):
-    for w in range(0, len(seqs), p.w_step):
-        print(w, end=" ")
-        pr = model.predict(wrap2(seqs[w:w + p.w_step], p.predict_batch_size))
-        p1 = np.concatenate((pr[0], pr[1], pr[2]), axis=1)
-        # if len(hic_keys) > 0:
-        #     p2 = p1[0][:, :, p.mid_bin - 1] + p1[0][:, :, p.mid_bin] + p1[0][:, :, p.mid_bin + 1]
-        #     if w == 0:
-        #         predictions = p2
-        #     else:
-        #         predictions = np.concatenate((predictions, p2), dtype=np.float32)
-        # else:
-        if w == 0:
-            predictions = p1
-        else:
-            predictions = np.concatenate((predictions, p1))
-    return predictions
+        # create trunk sequential module
+
+        self._trunk = nn.Sequential(
+            Rearrange('b n d -> b d n'),
+            self.stem,
+            self.conv_tower,
+            Rearrange('b d n -> b n d'),
+            self.transformer,
+            self.final_pointwise,
+        )
+
+        # create final heads for human and mouse
+
+        self.add_heads(**config.output_heads)
+
+        hic_head = nn.Sequential(
+            Rearrange('b n d -> b d n'),
+            nn.Linear(config.input_size // config.bin_size, config.hic_size),
+            Rearrange('b d n -> b n d'),
+            nn.Linear(self.dim * 2, config.hic_num),
+            nn.Softplus()
+        )
+        self._heads["hg38_hic"] = hic_head
+        self.loss_weights = config.loss_weights
+
+    def add_heads(self, **kwargs):
+        self.output_heads = kwargs
+        self._heads = nn.ModuleDict(map_values(lambda features: nn.Sequential(
+            self.crop_final,
+            nn.Linear(self.dim * 2, features),
+            nn.Softplus()
+        ), kwargs))
+
+    @property
+    def trunk(self):
+        return self._trunk
+
+    @property
+    def heads(self):
+        return self._heads
+        
+
+    def forward(
+        self,
+        x,
+        target = None,
+        return_corr_coef = False,
+        return_embeddings = False,
+        return_only_embeddings = False,
+        head = None,
+        target_length = None
+    ):
+        no_batch = x.ndim == 2
+
+        if no_batch:
+            x = rearrange(x, '... -> () ...')
+
+        if exists(target_length):
+            self.set_target_length(target_length)
+
+        x = self._trunk(x)
+
+        if no_batch:
+            x = rearrange(x, '() ... -> ...')
+
+        if return_only_embeddings:
+            return x
+
+        out = map_values(lambda fn: fn(x), self._heads)
+
+        # if exists(head):
+        #     assert head in self._heads, f'head {head} not found'
+        # out = out["expression"]
+
+        if exists(target):
+            assert exists(head), 'head must be passed in if one were to calculate loss directly with targets'
+
+            if return_corr_coef:
+                return pearson_corr_coef(out, target)
+
+            loss = self.loss_weights["expression"] * poisson_loss(out["hg38_expression"], target["expression"])
+            loss += self.loss_weights["epigenome"] * poisson_loss(out["hg38_epigenome"], target["epigenome"])
+            loss += self.loss_weights["conservation"] * nn.MSELoss()(out["hg38_conservation"], target["conservation"])
+            loss += self.loss_weights["hic"] * nn.MSELoss()(out["hg38_hic"], target["hic"])
+            return loss
+
+        if return_embeddings:
+            return out, x
+
+        return out
 
 
 def batch_predict_effect(p, model, seqs1, seqs2, inds=None):
@@ -267,13 +287,14 @@ def batch_predict_effect(p, model, seqs1, seqs2, inds=None):
         if inds is not None:
             pe2 = pe2[:, inds, :]
 
-        effect_e = np.mean(pe1 - pe2, axis=-1)
+        # effect_e = np.sum(pe1[..., p.mid_bin - 1 : p.mid_bin + 1], axis=-1) - np.sum(pe2[..., p.mid_bin - 1 : p.mid_bin + 1], axis=-1)
+        # effect_e = np.mean(pe1 - pe2, axis=-1)
         # effect_e = np.max(np.abs(pe1 - pe2), axis=-1)
-        # effect_e = fast_ce(np.swapaxes(pe1, 1, 2), np.swapaxes(pe2, 1, 2))
+        effect_e = fast_ce(np.swapaxes(pe1, 1, 2), np.swapaxes(pe2, 1, 2))
         # effect_e = fast_ce(pe1, pe2)
         # effect_h = fast_ce(np.swapaxes(ph1, 1, 2), np.swapaxes(ph2, 1, 2))
-        effect_h = np.mean(ph1 - ph2, axis=-1)
-        # effect_h = fast_ce(ph1, ph2)
+        # effect_h = np.max(ph1 - ph2, axis=-1)
+        effect_h = fast_ce(ph1, ph2)
         if w == 0:
             print(effect_e.shape)
             print(effect_h.shape)
@@ -334,53 +355,28 @@ def fast_ce(p1, p2):
     return np.array(tmp1)
 
 
-def batch_predict_effect_x(p, submodel, seqs1, seqs2):
-    n_times = 1
-    for w in range(0, len(seqs1), p.w_step):
-        print(w, end=" ")
-        p1s = []
-        for i in range(n_times):
-            p1s.append(submodel.predict(wrap2(seqs1[w:w + p.w_step], p.predict_batch_size), verbose=0))
-        p1 = np.mean(p1s, axis=0)
-        # pr = model.predict(wrap2(seqs1[w:w + p.w_step], p.predict_batch_size))
-        # p1 = np.concatenate((pr[0], pr[1], pr[2]), axis=1)
-        p2s = []
-        for i in range(n_times):
-            p2s.append(submodel.predict(wrap2(seqs2[w:w + p.w_step], p.predict_batch_size), verbose=0))
-        p2 = np.mean(p2s, axis=0)
 
-        # effect = fast_ce(p1, p2)
-        effect = fast_ce(np.swapaxes(p1, 1, 2), np.swapaxes(p2, 1, 2))
-        if w == 0:
-            predictions = effect
-        else:
-            predictions = np.concatenate((predictions, effect))
-    return predictions
+class CustomDataset(Dataset):
+    def __init__(self, inputs, outputs):
+        self.inputs = torch.from_numpy(inputs).float()
+        self.outputs = {key: torch.from_numpy(val).float() for key, val in outputs.items()}
+
+    def __getitem__(self, index):
+        input_data = self.inputs[index]
+        output_data = {key: output[index] for key, output in self.outputs.items()}
+        return input_data, output_data
+
+    def __len__(self):
+        return len(self.inputs)
 
 
-# from https://github.com/deepmind/deepmind-research/blob/master/enformer/enformer.py
-def exponential_linspace_int(start, end, num, divisible_by=1):
-    """Exponentially increasing values of integers."""
+class DatasetDNA(Dataset):
+    def __init__(self, inputs):
+        self.inputs = torch.from_numpy(inputs).float()
 
-    def _round(x):
-        return int(np.round(x / divisible_by) * divisible_by)
+    def __getitem__(self, index):
+        input_data = self.inputs[index]
+        return input_data
 
-    base = np.exp(np.log(end / start) / (num - 1))
-    return [_round(start * base ** i) for i in range(num)]
-
-
-def gelu(x: tf.Tensor) -> tf.Tensor:
-    """Applies the Gaussian error linear unit (GELU) activation function.
-    Using approximiation in section 2 of the original paper:
-    https://arxiv.org/abs/1606.08415
-    Args:
-      x: Input tensor to apply gelu activation.
-    Returns:
-      Tensor with gelu activation applied to it.
-    """
-    return tf.nn.sigmoid(1.702 * x) * x
-
-
-class MonteCarloDropout(Dropout):
-    def call(self, inputs):
-        return super().call(inputs, training=True)
+    def __len__(self):
+        return len(self.inputs)

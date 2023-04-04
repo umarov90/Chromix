@@ -1,7 +1,6 @@
 import numpy as np
 import math
 import re
-from numba import jit
 
 
 def find_nearest(array, value):
@@ -16,7 +15,7 @@ enc_mat = np.append(np.eye(4),
                     [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [1, 0, 0, 0],
                      [0, 0, 1, 0], [1, 0, 0, 0], [0, 1, 0, 0],
                      [1, 0, 0, 0], [1, 0, 0, 0], [1, 0, 0, 0], [0, 0, 0, 0]], axis=0)
-enc_mat = enc_mat.astype(np.bool)
+enc_mat = enc_mat.astype(bool)
 mapping_pos = dict(zip("ACGTRYSWKMBDHVN", range(15)))
 
 
@@ -118,21 +117,6 @@ def nuc_to_ind(nuc):
         ind = 3
     return ind
 
-@jit(nopython=True)
-def to_dna(a):
-    seq = ""
-    for v in a:
-        if v[0]:
-            seq+="A"
-        elif v[1]:
-            seq+="C"
-        elif v[2]:
-            seq+="G"
-        elif v[3]:
-            seq+="T"
-        else:
-            seq+="N"
-    return seq
 
 def get_human_readable(size, precision=2):
     suffixes = ['B', 'KB', 'MB', 'GB', 'TB']

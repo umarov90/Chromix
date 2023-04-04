@@ -234,7 +234,7 @@ def get_linking_AUC():
     seqs1, seqs2, eseqs1, eseqs2, Y_label, add_features, tss_pos = get_seqs_and_features(df, one_hot, head)
 
     true_labels = {"<20000":[], "<40000":[], ">40000":[]}
-    methods = ["ABC like", "Enformer", "Chromix",  "Enformer*", "Chromix*", "Chromix no 3D"] # 
+    methods = ["ABC like", "Enformer", "Chromix",  "Enformer*", "Chromix*", "ChromixF"] 
     pred_labels = {}
     for m in methods:
         pred_labels[m] = {"<20000":[], "<40000":[], ">40000":[]}
@@ -245,22 +245,22 @@ def get_linking_AUC():
 
     import enformer_usage
     enformer_effect = enformer_usage.calculate_effect(np.asarray(eseqs1), np.asarray(eseqs2))
-    joblib.dump(enformer_effect, "enformer_effect_max.p", compress=3)
-    # enformer_effect = joblib.load("enformer_effect_mean.p")
+    joblib.dump(enformer_effect, "enformer_effect_sum.p", compress=3)
+    # enformer_effect = joblib.load("enformer_effect_sum.p")
 
-    # import tensorflow as tf
-    # import model as mo
-    # from tensorflow.keras import mixed_precision
-    # mixed_precision.set_global_policy('mixed_float16')
-    # strategy = tf.distribute.MultiWorkerMirroredStrategy()
-    # with strategy.scope():
-    #     our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, 6, p.hic_size, head)
-    #     our_model.get_layer("our_stem").set_weights(joblib.load(p.model_path + "_stem"))
-    #     our_model.get_layer("our_body").set_weights(joblib.load(p.model_path + "_body"))
-    #     our_model.get_layer("our_expression").set_weights(joblib.load(p.model_path + "_expression_hg38"))
-    #     our_model.get_layer("our_epigenome").set_weights(joblib.load(p.model_path + "_epigenome"))
-    #     our_model.get_layer("our_conservation").set_weights(joblib.load(p.model_path + "_conservation"))
-    #     our_model.get_layer("our_hic").set_weights(joblib.load(p.model_path + "_hic"))
+    import tensorflow as tf
+    import model as mo
+    from tensorflow.keras import mixed_precision
+    mixed_precision.set_global_policy('mixed_float16')
+    strategy = tf.distribute.MultiWorkerMirroredStrategy()
+    with strategy.scope():
+        our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, 6, p.hic_size, head)
+        our_model.get_layer("our_stem").set_weights(joblib.load(p.model_path + "_stem"))
+        our_model.get_layer("our_body").set_weights(joblib.load(p.model_path + "_body"))
+        our_model.get_layer("our_expression").set_weights(joblib.load(p.model_path + "_expression_hg38"))
+        our_model.get_layer("our_epigenome").set_weights(joblib.load(p.model_path + "_epigenome"))
+        our_model.get_layer("our_conservation").set_weights(joblib.load(p.model_path + "_conservation"))
+        our_model.get_layer("our_hic").set_weights(joblib.load(p.model_path + "_hic"))
 
         # stem = our_model.get_layer("our_stem")
         # body = our_model.get_layer("our_body")
@@ -269,9 +269,9 @@ def get_linking_AUC():
     # joblib.dump(chomix_effects_e, "chomix_effects_e.p", compress=3)
     # chomix_effects_e = joblib.load("chomix_effects_e.p")
 
-    # chomix_effects_e, chromix_effects_h, chromix_fold_changes = mo.batch_predict_effect(p, our_model, np.asarray(seqs1), np.asarray(seqs2))
-    # joblib.dump((chomix_effects_e, chromix_effects_h, chromix_fold_changes), "chromix_full_effect_ce.p", compress=3)
-    chomix_effects_e, chromix_effects_h, chromix_fold_changes = joblib.load("chromix_full_effect_ce.p")
+    chomix_effects_e, chromix_effects_h, chromix_fold_changes = mo.batch_predict_effect(p, our_model, np.asarray(seqs1), np.asarray(seqs2))
+    joblib.dump((chomix_effects_e, chromix_effects_h, chromix_fold_changes), "chromix_full_effect_ce.p", compress=3)
+    # chomix_effects_e, chromix_effects_h, chromix_fold_changes = joblib.load("chromix_full_effect_ce.p")
 
     # for features in methods:
     #     print(features)
@@ -329,13 +329,13 @@ def get_linking_AUC():
                 X_train = pca.transform(X_train)
                 X_test = pca.transform(X_test)
 
-                # if features in ["Chromix", "Chromix*"]:
-                #     X_train_h = chromix_effects_h[train_indices, :]
-                #     X_test_h = chromix_effects_h[test_indices, :]
-                #     X_train_h = np.mean(X_train_h, axis=-1, keepdims=True)
-                #     X_test_h = np.mean(X_test_h, axis=-1, keepdims=True)
-                #     X_train = np.concatenate((X_train, X_train_h), axis=-1)
-                #     X_test = np.concatenate((X_test, X_test_h), axis=-1)
+                if features in ["ChromixF"]:
+                    X_train_h = chromix_effects_h[train_indices, :]
+                    X_test_h = chromix_effects_h[test_indices, :]
+                    X_train_h = np.mean(X_train_h, axis=-1, keepdims=True)
+                    X_test_h = np.mean(X_test_h, axis=-1, keepdims=True)
+                    X_train = np.concatenate((X_train, X_train_h), axis=-1)
+                    X_test = np.concatenate((X_test, X_test_h), axis=-1)
 
             X_train_dist = add_features[train_indices]
             X_test_dist = add_features[test_indices]
@@ -343,9 +343,9 @@ def get_linking_AUC():
                 if "*" in features or "3D" in features:
                     X_test = np.concatenate((X_test, X_test_dist), axis=-1)
                     X_train = np.concatenate((X_train, X_train_dist), axis=-1)
-                # else:
-                #     X_test = np.concatenate((X_test, X_test_dist[:, -1:]), axis=-1)
-                #     X_train = np.concatenate((X_train, X_train_dist[:, -1:]), axis=-1)
+                else:
+                    X_test = np.concatenate((X_test, X_test_dist[:, -1:]), axis=-1)
+                    X_train = np.concatenate((X_train, X_train_dist[:, -1:]), axis=-1)
 
             clf = RandomForestClassifier(n_estimators=100) # n_estimators=500, max_depth=10
             print(f"Fitting {X_train.shape}")

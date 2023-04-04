@@ -99,7 +99,7 @@ df.reset_index(inplace=True)
 
 print(df.shape)
 df = df[np.abs(df["mid"] - df["tss"]) > 2000]
-df = df[np.abs(df["mid"] - df["tss"]) < 1000000]
+df = df[np.abs(df["mid"] - df["tss"]) < 500000]
 print(df.shape)
 df = df[["chr", "tss", "mid", 'Significant']]
 df.to_csv("data/enhancers/schraivogel_processed.tsv", index=False, sep="\t")

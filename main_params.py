@@ -2,11 +2,13 @@ import os
 import math
 from pathlib import Path
 import pathlib
+import pandas as pd
 
 
 class MainParams:
     def __init__(self):
-        self.input_size = 1000320
+        self.input_size = 600192
+        self.dim = 256 # 1536
         self.half_size = self.input_size // 2
         self.bin_size = 128
         self.num_all_bins = self.input_size // self.bin_size
@@ -22,7 +24,7 @@ class MainParams:
         self.GLOBAL_BATCH_SIZE = self.NUM_GPU * self.BATCH_SIZE
         self.predict_batch_size = self.GLOBAL_BATCH_SIZE
         self.w_step = 90
-        self.STEPS_PER_EPOCH = 200
+        self.STEPS_PER_EPOCH = 20
         self.num_epochs = 1000
         self.num_features = 4
         self.species = ["hg38", "canFam3", "oviAri4", "rn6", "mm10", "macFas5", "calJac4", "rheMac8"]
@@ -37,7 +39,7 @@ class MainParams:
         self.pickle_folder = folders[5]
         self.tracks_folder = folders[6]
         # self.tracks_folder_sc = folders[7]
-        self.model_name = "chromix_1000320"
+        self.model_name = "chromix_600192"
         self.model_path = self.model_folder + self.model_name
         self.figures_folder = "figures_1"
         Path(self.model_folder).mkdir(parents=True, exist_ok=True)
@@ -45,3 +47,7 @@ class MainParams:
         Path(self.figures_folder + "/" + "tracks").mkdir(parents=True, exist_ok=True)
         Path(self.figures_folder + "/" + "plots").mkdir(parents=True, exist_ok=True)
         Path(self.figures_folder + "/" + "hic").mkdir(parents=True, exist_ok=True)
+        self.loss_weights = {"expression": 5, "epigenome": 1, "conservation": 10, "hic": 100}
+        self.output_heads = {}
+        self.hic_keys = pd.read_csv("data/good_hic.tsv", sep="\t", header=None).iloc[:, 0]
+        self.hic_num = len(self.hic_keys)
