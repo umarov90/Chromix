@@ -35,8 +35,18 @@ def log(t, eps = 1e-20):
 
 # losses and metrics
 
+
 def poisson_loss(pred, target):
     return (pred - target * log(pred)).mean()
+
+
+def nonzero_mse_loss(pred, target):
+    mask = (target != 0).float()
+    diff = pred - target
+    masked_diff = mask * diff
+    mse = torch.sum(masked_diff ** 2) / torch.sum(mask)
+    return mse
+
 
 def pearson_corr_coef(x, y, dim = 1, reduce_dims = (-1,)):
     x_centered = x - x.mean(dim = dim, keepdim = True)
@@ -155,16 +165,29 @@ class Chromix(nn.Module):
 
         # transformer
         # Bidirectional like BERT
-        transformer = Encoder(
-            dim = config.dim,
-            depth = 4,
-            heads = 4,
-            rel_pos_max_distance = config.num_bins,
-            rel_pos_num_buckets = 256,
-            rel_pos_bias = True  # adds relative positional bias to all attention layers, a la T5
-        )
+        transformer = []
+        for i in range(2):
+            transformer.append(nn.Sequential(Encoder(
+                dim = config.dim,
+                depth = 2,
+                heads = 4,
+                rel_pos_max_distance = config.num_bins,
+                rel_pos_num_buckets = 256,
+                rel_pos_bias = True, 
+                use_rmsnorm = True,
+                ff_glu = True,
+                ff_swish = True, # set this to True
+                ff_no_bias = True,  # set this to True
+                attn_talking_heads = True,  # turn on information exchange between attention heads
+                attn_gate_values = True, # gate aggregated values with the input
+                deepnorm = True, # set this to True to use deepnorm post-normalization configuration
+                residual_attn = True,    # add residual attention
+                layer_dropout = 0.1,   # stochastic depth - dropout entire layer
+                attn_dropout = 0.1,    # dropout post-attention
+                ff_dropout = 0.1       # feedforward dropout)
+            )))
 
-        self.transformer = transformer
+        self.transformer = nn.Sequential(*transformer)
 
         # target cropping
 
@@ -181,29 +204,25 @@ class Chromix(nn.Module):
             GELU()
         )
 
-        # create trunk sequential module
-
-        self._trunk = nn.Sequential(
-            Rearrange('b n d -> b d n'),
-            self.stem,
-            self.conv_tower,
-            Rearrange('b d n -> b n d'),
-            self.transformer,
-            self.final_pointwise,
-        )
-
         # create final heads for human and mouse
 
         self.add_heads(**config.output_heads)
 
-        hic_head = nn.Sequential(
+        self.hic_projection = nn.Sequential(
             Rearrange('b n d -> b d n'),
             nn.Linear(config.input_size // config.bin_size, config.hic_size),
-            Rearrange('b d n -> b n d'),
-            nn.Linear(self.dim * 2, config.hic_num),
-            nn.Softplus()
+            Rearrange('b d n -> b n d')
         )
-        self._heads["hg38_hic"] = hic_head
+
+        self._hic_heads = nn.ModuleDict()
+
+        for specie in ["hg38", "mm10"]:
+            hic_head = nn.Sequential(
+                nn.Linear(self.dim * 2, len(config.hic_keys[specie])),
+                nn.Softplus()
+            )
+            self._hic_heads[specie + "_hic"] = hic_head
+
         self.loss_weights = config.loss_weights
 
     def add_heads(self, **kwargs):
@@ -241,7 +260,12 @@ class Chromix(nn.Module):
         if exists(target_length):
             self.set_target_length(target_length)
 
-        x = self._trunk(x)
+        x = rearrange(x, 'b n d -> b d n')
+        x = self.stem(x)
+        x = self.conv_tower(x)
+        x = rearrange(x, 'b d n -> b n d')
+        x = checkpoint_sequential(self.transformer, len(self.transformer), x)
+        x = self.final_pointwise(x)
 
         if no_batch:
             x = rearrange(x, '() ... -> ...')
@@ -250,6 +274,11 @@ class Chromix(nn.Module):
             return x
 
         out = map_values(lambda fn: fn(x), self._heads)
+
+        hx = self.hic_projection(x)
+        out_hic = map_values(lambda fn: fn(hx), self._hic_heads)
+
+        out.update(out_hic)
 
         # if exists(head):
         #     assert head in self._heads, f'head {head} not found'
@@ -357,13 +386,23 @@ def fast_ce(p1, p2):
 
 
 class CustomDataset(Dataset):
-    def __init__(self, inputs, outputs):
-        self.inputs = torch.from_numpy(inputs).float()
-        self.outputs = {key: torch.from_numpy(val).float() for key, val in outputs.items()}
+    def __init__(self, data):
+        self.inputs = []
+        self.outputs = []
+        for i in range(len(data[data.keys()[0]])):
+            inputs_dict = {}
+            outputs_dict = {}
+            for key, val in data.items():  
+                inputs_dict[key] = torch.from_numpy(val[0][i]).float()
+                for key2, val2 in val[1].items():  
+                    outputs_dict[key+"_"+key2] = torch.from_numpy(val2[i]).float()
+            self.inputs.append(inputs_dict)
+            self.outputs.append(outputs_dict)
+
 
     def __getitem__(self, index):
         input_data = self.inputs[index]
-        output_data = {key: output[index] for key, output in self.outputs.items()}
+        output_data = self.outputs[index]
         return input_data, output_data
 
     def __len__(self):

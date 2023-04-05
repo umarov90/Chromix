@@ -100,9 +100,9 @@ def parse_tracks(p, infos):
             tracks_folder = p.tracks_folder + specie + "/"
             skip = []
             parsed_tracks = []
-            if specie == "hg38":
+            if specie in ["hg38", "mm10"]:
                 # Parse encode averaging replicates
-                encode_tracks = pd.read_csv("data/parsed.meta_data.tsv", sep="\t")
+                encode_tracks = pd.read_csv(f"data/{specie}.parsed.meta_data.tsv", sep="\t")
                 ge = encode_tracks.groupby(["Assay", "Experiment_target", "Biosample_type", "Biosample_term_id"])
                 al = ge.agg({'tag': lambda x: list(x)})["tag"].tolist()
                 ps = []
@@ -112,17 +112,17 @@ def parse_tracks(p, infos):
                     for i in range(len(sl)):
                         sl[i] += ".64nt.bed.gz"
                     skip += sl
-                #     proc = mp.Process(target=parse_some_tracks,
-                #                       args=(q, p, sl, ga, p.bin_size, tracks_folder, new_track_name, meta, infos))
-                #     proc.start()
-                #     ps.append(proc)
-                #     if len(ps) >= mp.cpu_count():
-                #         for proc in ps:
-                #             q.get()
-                #         ps = []
-                # if len(ps) > 0:
-                #     for proc in ps: 
-                #         q.get()
+                    proc = mp.Process(target=parse_some_tracks,
+                                      args=(q, p, sl, ga, p.bin_size, tracks_folder, new_track_name, meta, infos))
+                    proc.start()
+                    ps.append(proc)
+                    if len(ps) >= mp.cpu_count():
+                        for proc in ps:
+                            q.get()
+                        ps = []
+                if len(ps) > 0:
+                    for proc in ps: 
+                        q.get()
 
             # Read all other tracks averaging based on track name
             track_names = []
@@ -461,7 +461,7 @@ def load_hic_data(mp_q, hic_tracks, picked_regions, t, p, half):
 
     for hic in hic_tracks:
         if hic.endswith("mcool"):
-            c = cooler.Cooler(p.hic_folder + hic + "::resolutions/5000")
+            c = cooler.Cooler(p.hic_folder + hic + "::resolutions/2000")
         else:
             c = cooler.Cooler(p.hic_folder + hic)
         for i, info in enumerate(picked_regions):
@@ -512,7 +512,7 @@ def par_load_hic_data_one(hic_tracks, p, picked_regions):
 
 
 def load_hic_data_one(mp_q, hic_tracks, picked_regions, t, p):
-    hic_bin_size = 5000
+    hic_bin_size = 2000
     hic_data = []
     for i in range(len(picked_regions)):
         hic_data.append([])

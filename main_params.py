@@ -12,9 +12,9 @@ class MainParams:
         self.half_size = self.input_size // 2
         self.bin_size = 128
         self.num_all_bins = self.input_size // self.bin_size
-        self.hic_bin_size = 5000
+        self.hic_bin_size = 2000
         self.hic_size = 4851
-        self.num_hic_bins = 100
+        self.num_hic_bins = 200
         self.half_size_hic = (self.num_hic_bins // 2) * self.hic_bin_size
         self.num_bins = 1563
         self.half_num_regions = self.num_bins // 2
@@ -24,7 +24,7 @@ class MainParams:
         self.GLOBAL_BATCH_SIZE = self.NUM_GPU * self.BATCH_SIZE
         self.predict_batch_size = self.GLOBAL_BATCH_SIZE
         self.w_step = 90
-        self.STEPS_PER_EPOCH = 20
+        self.STEPS_PER_EPOCH = 60
         self.num_epochs = 1000
         self.num_features = 4
         self.species = ["hg38", "canFam3", "oviAri4", "rn6", "mm10", "macFas5", "calJac4", "rheMac8"]
@@ -49,5 +49,6 @@ class MainParams:
         Path(self.figures_folder + "/" + "hic").mkdir(parents=True, exist_ok=True)
         self.loss_weights = {"expression": 5, "epigenome": 1, "conservation": 10, "hic": 100}
         self.output_heads = {}
-        self.hic_keys = pd.read_csv("data/good_hic.tsv", sep="\t", header=None).iloc[:, 0]
-        self.hic_num = len(self.hic_keys)
+        self.hic_keys = {}
+        for specie in ["hg38", "mm10"]:
+            self.hic_keys[specie] = pd.read_csv(f"data/{specie}_hic.tsv", sep="\t", header=None).iloc[:, 0]

@@ -25,88 +25,83 @@ matplotlib.use("agg")
 
 
 def get_train_data(q, head_id):
-    training_regions = joblib.load(f"{p.pickle_folder}{p.species[head_id]}_regions.gz")
-    one_hot = joblib.load(f"{p.pickle_folder}{p.species[head_id]}_one_hot.gz")
-    # training regions are shuffled each iteration
-    if head_id == 0:
-        shuffled_regions_info = training_regions + train_info
-        shuffled_regions_info = random.sample(shuffled_regions_info, len(shuffled_regions_info))
-    else:
+    train_data = {}
+    for specie in ["hg38", "mm10", p.species[head_id]]:
+        training_regions = joblib.load(f"{p.pickle_folder}{specie}_regions.gz")
+        one_hot = joblib.load(f"{p.pickle_folder}{specie}_one_hot.gz")
+        # training regions are shuffled each iteration
         shuffled_regions_info = random.sample(training_regions, len(training_regions))
-    input_sequences = []
-    output_scores_info = []
-    picked_regions = []
-    for i, info in enumerate(shuffled_regions_info):
-        if len(input_sequences) >= p.GLOBAL_BATCH_SIZE * p.STEPS_PER_EPOCH:
-            break
-        # Don't use chrY, chrM etc
-        if info[0] not in one_hot.keys():
-            continue
-        shift_bins = random.randint(-1 * (p.num_bins // 2), (p.num_bins // 2))
-        pos_hic = info[1] + shift_bins * p.bin_size
-        pos_hic = pos_hic - (pos_hic % p.hic_bin_size)
-        start = pos_hic - (pos_hic % p.bin_size) - p.half_size
-        extra = start + p.input_size - len(one_hot[info[0]])
-        if start < 0 or extra > 0:
-            continue
-        ns = one_hot[info[0]][start:start + p.input_size]
-        # less than 70% Ns
-        if np.sum(ns[:, :-1]) < 0.7 * p.input_size:
-            continue
-        if head_id == 0:
-            if np.any(ns[:, -1]):
-                # Exclude region was encountered! Skipping
+        input_sequences = []
+        output_scores_info = []
+        picked_regions = []
+        for i, info in enumerate(shuffled_regions_info):
+            if len(input_sequences) >= p.GLOBAL_BATCH_SIZE * p.STEPS_PER_EPOCH / 3:
+                break
+            # Don't use chrY, chrM etc
+            if info[0] not in one_hot.keys():
                 continue
+            shift_bins = random.randint(-1 * (p.num_bins // 2), (p.num_bins // 2))
+            pos_hic = info[1] + shift_bins * p.bin_size
+            pos_hic = pos_hic - (pos_hic % p.hic_bin_size)
+            start = pos_hic - (pos_hic % p.bin_size) - p.half_size
+            extra = start + p.input_size - len(one_hot[info[0]])
+            if start < 0 or extra > 0:
+                continue
+            ns = one_hot[info[0]][start:start + p.input_size]
+            # less than 70% Ns
+            if np.sum(ns[:, :-1]) < 0.7 * p.input_size:
+                continue
+            if specie == "hg38":
+                if np.any(ns[:, -1]):
+                    # Exclude region was encountered! Skipping
+                    continue
+            else:
+                if np.any(one_hot[info[0]][max(0, start - 131000):max(start + p.input_size + 131000, len(one_hot[info[0]])),
+                          -1]):
+                    # Exclude region was encountered! Skipping
+                    continue
+            dry_run_regions.append(f"{info[0]}\t{start}\t{start + p.input_size}\ttrain")
+            picked_regions.append([info[0], pos_hic])
+            start_bin = (start + p.half_size) // p.bin_size - p.half_num_regions
+            input_sequences.append(ns)
+            output_scores_info.append([info[0], start_bin, start_bin + p.num_bins])
+
+        print(datetime.now().strftime('[%H:%M:%S] ') + "Loading parsed tracks")
+        # half of sequences will be reverse-complemented
+        half = len(input_sequences) // 2
+        input_sequences = np.asarray(input_sequences, dtype=bool)
+        # reverse-complement
+        with mp.Pool(8) as pool:
+            rc_arr = pool.map(change_seq, input_sequences[:half])
+        input_sequences[:half] = rc_arr
+        # Cut off the test TSS layer
+        input_sequences = input_sequences[:, :, :-1]
+        print(input_sequences.shape)
+
+        if specie in ["hg38", "mm10"]:
+            if specie == "hg38":
+                output_conservation = parser.par_load_data(output_scores_info, heads[specie]["conservation"], p)
+            output_expression = parser.par_load_data(output_scores_info, heads[specie]["expression"], p)
+            output_epigenome = parser.par_load_data(output_scores_info, heads[specie]["epigenome"], p)
+            # loading corresponding 2D data
+            output_hic = parser.par_load_hic_data(p.hic_keys[specie], p, picked_regions, half)
         else:
-            if np.any(one_hot[info[0]][max(0, start - 131000):max(start + p.input_size + 131000, len(one_hot[info[0]])),
-                      -1]):
-                # Exclude region was encountered! Skipping
-                continue
-        dry_run_regions.append(f"{info[0]}\t{start}\t{start + p.input_size}\ttrain")
-        picked_regions.append([info[0], pos_hic])
-        start_bin = (start + p.half_size) // p.bin_size - p.half_num_regions
-        input_sequences.append(ns)
-        output_scores_info.append([info[0], start_bin, start_bin + p.num_bins])
+            output_expression = parser.par_load_data(output_scores_info, heads[specie], p)
+        # for reverse-complement sequences, the 1D output is flipped
+        for i in range(half):
+            output_expression[i] = np.flip(output_expression[i], axis=1)
+            if specie in ["hg38", "mm10"]:
+                output_epigenome[i] = np.flip(output_epigenome[i], axis=1)
+            if specie == "hg38":
+                output_conservation[i] = np.flip(output_conservation[i], axis=1)
 
-    print(datetime.now().strftime('[%H:%M:%S] ') + "Loading parsed tracks")
-    # half of sequences will be reverse-complemented
-    half = len(input_sequences) // 2
-    input_sequences = np.asarray(input_sequences, dtype=bool)
-    # reverse-complement
-    with mp.Pool(8) as pool:
-        rc_arr = pool.map(change_seq, input_sequences[:half])
-    input_sequences[:half] = rc_arr
-    # Cut off the test TSS layer
-    input_sequences = input_sequences[:, :, :-1]
-    print(input_sequences.shape)
-
-    if head_id == 0:
-        output_conservation = parser.par_load_data(output_scores_info, heads[p.species[head_id]]["conservation"], p)
-        output_expression = parser.par_load_data(output_scores_info, heads[p.species[head_id]]["expression"], p)
-        output_epigenome = parser.par_load_data(output_scores_info, heads[p.species[head_id]]["epigenome"], p)
-        # loading corresponding 2D data
-        output_hic = parser.par_load_hic_data(p.hic_keys, p, picked_regions, half)
-    else:
-        output_expression = parser.par_load_data(output_scores_info, heads[p.species[head_id]], p)
-    print_memory()
-    # for reverse-complement sequences, the 1D output is flipped
-    for i in range(half):
-        output_expression[i] = np.flip(output_expression[i], axis=1)
+        all_outputs = {"expression": output_expression}
         if p.species[head_id] == "hg38":
-            output_epigenome[i] = np.flip(output_epigenome[i], axis=1)
-            output_conservation[i] = np.flip(output_conservation[i], axis=1)
-
-    all_outputs = {"expression": output_expression}
-    if p.species[head_id] == "hg38":
-        all_outputs["epigenome"] = output_epigenome
-        all_outputs["conservation"] = output_conservation
-        if p.hic_num > 0:
+            all_outputs["epigenome"] = output_epigenome
+            all_outputs["conservation"] = output_conservation
             all_outputs["hic"] = output_hic
-    print_memory()
-    if head_name == "hg38":
-        q.put((input_sequences, all_outputs))
-    else:
-        q.put((input_sequences, all_outputs["expression"]))
+        train_data[specie] = (input_sequences, all_outputs)
+    q.put(train_data)
 
 
 def make_model(p):
@@ -227,20 +222,19 @@ if __name__ == '__main__':
         heads = {}
         for specie in p.species:
             shuffled_tracks = random.sample(track_names_col[specie], len(track_names_col[specie]))
-            if specie == "hg38":
-                sc_head = [x for x in shuffled_tracks if x.startswith(("scAtlas", "scATAC"))]
+            if specie in ["hg38", "mm10"]:
                 shuffled_tracks = [x for x in shuffled_tracks if not x.startswith(("scAtlas", "scATAC", "scEnd5"))]
-                # joblib.dump(sc_head, f"{p.pickle_folder}sc_head.gz", compress="lz4")
                 meta = pd.read_csv("data/ML_all_track.metadata.2022053017.tsv", sep="\t")
                 new_head = {"expression": [x for x in shuffled_tracks if
                                            meta.loc[meta['file_name'] == x].iloc[0]["technology"].startswith(
                                                ("CAGE", "NETCAGE"))],
                             "epigenome": [x for x in shuffled_tracks if
                                           meta.loc[meta['file_name'] == x].iloc[0]["technology"].startswith(
-                                              ("DNase", "ATAC", "Histone_ChIP", "TF_ChIP"))],
-                            "conservation": [x for x in shuffled_tracks if
-                                             meta.loc[meta['file_name'] == x].iloc[0]["value"].startswith(
-                                                 "conservation")]}
+                                              ("DNase", "ATAC", "Histone_ChIP", "TF_ChIP"))]
+                            }
+                if specie == "hg38":
+                    new_head["conservation"] =  [x for x in shuffled_tracks if
+                                             meta.loc[meta['file_name'] == x].iloc[0]["value"].startswith("conservation")]
             else:
                 new_head = shuffled_tracks
             heads[specie] = new_head
@@ -280,9 +274,9 @@ if __name__ == '__main__':
 
             saved_train_data = mp_q.get(timeout=1000)
 
-            train_data = mo.CustomDataset(saved_train_data[0], saved_train_data[1])
+            train_data = mo.CustomDataset(saved_train_data)
             train_dataloader = DataLoader(train_data, batch_size=p.GLOBAL_BATCH_SIZE)
-
+            print_memory()
             make_data_proc = mp.Process(target=get_train_data, args=(mp_q, head_id,))
             make_data_proc.start()
             train(train_dataloader, p.species[head_id])
