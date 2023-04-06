@@ -27,6 +27,8 @@ def change_expression():
 
 # change_encode()
 # change_expression()
-df = pd.read_csv("/home/user/Desktop/ML_all_track.metadata.2022053017.tsv")
+
+df = pd.read_csv("/home/user/Desktop/all_track.metadata.tsv", sep="\t")
+df['file_name'] = df['genome'] + '.' + df['file_name']
 df = df.drop_duplicates()
-df.to_csv("/home/user/Desktop/ML_all_track.metadata.2022053017.tsv2", index=False)
+df.to_csv("/home/user/Desktop/12all_track.metadata.tsv", index=False, sep="\t")

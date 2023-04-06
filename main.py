@@ -19,14 +19,15 @@ from main_params import MainParams
 import model as mo
 import torch
 from torch.utils.data import DataLoader
-from torch import autocast, nn
+from torch import autocast, nn, optim
 from torch.cuda.amp import GradScaler
+from torch.optim.lr_scheduler import LambdaLR
 matplotlib.use("agg")
 
 
-def get_train_data(q, head_id):
+def get_train_data(q):
     train_data = {}
-    for specie in ["hg38", "mm10", p.species[head_id]]:
+    for specie in ["hg38", "mm10"]:
         training_regions = joblib.load(f"{p.pickle_folder}{specie}_regions.gz")
         one_hot = joblib.load(f"{p.pickle_folder}{specie}_one_hot.gz")
         # training regions are shuffled each iteration
@@ -35,7 +36,7 @@ def get_train_data(q, head_id):
         output_scores_info = []
         picked_regions = []
         for i, info in enumerate(shuffled_regions_info):
-            if len(input_sequences) >= p.GLOBAL_BATCH_SIZE * p.STEPS_PER_EPOCH / 3:
+            if len(input_sequences) >= p.GLOBAL_BATCH_SIZE * p.STEPS_PER_EPOCH:
                 break
             # Don't use chrY, chrM etc
             if info[0] not in one_hot.keys():
@@ -78,28 +79,22 @@ def get_train_data(q, head_id):
         input_sequences = input_sequences[:, :, :-1]
         print(input_sequences.shape)
 
-        if specie in ["hg38", "mm10"]:
-            if specie == "hg38":
-                output_conservation = parser.par_load_data(output_scores_info, heads[specie]["conservation"], p)
-            output_expression = parser.par_load_data(output_scores_info, heads[specie]["expression"], p)
-            output_epigenome = parser.par_load_data(output_scores_info, heads[specie]["epigenome"], p)
-            # loading corresponding 2D data
-            output_hic = parser.par_load_hic_data(p.hic_keys[specie], p, picked_regions, half)
-        else:
-            output_expression = parser.par_load_data(output_scores_info, heads[specie], p)
+        if specie == "hg38":
+            output_conservation = parser.par_load_data(output_scores_info, heads[specie]["conservation"], p)
+        output_expression = parser.par_load_data(output_scores_info, heads[specie]["expression"], p)
+        output_epigenome = parser.par_load_data(output_scores_info, heads[specie]["epigenome"], p)
+        # loading corresponding 2D data
+        output_hic = parser.par_load_hic_data(p.hic_keys[specie], p, picked_regions, half)
         # for reverse-complement sequences, the 1D output is flipped
         for i in range(half):
             output_expression[i] = np.flip(output_expression[i], axis=1)
-            if specie in ["hg38", "mm10"]:
-                output_epigenome[i] = np.flip(output_epigenome[i], axis=1)
+            output_epigenome[i] = np.flip(output_epigenome[i], axis=1)
             if specie == "hg38":
                 output_conservation[i] = np.flip(output_conservation[i], axis=1)
 
-        all_outputs = {"expression": output_expression}
-        if p.species[head_id] == "hg38":
-            all_outputs["epigenome"] = output_epigenome
+        all_outputs = {"expression": output_expression, "epigenome": output_epigenome, "hic": output_hic}
+        if specie == "hg38":
             all_outputs["conservation"] = output_conservation
-            all_outputs["hic"] = output_hic
         train_data[specie] = (input_sequences, all_outputs)
     q.put(train_data)
 
@@ -109,43 +104,38 @@ def make_model(p):
     print(model)
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
     model = nn.DataParallel(model)
-    return model, optimizer
+    lr_lambda = lambda epoch: epoch / 1000 if epoch < 1000 else 1
+    scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
+    return model, optimizer, scheduler
 
 
-def train(dataloader, head_name):
+def train(dataloader):
     # torch.cuda.mem_get_info(device=None)
     size = len(dataloader.dataset)
     model.train()
     for batch, (X, y) in enumerate(dataloader):
+        scheduler.step()
         optimizer.zero_grad()
         X = X.to(device)
         yd = {}
         for key in y.keys():
             yd[key] = y[key].to(device)
 
+        losses = []
         with autocast(device_type='cuda', dtype=torch.float16):
-            # Compute prediction error
-            loss_hm = model(X, target=yd, head="human")
-            # loss_ms = model(X, target=y, head="mouse")
-            total_loss = loss_hm.mean()
-            # total_loss = loss_hm + loss_ms
+            for specie in ["hg38", "mm10"]:
+                ydd = {k: v for k, v in yd.items() if k.startswith(specie)}
+                loss = model(X[specie], target=ydd, head=specie)
+                losses.append(loss.mean())
+        total_loss = sum(losses)
         scaler.scale(total_loss).backward()
-        # Unscales the gradients of optimizer's assigned params in-place
         scaler.unscale_(optimizer)
-
-        # Since the gradients of optimizer's assigned params are unscaled, clips as usual:
         torch.nn.utils.clip_grad_norm_(model.parameters(), 0.2)
-
-        # optimizer's gradients are already unscaled, so scaler.step does not unscale them,
-        # although it still skips optimizer.step() if the gradients contain infs or NaNs.
         scaler.step(optimizer)
-
-        # Updates the scale for next iteration.
         scaler.update()
-
         if batch % 2 == 0:
             loss, current = total_loss.item(), (batch + 1) * len(X)
-            print(f"loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
+            print(f"loss: {loss:>7f}  [{current:>5d}/{size:>5d}], learning rate={optimizer.state_dict()['param_groups'][0]['lr']:.4f}")
 
 
 def check_perf():
@@ -214,8 +204,9 @@ if __name__ == '__main__':
     if Path(f"{p.pickle_folder}track_names_col.gz").is_file():
         track_names_col = joblib.load(f"{p.pickle_folder}track_names_col.gz")
     else:
-        track_names_col = parser.parse_tracks(p, train_info + valid_info + test_info)
+        track_names_col = parser.parse_tracks(p)
 
+    meta = pd.read_csv("data/all_track.metadata.tsv", sep="\t")
     if Path(f"{p.pickle_folder}heads.gz").is_file():
         heads = joblib.load(f"{p.pickle_folder}heads.gz")
     else:
@@ -224,7 +215,8 @@ if __name__ == '__main__':
             shuffled_tracks = random.sample(track_names_col[specie], len(track_names_col[specie]))
             if specie in ["hg38", "mm10"]:
                 shuffled_tracks = [x for x in shuffled_tracks if not x.startswith(("scAtlas", "scATAC", "scEnd5"))]
-                meta = pd.read_csv("data/ML_all_track.metadata.2022053017.tsv", sep="\t")
+                meta_filenames = set(meta['file_name'])
+                shuffled_tracks = [track for track in shuffled_tracks if track in meta_filenames]                
                 new_head = {"expression": [x for x in shuffled_tracks if
                                            meta.loc[meta['file_name'] == x].iloc[0]["technology"].startswith(
                                                ("CAGE", "NETCAGE"))],
@@ -238,7 +230,7 @@ if __name__ == '__main__':
             else:
                 new_head = shuffled_tracks
             heads[specie] = new_head
-        joblib.dump(heads, f"{p.pickle_folder}heads.gz", compress="lz4")
+        joblib.dump(heads, f"{p.pickle_folder}heads.gz", compress=3)
     for head_key in heads.keys():
         if isinstance(heads[head_key], dict):
             for key2 in heads[head_key].keys():
@@ -248,28 +240,23 @@ if __name__ == '__main__':
             print(f"Number of tracks in head {head_key}: {len(heads[head_key])}")
             p.output_heads[head_key + "_expression"] = len(heads[head_key])
 
-    
     print("Training starting")
-    model, optimizer = make_model(p)
+    model, optimizer, scheduler = make_model(p)
     scaler = GradScaler()
     start_epoch = load_weights()
     fit_epochs = 1
+    aux_species = p.species[2:]
     mp_q = mp.Queue()
     for current_epoch in range(start_epoch, p.num_epochs, 1):
         print(datetime.now().strftime('[%H:%M:%S] ') + "Epoch " + str(current_epoch))
         try:
-            if current_epoch % 2 == 0:
-                head_id = 0
-            else:
-                head_id = 1 + (current_epoch - math.ceil(current_epoch / 2)) % (len(heads) - 1)
-            head_id = 0
-            head_name = p.species[0]
+            head_name = aux_species[0] # current_epoch % len(aux_species)
             # check_perf()
             # exit()
             # load_old_weights()
             # exit()
             if make_data_proc is None:
-                make_data_proc = mp.Process(target=get_train_data, args=(mp_q, head_id,))
+                make_data_proc = mp.Process(target=get_train_data, args=(mp_q, head_name,))
                 make_data_proc.start()
 
             saved_train_data = mp_q.get(timeout=1000)
@@ -277,9 +264,9 @@ if __name__ == '__main__':
             train_data = mo.CustomDataset(saved_train_data)
             train_dataloader = DataLoader(train_data, batch_size=p.GLOBAL_BATCH_SIZE)
             print_memory()
-            make_data_proc = mp.Process(target=get_train_data, args=(mp_q, head_id,))
+            make_data_proc = mp.Process(target=get_train_data, args=(mp_q, head_name,))
             make_data_proc.start()
-            train(train_dataloader, p.species[head_id])
+            train(train_dataloader, head_name)
             if current_epoch % 5 == 0 and current_epoch != 0:
                 torch.save({
                     'epoch': current_epoch,

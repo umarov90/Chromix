@@ -16,7 +16,6 @@ import traceback
 from multiprocessing import Pool, Manager
 import multiprocessing as mp
 from scipy.ndimage import gaussian_filter
-from sklearn.cluster import KMeans
 import cooler
 import math
 from numba import jit
@@ -44,7 +43,7 @@ def parse_tracks_sc(p, infos):
         track_names_final = joblib.load(f"{p.pickle_folder}track_names_sc.gz")
     else:
         ga = joblib.load(f"{p.pickle_folder}hg38_ga.gz")
-        meta = pd.read_csv("data/ML_all_track.metadata.2022053017.tsv", sep="\t")
+        meta = pd.read_csv("data/all_track.metadata.tsv", sep="\t")
         track_names = []
         for filename in os.listdir(p.tracks_folder_sc):
             track_names.append(filename)
@@ -84,13 +83,13 @@ def parse_tracks_sc(p, infos):
             else:
                 print(track)
         print(f"Final tracks {len(track_names_final)}")
-        joblib.dump(track_names_final, f"{p.pickle_folder}track_names_sc.gz", compress="lz4")
+        joblib.dump(track_names_final, f"{p.pickle_folder}track_names_sc.gz", compress=3)
     return track_names_final
 
 
-def parse_tracks(p, infos):
+def parse_tracks(p):
     track_names_col = {}
-    meta = pd.read_csv("data/ML_all_track.metadata.2022053017.tsv", sep="\t")
+    meta = pd.read_csv("data/all_track.metadata.tsv", sep="\t")
     q = mp.Queue()
     for specie in p.species:
         if Path(f"{p.pickle_folder}track_names_{specie}.gz").is_file():
@@ -107,13 +106,13 @@ def parse_tracks(p, infos):
                 al = ge.agg({'tag': lambda x: list(x)})["tag"].tolist()
                 ps = []
                 for sl in al:
-                    new_track_name = ".".join(sl[0].split(".")[:-2]) + ".parsed"
+                    new_track_name = specie + "." + ".".join(sl[0].split(".")[:-2]) + ".parsed"
                     parsed_tracks.append(new_track_name)
                     for i in range(len(sl)):
                         sl[i] += ".64nt.bed.gz"
                     skip += sl
                     proc = mp.Process(target=parse_some_tracks,
-                                      args=(q, p, sl, ga, p.bin_size, tracks_folder, new_track_name, meta, infos))
+                                      args=(q, p, sl, ga, p.bin_size, tracks_folder, new_track_name, meta))
                     proc.start()
                     ps.append(proc)
                     if len(ps) >= mp.cpu_count():
@@ -121,7 +120,7 @@ def parse_tracks(p, infos):
                             q.get()
                         ps = []
                 if len(ps) > 0:
-                    for proc in ps: 
+                    for proc in ps:
                         q.get()
 
             # Read all other tracks averaging based on track name
@@ -139,10 +138,10 @@ def parse_tracks(p, infos):
                 sl = al[i]
                 if kl[i].endswith(".64nt.bed.gz"):
                     kl[i] = kl[i][:-len(".64nt.bed.gz")]
-                new_track_name = kl[i] + ".parsed"
+                new_track_name = specie + "." + kl[i] + ".parsed"
                 parsed_tracks.append(new_track_name)
                 proc = mp.Process(target=parse_some_tracks,
-                                  args=(q, p, sl, ga, p.bin_size, tracks_folder, new_track_name, meta, infos))
+                                  args=(q, p, sl, ga, p.bin_size, tracks_folder, new_track_name, meta))
                 proc.start()
                 ps.append(proc)
                 if len(ps) >= 4 * mp.cpu_count():
@@ -163,10 +162,10 @@ def parse_tracks(p, infos):
                 if Path(new_path).exists():
                     track_names_final.append(track)
             print(f"{specie} final tracks {len(track_names_final)}")
-            joblib.dump(track_names_final, f"{p.pickle_folder}track_names_{specie}.gz", compress="lz4")
+            joblib.dump(track_names_final, f"{p.pickle_folder}track_names_{specie}.gz", compress=3)
         track_names_col[specie] = track_names_final
 
-    joblib.dump(track_names_col, f"{p.pickle_folder}track_names_col.gz", compress="lz4")
+    joblib.dump(track_names_col, f"{p.pickle_folder}track_names_col.gz", compress=3)
     return track_names_col
 
 
@@ -181,7 +180,7 @@ def group_names_with_rep(names):
     return list(result.keys()), list(result.values())
 
 
-def parse_some_tracks(q, p, some_tracks, ga, bin_size, tracks_folder, new_track_name, meta, infos):
+def parse_some_tracks(q, p, some_tracks, ga, bin_size, tracks_folder, new_track_name, meta):
     gast = copy.deepcopy(ga)
     new_path = p.parsed_tracks_folder + new_track_name
     count = 0
@@ -189,9 +188,7 @@ def parse_some_tracks(q, p, some_tracks, ga, bin_size, tracks_folder, new_track_
     if len(meta_row) > 0:
         meta_row = meta_row.iloc[0]
     else:
-        print("no meta " + new_track_name)
-        q.put(0)
-        return None
+        meta_row = None
     for track in some_tracks:
         try:
             fn = tracks_folder + track
@@ -206,9 +203,6 @@ def parse_some_tracks(q, p, some_tracks, ga, bin_size, tracks_folder, new_track_
                 df = df.rename(columns={0: "chr", 1: "start", 2: "end", 3: "id", 4: "score", 5: "strand", 6: "tss"})
                 df["mid"] = df["tss"] // bin_size
             total_reads = df['score'].sum()
-            # if meta_row["value"] == "RNA" and total_reads < 100000:
-            #     print(f"Skipping: {track} {total_reads}")
-            #     continue
             df["mid"] = df["mid"].astype(int)
             df["score"] = df["score"].astype(np.float32)
             df = df[["chr", "start", "end", "score", "mid"]]
@@ -227,42 +221,29 @@ def parse_some_tracks(q, p, some_tracks, ga, bin_size, tracks_folder, new_track_
             print("\n\n\nCould not parse! " + track)
     count_non_zero = 0
     if count > 0:
-        non_zero_all = []
+        # non_zero_all = []
         for key in gast.keys():
             gast[key] = gast[key] / count
-            non_zero = gast[key][np.where(gast[key] != 0)]
-            non_zero_all.append(non_zero)
-        non_zero_all = np.concatenate(non_zero_all, axis=0, dtype=np.float32)
-        if meta_row["value"] == "RNA":
-            tss_vals = []
-            for info in infos:
-                binx = info[1] // p.bin_size
-                tss_vals.append(max(gast[info[0]][binx - 1], gast[info[0]][binx], gast[info[0]][binx + 1]))
-            qnts = np.quantile(tss_vals, [0.90, 0.98])
-            count_non_zero = len([element for element in tss_vals if element != 0])
-        else:
-            qnts = np.quantile(non_zero_all, [0.99, 0.99])
+        #     non_zero = gast[key][np.where(gast[key] != 0)]
+        #     non_zero_all.append(non_zero)
+        # non_zero_all = np.concatenate(non_zero_all, axis=0, dtype=np.float32)
+        # if meta_row is not None and meta_row["value"] == "RNA":
+        #     tss_vals = []
+        #     for info in infos:
+        #         binx = info[1] // p.bin_size
+        #         tss_vals.append(max(gast[info[0]][binx - 1], gast[info[0]][binx], gast[info[0]][binx + 1]))
+        #     qnts = np.quantile(tss_vals, [0.90, 0.98])
+        #     count_non_zero = len([element for element in tss_vals if element != 0])
+        # else:
+        #     qnts = np.quantile(non_zero_all, [0.99, 0.99])
         for key in gast.keys():
-            if meta_row["value"] == "conservation" or meta_row["unit"] == "logcpm":
+            if meta_row is not None and (meta_row["value"] == "conservation" or meta_row["unit"] == "logcpm"):
                 pass
-            elif meta_row["value"] == "RNA":
-                if meta_row["technology"] == "scAtlas":
-                    # gast[key] = np.minimum(gast[key], qnts[1] + np.sqrt(np.maximum(0, gast[key] - qnts[1])))
-                    gast[key] = np.log10(gast[key] + 1)
-                    # gast[key] = gast[key] / np.log(qnts[1] + 1)
-                else:
-                    # gast[key] = np.minimum(gast[key], qnts[0] + np.sqrt(np.maximum(0, gast[key] - qnts[0])))
-                    gast[key] = np.log10(gast[key] + 1)
-                    # gast[key] = gast[key] / np.log(qnts[0] + 1)
             else:
-                # gast[key] = np.minimum(gast[key], qnts[0] + np.sqrt(np.maximum(0, gast[key] - qnts[0])))
-                # if meta_row["unit"] == "read_depth"
                 gast[key] = np.log10(gast[key] + 1)
-                # gast[key] = gast[key] / np.log(qnts[0] + 1)
             gast[key][~np.isfinite(gast[key])] = 0
             gast[key] = np.round(gast[key], 3)
             gast[key] = gast[key].astype(np.float16)
-
         joblib.dump(gast, new_path, compress=3)
     q.put(count_non_zero)
 
@@ -322,58 +303,58 @@ def parse_sequences(p):
 
         print(f"Training set complete {len(train_info)}")
 
-        joblib.dump(test_info, f"{p.pickle_folder}test_info.gz", compress="lz4")
-        joblib.dump(train_info, f"{p.pickle_folder}train_info.gz", compress="lz4")
-        joblib.dump(valid_info, f"{p.pickle_folder}valid_info.gz", compress="lz4")
-        joblib.dump(protein_coding, f"{p.pickle_folder}protein_coding.gz", compress="lz4")
+        joblib.dump(test_info, f"{p.pickle_folder}test_info.gz", compress=3)
+        joblib.dump(train_info, f"{p.pickle_folder}train_info.gz", compress=3)
+        joblib.dump(valid_info, f"{p.pickle_folder}valid_info.gz", compress=3)
+        joblib.dump(protein_coding, f"{p.pickle_folder}protein_coding.gz", compress=3)
 
-        for sp in p.species:
-            if Path(f"{p.pickle_folder}{sp}_regions.gz").is_file():
-                continue
-            print(sp)
-            genome, ga = cm.parse_genome(f"data/species/{sp}/genome.fa", p.bin_size)
-            chromosomes = [chrom for chrom in genome.keys() if re.match("chr([0-9]*|X)$", chrom)]
-            regions = []
-            for chrom in chromosomes:
-                for i in range(0, len(genome[chrom]), 50000):
-                    regions.append([chrom, i])
+    for sp in p.species:
+        if Path(f"{p.pickle_folder}{sp}_regions.gz").is_file():
+            continue
+        print(sp)
+        genome, ga = cm.parse_genome(f"{p.species_folder}{sp}/genome.fa", p.bin_size)
+        chromosomes = [chrom for chrom in genome.keys() if re.match("chr([0-9]*|X)$", chrom)]
+        regions = []
+        for chrom in chromosomes:
+            for i in range(0, len(genome[chrom]), 50000):
+                regions.append([chrom, i])
 
-            exclude = pd.read_csv(f"data/species/{sp}/exclude.bed", sep="\t", index_col=False,
-                                  names=["chrom", "start", "end", "geneID", "score", "strand"])
-            blacklist_dict = {}
-            if sp == "hg38":
-                print("Excluding enformer test and valid set and encode blacklist")
-                encode_blacklist = pd.read_csv(f"data/hg38-blacklist.v2.bed", sep="\t", index_col=False,
-                                               names=["chrom", "start", "end", "reason"])
-                # for index, row in encode_blacklist.iterrows():
-                #     blacklist_dict.setdefault(row["chrom"], []).append([int(row["start"]), int(row["end"])])
-                enformer_valid = pd.read_csv(f"data/human_valid.bed", sep="\t", index_col=False,
-                                             names=["chrom", "start", "end", "type"])
-                enformer_test = pd.read_csv(f"data/human_test.bed", sep="\t", index_col=False,
-                                            names=["chrom", "start", "end", "type"])
-                for index, row in enformer_valid.iterrows():
-                    blacklist_dict.setdefault(row["chrom"], []).append([int(row["start"]), int(row["end"])])
-                for index, row in enformer_test.iterrows():
-                    blacklist_dict.setdefault(row["chrom"], []).append([int(row["start"]), int(row["end"])])
-            else:
-                for index, row in exclude.iterrows():
-                    blacklist_dict.setdefault(row["chrom"], []).append([int(row["start"]), int(row["end"])])
+        exclude = pd.read_csv(f"{p.species_folder}{sp}/exclude.bed", sep="\t", index_col=False,
+                              names=["chrom", "start", "end", "geneID", "score", "strand"])
+        blacklist_dict = {}
+        if sp == "hg38":
+            print("Excluding enformer test and valid set and encode blacklist")
+            encode_blacklist = pd.read_csv(f"data/hg38-blacklist.v2.bed", sep="\t", index_col=False,
+                                           names=["chrom", "start", "end", "reason"])
+            # for index, row in encode_blacklist.iterrows():
+            #     blacklist_dict.setdefault(row["chrom"], []).append([int(row["start"]), int(row["end"])])
+            enformer_valid = pd.read_csv(f"data/human_valid.bed", sep="\t", index_col=False,
+                                         names=["chrom", "start", "end", "type"])
+            enformer_test = pd.read_csv(f"data/human_test.bed", sep="\t", index_col=False,
+                                        names=["chrom", "start", "end", "type"])
+            for index, row in enformer_valid.iterrows():
+                blacklist_dict.setdefault(row["chrom"], []).append([int(row["start"]), int(row["end"])])
+            for index, row in enformer_test.iterrows():
+                blacklist_dict.setdefault(row["chrom"], []).append([int(row["start"]), int(row["end"])])
+        else:
+            for index, row in exclude.iterrows():
+                blacklist_dict.setdefault(row["chrom"], []).append([int(row["start"]), int(row["end"])])
 
-            one_hot = {}
-            for chromosome in chromosomes:
-                print(chromosome)
-                one_hot[chromosome] = cm.encode_seq(genome[chromosome])
-                exclude_layer = np.zeros((len(one_hot[chromosome]), 1)).astype(bool)
-                print(len(one_hot[chromosome]))
-                if chromosome in blacklist_dict.keys():
-                    for region in blacklist_dict[chromosome]:
-                        exclude_layer[region[0]:region[1], 0] = True
-                print(f"{chromosome}: {np.sum(exclude_layer)}")
-                one_hot[chromosome] = np.hstack([one_hot[chromosome], exclude_layer])
+        one_hot = {}
+        for chromosome in chromosomes:
+            print(chromosome)
+            one_hot[chromosome] = cm.encode_seq(genome[chromosome])
+            exclude_layer = np.zeros((len(one_hot[chromosome]), 1)).astype(bool)
+            print(len(one_hot[chromosome]))
+            if chromosome in blacklist_dict.keys():
+                for region in blacklist_dict[chromosome]:
+                    exclude_layer[region[0]:region[1], 0] = True
+            print(f"{chromosome}: {np.sum(exclude_layer)}")
+            one_hot[chromosome] = np.hstack([one_hot[chromosome], exclude_layer])
 
-            joblib.dump(one_hot, f"{p.pickle_folder}{sp}_one_hot.gz", compress="lz4")
-            joblib.dump(ga, f"{p.pickle_folder}{sp}_ga.gz", compress=3)
-            joblib.dump(regions, f"{p.pickle_folder}{sp}_regions.gz", compress="lz4")
+        joblib.dump(one_hot, f"{p.pickle_folder}{sp}_one_hot.gz", compress=3)
+        joblib.dump(ga, f"{p.pickle_folder}{sp}_ga.gz", compress=3)
+        joblib.dump(regions, f"{p.pickle_folder}{sp}_regions.gz", compress=3)
     return train_info, valid_info, test_info, protein_coding
 
 
@@ -382,7 +363,10 @@ def load_data(mp_q, p, tracks, scores, t, t_end):
     for i, track_name in enumerate(tracks):
         parsed_track = joblib.load(p.parsed_tracks_folder + track_name)
         for j in range(len(scores)):
-            scores_after_loading[j, i] = parsed_track[scores[j][0]][int(scores[j][1]):int(scores[j][2])].copy()
+            try:
+                scores_after_loading[j, i] = parsed_track[scores[j][0]][int(scores[j][1]):int(scores[j][2])].copy()
+            except:
+                print(len(tracks))
     mp_q.put((t, scores_after_loading))
 
 
@@ -531,5 +515,5 @@ def load_hic_data_one(mp_q, hic_tracks, picked_regions, t, p):
                 hic_data[i].append(0)
                 print(info)
     hic_data = np.mean(hic_data, axis=-1)
-    joblib.dump(hic_data, f"{p.temp_folder}hic_data_one{t}", compress="lz4")
+    joblib.dump(hic_data, f"{p.temp_folder}hic_data_one{t}", compress=3)
     mp_q.put(None)

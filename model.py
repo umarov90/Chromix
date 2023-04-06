@@ -1,5 +1,5 @@
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, DataLoader
 import numpy as np
 from numba import jit
 import math
@@ -44,14 +44,10 @@ def nonzero_mse_loss(pred, target):
     mask = (target != 0).float()
     diff = pred - target
     masked_diff = mask * diff
-    mse = torch.sum(masked_diff ** 2) / torch.sum(mask)
-    return mse
+    loss1 = torch.mean(diff ** 2)
+    loss2 = 0.1 * (torch.sum(masked_diff ** 2) / torch.sum(mask))
+    return loss1 + loss2
 
-
-def pearson_corr_coef(x, y, dim = 1, reduce_dims = (-1,)):
-    x_centered = x - x.mean(dim = dim, keepdim = True)
-    y_centered = y - y.mean(dim = dim, keepdim = True)
-    return F.cosine_similarity(x_centered, y_centered, dim = dim).mean(dim = reduce_dims)
 
 # classes
 
@@ -246,23 +242,19 @@ class Chromix(nn.Module):
         self,
         x,
         target = None,
-        return_corr_coef = False,
         return_embeddings = False,
         return_only_embeddings = False,
-        head = None,
-        target_length = None
+        head = None
     ):
         no_batch = x.ndim == 2
 
         if no_batch:
             x = rearrange(x, '... -> () ...')
 
-        if exists(target_length):
-            self.set_target_length(target_length)
-
         x = rearrange(x, 'b n d -> b d n')
         x = self.stem(x)
         x = self.conv_tower(x)
+        # x = checkpoint_sequential(self.conv_tower, len(self.conv_tower), x)
         x = rearrange(x, 'b d n -> b n d')
         x = checkpoint_sequential(self.transformer, len(self.transformer), x)
         x = self.final_pointwise(x)
@@ -280,21 +272,20 @@ class Chromix(nn.Module):
 
         out.update(out_hic)
 
-        # if exists(head):
-        #     assert head in self._heads, f'head {head} not found'
-        # out = out["expression"]
-
         if exists(target):
-            assert exists(head), 'head must be passed in if one were to calculate loss directly with targets'
-
-            if return_corr_coef:
-                return pearson_corr_coef(out, target)
-
-            loss = self.loss_weights["expression"] * poisson_loss(out["hg38_expression"], target["expression"])
-            loss += self.loss_weights["epigenome"] * poisson_loss(out["hg38_epigenome"], target["epigenome"])
-            loss += self.loss_weights["conservation"] * nn.MSELoss()(out["hg38_conservation"], target["conservation"])
-            loss += self.loss_weights["hic"] * nn.MSELoss()(out["hg38_hic"], target["hic"])
-            return loss
+            losses = []
+            print(head, end=" loss ")
+            for key in target.keys():
+                subkey = key[len(head) + 1:]
+                if subkey in ["conservation", "hic"]:
+                    loss = nn.MSELoss()(out[key], target[key])
+                else:
+                    loss = nonzero_mse_loss(out[key], target[key])
+                print(f"{subkey}: {loss.item():>7f}", end=" ")
+                loss *= self.loss_weights[subkey]
+                losses.append(loss)
+            print()
+            return sum(losses)
 
         if return_embeddings:
             return out, x
@@ -303,34 +294,43 @@ class Chromix(nn.Module):
 
 
 def batch_predict_effect(p, model, seqs1, seqs2, inds=None):
-    for w in range(0, len(seqs1), p.w_step):
-        print(w, end=" ")
-        p1 = model.predict(wrap2(seqs1[w:w + p.w_step], p.predict_batch_size), verbose=0)
-        pe1 = np.concatenate((p1[0], p1[1], p1[2]), axis=1)
-        ph1 = p1[-1]
-        if inds is not None:
-            pe1 = pe1[:, inds, :]
-        p2 = model.predict(wrap2(seqs2[w:w + p.w_step], p.predict_batch_size), verbose=0)
-        pe2 = np.concatenate((p2[0], p2[1], p2[2]), axis=1)
-        ph2 = p2[-1]
-        if inds is not None:
-            pe2 = pe2[:, inds, :]
+    dd = DatasetDNA_ISM(seqs1, seqs2)
+    ddl = DataLoader(dataset=dd, batch_size=p.GLOBAL_BATCH_SIZE, shuffle=False)
+    for batch, X in enumerate(ddl):
+        X1 = X[0].to("cuda")
+        X2 = X[1].to("cuda")
+        with torch.no_grad():
+            pr = model(X1)
+            pe1 = np.concatenate((pr['hg38_expression'].cpu().numpy(),
+                                 pr['hg38_epigenome'].cpu().numpy(),
+                                 pr['hg38_conservation'].cpu().numpy()), axis=2)
+            ph1 = pr['hg38_hic'].cpu().numpy()
+            if inds is not None:
+                pe1 = pe1[:, inds, :]
+
+            pr = model(X2)
+            pe2 = np.concatenate((pr['hg38_expression'].cpu().numpy(),
+                                  pr['hg38_epigenome'].cpu().numpy(),
+                                  pr['hg38_conservation'].cpu().numpy()), axis=2)
+            ph2 = pr['hg38_hic'].cpu().numpy()
+            if inds is not None:
+                pe2 = pe2[:, inds, :]
 
         # effect_e = np.sum(pe1[..., p.mid_bin - 1 : p.mid_bin + 1], axis=-1) - np.sum(pe2[..., p.mid_bin - 1 : p.mid_bin + 1], axis=-1)
         # effect_e = np.mean(pe1 - pe2, axis=-1)
         # effect_e = np.max(np.abs(pe1 - pe2), axis=-1)
-        effect_e = fast_ce(np.swapaxes(pe1, 1, 2), np.swapaxes(pe2, 1, 2))
-        # effect_e = fast_ce(pe1, pe2)
-        # effect_h = fast_ce(np.swapaxes(ph1, 1, 2), np.swapaxes(ph2, 1, 2))
+        # effect_e = fast_ce(np.swapaxes(pe1, 1, 2), np.swapaxes(pe2, 1, 2))
+        effect_e = fast_ce(pe1, pe2)
+        effect_h = fast_ce(np.swapaxes(ph1, 1, 2), np.swapaxes(ph2, 1, 2))
         # effect_h = np.max(ph1 - ph2, axis=-1)
-        effect_h = fast_ce(ph1, ph2)
-        if w == 0:
+        # effect_h = fast_ce(ph1, ph2)
+        if batch == 0:
             print(effect_e.shape)
             print(effect_h.shape)
         fold_change = pe2[:, :, p.mid_bin] / pe1[:, :, p.mid_bin]
         # fold_change = np.squeeze(fold_change)
         # fold_change = np.max(fold_change, axis=1, keepdims=True)
-        if w == 0:
+        if batch == 0:
             effects_e = effect_e
             effects_h = effect_h
             fold_changes = fold_change
@@ -419,3 +419,15 @@ class DatasetDNA(Dataset):
 
     def __len__(self):
         return len(self.inputs)
+
+class DatasetDNA_ISM(Dataset):
+    def __init__(self, inputs1, inputs2):
+        self.inputs1 = torch.from_numpy(inputs1).float()
+        self.inputs2 = torch.from_numpy(inputs2).float()
+
+    def __getitem__(self, index):
+        input_data = (self.inputs1[index], self.inputs2[index])
+        return input_data
+
+    def __len__(self):
+        return len(self.inputs1)
