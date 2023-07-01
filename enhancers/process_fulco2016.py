@@ -6,7 +6,7 @@ from main_params import MainParams
 from liftover import get_lifter
 
 p = MainParams()
-train_info, valid_info, test_info, protein_coding = parser.parse_sequences(p)
+train_info, valid_info, test_info = parser.parse_sequences(p)
 infos = train_info + valid_info + test_info
 df = pd.read_csv("data/enhancers/fulco2016_original.tsv", sep="\t")
 df.loc[df['Set'] == 'MYC Tiling', "Gene"] = "MYC"

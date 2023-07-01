@@ -48,7 +48,7 @@ our_model = tf.keras.models.load_model('test.h5')
 # our_model.save('test.h5', include_optimizer=False, save_format="h5")
 # exit()
 test_seq = []
-_, _, test_info, _ = parser.parse_sequences(p)
+_, _, test_info = parser.parse_sequences(p)
 for index, info in enumerate(test_info):
     seq = get_seq([info[0], info[1]], p.input_size)
     test_seq.append(seq)

@@ -60,7 +60,8 @@ def get_seq(info, input_size, sub_half=False):
         ns = one_hot[info[0]][start:start + input_size]
     return ns[:, :-1]
 
-_, _, test_info, _ = parser.parse_sequences(p)
+
+_, _, test_info = parser.parse_sequences(p)
 
 head_name = "hg38"
 heads = joblib.load(f"{p.pickle_folder}heads.gz")

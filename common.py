@@ -2,6 +2,8 @@ import numpy as np
 import math
 import re
 
+import psutil
+
 
 def find_nearest(array, value):
     idx = np.searchsorted(array, value, side="left")
@@ -142,3 +144,30 @@ def find_between(s, first, last):
         return s[start:end]
     except ValueError:
         return ""
+
+def print_memory():
+    mem = psutil.virtual_memory()
+    print(f"used: {get_human_readable(mem.used)} available: {get_human_readable(mem.available)}")
+
+
+def change_seq(x):
+    return rev_comp(x)
+
+
+def find_overlapping_tuples(tuples_list, bedgraph_file):
+    overlapping_tuples = []
+    with open(bedgraph_file, 'r') as f:
+        for line in f:
+            fields = line.strip().split('\t')
+            chrom = fields[0]
+            start = int(fields[1])
+            end = int(fields[2])
+
+            for tup in tuples_list:
+                tup_chrom = tup[0]
+                tup_pos = tup[1]
+
+                if chrom == tup_chrom and start <= tup_pos <= end:
+                    overlapping_tuples.append(tup)
+
+    return overlapping_tuples

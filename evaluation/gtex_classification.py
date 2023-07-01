@@ -6,7 +6,6 @@ import os
 import numpy as np
 import tensorflow as tf
 import matplotlib.pyplot as plt
-import attribution
 # import logomaker
 from sklearn.cluster import KMeans
 import seaborn as sns
@@ -25,7 +24,6 @@ from sklearn.metrics import roc_auc_score
 import enhancers.enhancer_linking as el
 import parse_data as parser
 
-
 VCF_DIR = "data/gtex_pos_neg/"
 
 
@@ -40,11 +38,12 @@ input_size = p.input_size
 # input_size = 393216
 half_size = input_size // 2
 
-head = joblib.load(f"{p.pickle_folder}heads.gz")
-one_hot = joblib.load(f"{p.pickle_folder}one_hot.gz")
-hic_keys = pd.read_csv("data/good_hic.tsv", sep="\t", header=None).iloc[:, 0]
+head = joblib.load(f"{p.pickle_folder}heads.gz")["hg38"]
+for key in head.keys():
+    print(f"Number of tracks in head {key}: {len(head[key])}")
+one_hot = joblib.load(f"{p.pickle_folder}hg38_one_hot.gz")
 
-train_info, valid_info, test_info, protein_coding = parser.parse_sequences(p)
+train_info, valid_info, test_info = parser.parse_sequences(p)
 infos = train_info + valid_info + test_info
 tss_dict = {}
 for info in infos:
@@ -53,12 +52,9 @@ for info in infos:
 for key in tss_dict.keys():
     tss_dict[key].sort()
 
-from tensorflow.keras import mixed_precision
-mixed_precision.set_global_policy('mixed_float16')
-strategy = tf.distribute.MultiWorkerMirroredStrategy()
-with strategy.scope():
-    our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, 0, p.hic_size, head)
-    our_model.get_layer("our_resnet").set_weights(joblib.load(p.model_path + "_res"))
+model, _ = mo.prepare_model(p)
+mo.load_weights(p, model)
+
 
 vcf_names = []
 for filename in sorted(os.listdir(VCF_DIR)):
@@ -122,7 +118,7 @@ for name in vcf_names:
                 enhancer_score = 1.01
                 break
         if len(tss_candidates) > 0 and enhancer_score == 0:
-            scores = el.linking_proba(row["chrom"], tss_candidates, [row["position"]]*len(tss_candidates), one_hot, our_model)
+            scores = el.linking_proba(row["chrom"], tss_candidates, [row["position"]]*len(tss_candidates), one_hot, model, head)
             enhancer_score = max(scores)
         enhancer_scores.append(enhancer_score)
         bn_enhancer_scores.append(enhancer_score == 1.01)
@@ -138,7 +134,7 @@ for name in vcf_names:
     #############################################################
     print(f"Predicting {len(seqs1)}")
     # Turn the two outputs into feature vectors for Random Forests
-    dif, fold_changes = mo.batch_predict_effect_x(p, our_model, np.asarray(seqs1), np.asarray(seqs2))
+    dif, fold_changes = mo.batch_predict_effect(p, model, np.asarray(seqs1), np.asarray(seqs2))
     joblib.dump(dif, "dif_gtex.p", compress=3)
     # dif = joblib.load("dif_gtex.p")
     # dif = calculate_effect_pca(np.asarray(seqs1), np.asarray(seqs2))

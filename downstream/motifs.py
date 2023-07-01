@@ -30,7 +30,7 @@ one_hot = joblib.load(f"{p.pickle_folder}hg38_one_hot.gz")
 #     our_model.get_layer("our_resnet").set_weights(joblib.load(p.model_path + "_res"))
 #     our_model.get_layer("our_expression").set_weights(joblib.load(p.model_path + "_expression_hg38"))
 
-train_info, valid_info, test_info, protein_coding = parser.parse_sequences(p)
+train_info, valid_info, test_info = parser.parse_sequences(p)
 eval_infos = valid_info + test_info
 eval_infos = random.sample(eval_infos, len(eval_infos))
 

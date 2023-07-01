@@ -6,7 +6,7 @@ from main_params import MainParams
 from liftover import get_lifter
 
 p = MainParams()
-train_info, valid_info, test_info, protein_coding = parser.parse_sequences(p)
+train_info, valid_info, test_info = parser.parse_sequences(p)
 infos = train_info + valid_info + test_info
 
 df_pos = pd.read_csv("data/enhancers/gasperini_original.tsv", sep="\t")

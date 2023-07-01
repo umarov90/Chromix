@@ -1,7 +1,6 @@
 import gc
 import os
 import pathlib
-import tensorflow as tf
 import joblib
 from main_params import MainParams
 import visualization as viz
@@ -14,14 +13,10 @@ from scipy.ndimage.filters import gaussian_filter
 import pandas as pd
 from scipy import stats
 import random
-from mpl_toolkits.axisartist.grid_finder import DictFormatter
-from matplotlib.transforms import Affine2D
-import mpl_toolkits.axisartist.floating_axes as floating_axes
-from matplotlib import colors
-import matplotlib
-from matplotlib.colors import LinearSegmentedColormap
-import matplotlib.ticker as ticker
-import matplotlib.gridspec as gridspec
+import torch
+from torch.utils.data import DataLoader
+from torch import autocast, nn, optim
+from sync_batchnorm import convert_model
 
 
 def recover_shape(v, size_X):
@@ -36,8 +31,17 @@ def recover_shape(v, size_X):
 
 eval_gt_full = []
 p = MainParams()
-head = joblib.load(f"{p.pickle_folder}heads.gz")["hg38"]
-hic_keys = pd.read_csv("data/good_hic.tsv", sep="\t", header=None).iloc[:, 0].tolist()
+heads = joblib.load(f"{p.pickle_folder}heads.gz")
+for head_key in heads.keys():
+    if isinstance(heads[head_key], dict):
+        for key2 in heads[head_key].keys():
+            print(f"Number of tracks in head {head_key} {key2}: {len(heads[head_key][key2])}")
+            p.output_heads[head_key + "_" + key2] = len(heads[head_key][key2])
+    else:
+        print(f"Number of tracks in head {head_key}: {len(heads[head_key])}")
+        p.output_heads[head_key + "_expression"] = len(heads[head_key])
+
+hic_keys = p.hic_keys["hg38"]
 hic_num = len(hic_keys)
 for k in hic_keys:
     print(k, end=", ")
@@ -48,17 +52,10 @@ infos = random.sample(regions_tss, 100)
 
 print(f"Number of positions: {len(infos)}")
 one_hot = joblib.load(f"{p.pickle_folder}hg38_one_hot.gz")
-from tensorflow.keras import mixed_precision
-mixed_precision.set_global_policy('mixed_float16')
-strategy = tf.distribute.MultiWorkerMirroredStrategy()
-with strategy.scope():
-    our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, hic_num, p.hic_size, head)
-    our_model.get_layer("our_stem").set_weights(joblib.load(p.model_path + "_stem"))
-    our_model.get_layer("our_body").set_weights(joblib.load(p.model_path + "_body"))
-    our_model.get_layer("our_expression").set_weights(joblib.load(p.model_path + "_expression_hg38"))
-    our_model.get_layer("our_epigenome").set_weights(joblib.load(p.model_path + "_epigenome"))
-    our_model.get_layer("our_conservation").set_weights(joblib.load(p.model_path + "_conservation"))
-    our_model.get_layer("our_hic").set_weights(joblib.load(p.model_path + "_hic"))
+model = mo.Chromix(p)
+model = nn.DataParallel(model)
+model = convert_model(model).to("cuda:0")
+mo.load_weights(p, model)
 
 test_seq = []
 hic_positions = []
@@ -73,15 +70,20 @@ for info in infos:
     hic_positions.append([info[0], pos_hic])
     test_seq.append(ns[:, :-1])
 
-hic_output = parser.par_load_hic_data(hic_keys, p, hic_positions, 0)
+hic_output = parser.par_load_hic_data(hic_keys, p, hic_positions, 0, swap=False)
 hic_output = np.asarray(hic_output)
 test_seq = np.asarray(test_seq, dtype=bool)
+dd = mo.DatasetDNA(test_seq)
+ddl = DataLoader(dataset=dd, batch_size=p.pred_batch_size, shuffle=False)
 predictions_hic = []
-for w in range(0, len(test_seq), p.w_step):
-    print(w, end=" ")
-    p1 = our_model.predict(mo.wrap2(test_seq[w:w + p.w_step], p.predict_batch_size))
-    predictions_hic.append(p1[-1])
+model.eval()
+for batch, X in enumerate(ddl):
+    print(batch, end=" ")
+    with torch.no_grad():
+        pr = model(X)
+    predictions_hic.append(pr['hg38_hic'].cpu().numpy())
 predictions_hic = np.concatenate(predictions_hic)
+predictions_hic = predictions_hic.swapaxes(1, 2)
 print("drawing")
 print(predictions_hic.shape)
 print(hic_output.shape)
@@ -103,5 +105,5 @@ for n in range(len(hic_output)):
 
     fig.tight_layout()
     info = infos[n]
-    plt.savefig(f"hic_check/{info[0]}:{info[1] - 500000}-{info[1] + 500000}.png")
+    plt.savefig(f"hic_check/{info[0]}:{info[1] - 100000}-{info[1] + 100000}.png")
     plt.close(fig)

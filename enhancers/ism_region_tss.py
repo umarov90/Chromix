@@ -48,7 +48,7 @@ inds = []
 for i, track in enumerate(head["expression"]):
     inds.append(i)
 
-train_info, valid_info, test_info, protein_coding = parser.parse_sequences(p)
+train_info, valid_info, test_info = parser.parse_sequences(p)
 infos = train_info + valid_info + test_info
 # infos = []
 # for info in all_infos:

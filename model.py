@@ -1,16 +1,92 @@
+import os
 import torch
 from torch.utils.data import Dataset, DataLoader
 import numpy as np
 from numba import jit
 import math
-from torch import nn, einsum
-import torch.nn.functional as F
+from torch import nn
 from torch.utils.checkpoint import checkpoint_sequential
-from einops import rearrange, reduce
+from einops import rearrange
 from einops.layers.torch import Rearrange
-from main_params import MainParams 
-from x_transformers import TransformerWrapper, Encoder
+from random import random
+from sync_batchnorm import SynchronizedBatchNorm1d, convert_model
 
+
+class GRN(nn.Module):
+    """ GRN (Global Response Normalization) layer
+    """
+    def __init__(self, dim):
+        super().__init__()
+        self.gamma = nn.Parameter(torch.zeros(1, 1, dim))
+        self.beta = nn.Parameter(torch.zeros(1, 1, dim))
+
+    def forward(self, x):
+        Gx = torch.norm(x, p=2, dim=1, keepdim=True)
+        Nx = Gx / (Gx.mean(dim=-1, keepdim=True) + 1e-6)
+        return self.gamma * (x * Nx) + self.beta + x
+
+def get_groups_num(num_features):
+    valid_num_groups = [
+        factor for factor in range(1, num_features)
+        if num_features % factor == 0
+    ]
+    infos = [
+        {'ng': ng, 'nc': num_features / ng}
+        for ng in valid_num_groups
+    ]
+    ideal = num_features ** (0.5)
+    for item in infos:
+        item['heuristic'] = abs(ideal - item['ng']) * abs(ideal - item['nc'])
+    chosen = sorted(infos, key=lambda x: (x['heuristic'], 1 - x['ng']))[0]
+    return chosen['ng']
+
+
+class GaussianDropout(nn.Module):
+    def __init__(self, p=0.01):
+        super(GaussianDropout, self).__init__()
+        self.alpha = (p / (1.0 - p)) ** 0.5
+
+    def forward(self, x):
+        if self.training:
+            epsilon = torch.randn_like(x) * self.alpha + 1
+            return x * epsilon
+        else:
+            return x
+
+
+class Block(nn.Module):
+    def __init__(self, dim, dr, layer_dropout=0.0, layer_scale_init_value=1e-6):
+        super().__init__()
+        self.dwconv = nn.Conv1d(dim, dim, kernel_size=21, dilation=dr, padding='same', groups=dim)
+        self.norm = nn.GroupNorm(get_groups_num(dim), dim)
+        self.pwconv1 = nn.Linear(dim, 4 * dim)
+        self.act = nn.GELU()
+        self.dropout = nn.Dropout(0.2)
+        # self.grn = GRN(4 * dim)
+        self.pwconv2 = nn.Linear(4 * dim, dim)
+        self.gamma = nn.Parameter(layer_scale_init_value * torch.ones((dim)), requires_grad=True)
+        self.layer_dropout = layer_dropout
+        self.gaussian_dropout = GaussianDropout(0.01)
+
+    def forward(self, x):
+        if self.training and self.layer_dropout > 0.0 and random() < self.layer_dropout:
+            return x
+        input = x
+        x = self.gaussian_dropout(x)
+        x = self.dwconv(x)
+        x = self.norm(x)
+        x = rearrange(x, 'b d n -> b n d')
+        x = self.pwconv1(x)
+        x = self.dropout(x)
+        x = self.act(x)
+        # x = self.grn(x)
+        x = self.pwconv2(x)
+        x = self.gamma * x
+        x = rearrange(x, 'b n d -> b d n')
+        if self.training and self.layer_dropout > 0.0:
+            x = x / (1 - self.layer_dropout)
+        x = input + x
+        return x
 
 # helpers
 
@@ -30,26 +106,16 @@ def exponential_linspace_int(start, end, num, divisible_by = 1):
     base = math.exp(math.log(end / start) / (num - 1))
     return [_round(start * base**i) for i in range(num)]
 
-def log(t, eps = 1e-20):
-    return torch.log(t.clamp(min = eps))
-
-# losses and metrics
-
-
-def poisson_loss(pred, target):
-    return (pred - target * log(pred)).mean()
-
 
 def nonzero_mse_loss(pred, target):
     mask = (target != 0).float()
     diff = pred - target
     masked_diff = mask * diff
     loss1 = torch.mean(diff ** 2)
-    loss2 = 0.1 * (torch.sum(masked_diff ** 2) / torch.sum(mask))
+    loss2 = (torch.sum(masked_diff ** 2) / torch.sum(mask)) * 0.1
+    if torch.isnan(loss2):
+        loss2 = 0
     return loss1 + loss2
-
-
-# classes
 
 class Residual(nn.Module):
     def __init__(self, fn):
@@ -59,43 +125,6 @@ class Residual(nn.Module):
     def forward(self, x, **kwargs):
         return self.fn(x, **kwargs) + x
 
-class GELU(nn.Module):
-    def forward(self, x):
-        return torch.sigmoid(1.702 * x) * x
-
-class AttentionPool(nn.Module):
-    def __init__(self, dim, pool_size = 2):
-        super().__init__()
-        self.pool_size = pool_size
-        self.pool_fn = Rearrange('b d (n p) -> b d n p', p = pool_size)
-
-        self.to_attn_logits = nn.Conv2d(dim, dim, 1, bias = False)
-
-        nn.init.dirac_(self.to_attn_logits.weight)
-
-        with torch.no_grad():
-            self.to_attn_logits.weight.mul_(2)
-
-    def forward(self, x):
-        b, _, n = x.shape
-        remainder = n % self.pool_size
-        needs_padding = remainder > 0
-
-        if needs_padding:
-            x = F.pad(x, (0, remainder), value = 0)
-            mask = torch.zeros((b, 1, n), dtype = torch.bool, device = x.device)
-            mask = F.pad(mask, (0, remainder), value = True)
-
-        x = self.pool_fn(x)
-        logits = self.to_attn_logits(x)
-
-        if needs_padding:
-            mask_value = -torch.finfo(logits.dtype).max
-            logits = logits.masked_fill(self.pool_fn(mask), mask_value)
-
-        attn = logits.softmax(dim = -1)
-
-        return (x * attn).sum(dim = -1)
 
 class TargetLengthCrop(nn.Module):
     def __init__(self, target_length):
@@ -104,105 +133,93 @@ class TargetLengthCrop(nn.Module):
 
     def forward(self, x):
         seq_len, target_len = x.shape[-2], self.target_length
-
-        if target_len == -1:
-            return x
-
-        if seq_len < target_len:
-            raise ValueError(f'sequence length {seq_len} is less than target length {target_len}')
-
         trim = (target_len - seq_len) // 2
-
-        if trim == 0:
-            return x
-
         return x[:, -trim:trim]
 
-def ConvBlock(dim, dim_out = None, kernel_size = 1):
-    return nn.Sequential(
-        nn.BatchNorm1d(dim),
-        GELU(),
-        nn.Conv1d(dim, default(dim_out, dim), kernel_size, padding = kernel_size // 2)
-    )
 
-# main class
+
+class ConvBlock(nn.Module):
+    def __init__(self, dim, dim_out=None, kernel_size=1, dilation=1, use_act=True, gn=False):
+        super().__init__()
+        if gn:
+            self.norm = nn.GroupNorm(get_groups_num(dim), dim)
+        else:
+            self.norm = nn.BatchNorm1d(dim, momentum=0.05)
+        self.act = nn.GELU()
+        self.use_act = use_act
+        self.conv = nn.Conv1d(dim, default(dim_out, dim), kernel_size, padding="same", dilation=dilation)
+
+    def forward(self, x):
+        x = self.norm(x)
+        if self.use_act:
+            x = self.act(x)
+        x = self.conv(x)
+        return x
 
 class Chromix(nn.Module):
 
     def __init__(self, config):
         super().__init__()
         self.dim = config.dim
-        self.loss_weights = config.loss_weights
         half_dim = config.dim // 2
-        twice_dim = config.dim * 2
-
+        quad_dim = config.dim * 4
         # create stem
-
         self.stem = nn.Sequential(
-            nn.Conv1d(4, half_dim, 15, padding = 7),
+            nn.Conv1d(4, half_dim, 15, padding=7),
             Residual(ConvBlock(half_dim)),
-            AttentionPool(half_dim, pool_size = 2)
+            nn.MaxPool1d(kernel_size=2)
         )
-
         # create conv tower
-
-        filter_list = exponential_linspace_int(half_dim, config.dim, num = 6, divisible_by = 2)
+        filter_list = exponential_linspace_int(half_dim, config.dim, num=6, divisible_by=128)
         filter_list = [half_dim, *filter_list]
-
         conv_layers = []
         for dim_in, dim_out in zip(filter_list[:-1], filter_list[1:]):
             conv_layers.append(nn.Sequential(
-                ConvBlock(dim_in, dim_out, kernel_size = 5),
+                ConvBlock(dim_in, dim_out, kernel_size=5),
                 Residual(ConvBlock(dim_out, dim_out, 1)),
-                AttentionPool(dim_out, pool_size = 2)
+                nn.MaxPool1d(kernel_size=2)
             ))
-
         self.conv_tower = nn.Sequential(*conv_layers)
 
-        # transformer
-        # Bidirectional like BERT
-        transformer = []
-        for i in range(2):
-            transformer.append(nn.Sequential(Encoder(
-                dim = config.dim,
-                depth = 2,
-                heads = 4,
-                rel_pos_max_distance = config.num_bins,
-                rel_pos_num_buckets = 256,
-                rel_pos_bias = True, 
-                use_rmsnorm = True,
-                ff_glu = True,
-                ff_swish = True, # set this to True
-                ff_no_bias = True,  # set this to True
-                attn_talking_heads = True,  # turn on information exchange between attention heads
-                attn_gate_values = True, # gate aggregated values with the input
-                deepnorm = True, # set this to True to use deepnorm post-normalization configuration
-                residual_attn = True,    # add residual attention
-                layer_dropout = 0.1,   # stochastic depth - dropout entire layer
-                attn_dropout = 0.1,    # dropout post-attention
-                ff_dropout = 0.1       # feedforward dropout)
-            )))
+        # Dilated variant
+        # conv_layers = []
+        # dr = 2
+        # for i in range(20):
+        #     conv_layers.append(Residual(nn.Sequential(
+        #         ConvBlock(dim_out, dim_out, kernel_size=3, dilation=dr),
+        #         ConvBlock(dim_out, dim_out, kernel_size=1),
+        #         nn.Dropout(0.3)
+        #     )
+        #     ))
+        #     dr = int(round(dr * 1.5))
+        #
+        # self.convnext = nn.Sequential(*conv_layers)
 
-        self.transformer = nn.Sequential(*transformer)
-
-        # target cropping
-
+        num_blocks = 24
+        dr = 1
+        convnext_blocks = [nn.GroupNorm(get_groups_num(config.dim), config.dim)]
+        layer_dropout = 0
+        for block in range(num_blocks):
+            print(dr)
+            convnext_blocks.append(Block(dim=config.dim, dr=dr, layer_dropout=layer_dropout))
+            dr = min(int(math.ceil(dr * 1.2)), (config.input_size // config.bin_size) // 10 - 10)
+            layer_dropout = 0.15
+        self.convnext = nn.Sequential(*convnext_blocks)
         self.target_length = config.num_bins
         self.crop_final = TargetLengthCrop(config.num_bins)
-
         # final pointwise
-
         self.final_pointwise = nn.Sequential(
-            Rearrange('b n d -> b d n'),
-            ConvBlock(filter_list[-1], twice_dim, 1),
+            ConvBlock(filter_list[-1], quad_dim, 1, use_act=False, gn=True),
             Rearrange('b d n -> b n d'),
             nn.Dropout(0.05),
-            GELU()
+            nn.GELU()
         )
-
         # create final heads for human and mouse
-
-        self.add_heads(**config.output_heads)
+        self.output_heads = config.output_heads
+        self.heads = nn.ModuleDict(map_values(lambda features: nn.Sequential(
+            self.crop_final,
+            nn.Linear(quad_dim, features)
+        ), config.output_heads))
 
         self.hic_projection = nn.Sequential(
             Rearrange('b n d -> b d n'),
@@ -210,93 +227,65 @@ class Chromix(nn.Module):
             Rearrange('b d n -> b n d')
         )
 
-        self._hic_heads = nn.ModuleDict()
+        self.hic_heads = nn.ModuleDict()
 
         for specie in ["hg38", "mm10"]:
             hic_head = nn.Sequential(
-                nn.Linear(self.dim * 2, len(config.hic_keys[specie])),
-                nn.Softplus()
+                nn.Linear(quad_dim, len(config.hic_keys[specie]))
             )
-            self._hic_heads[specie + "_hic"] = hic_head
+            self.hic_heads[specie + "_hic"] = hic_head
 
-        self.loss_weights = config.loss_weights
-
-    def add_heads(self, **kwargs):
-        self.output_heads = kwargs
-        self._heads = nn.ModuleDict(map_values(lambda features: nn.Sequential(
-            self.crop_final,
-            nn.Linear(self.dim * 2, features),
-            nn.Softplus()
-        ), kwargs))
-
-    @property
-    def trunk(self):
-        return self._trunk
-
-    @property
-    def heads(self):
-        return self._heads
-        
+        self.running_loss = config.running_loss
 
     def forward(
         self,
         x,
         target = None,
-        return_embeddings = False,
         return_only_embeddings = False,
-        head = None
+        head = None,
+        loss_weights=None
     ):
-        no_batch = x.ndim == 2
-
-        if no_batch:
-            x = rearrange(x, '... -> () ...')
-
         x = rearrange(x, 'b n d -> b d n')
         x = self.stem(x)
         x = self.conv_tower(x)
+        x = self.convnext(x)
         # x = checkpoint_sequential(self.conv_tower, len(self.conv_tower), x)
-        x = rearrange(x, 'b d n -> b n d')
-        x = checkpoint_sequential(self.transformer, len(self.transformer), x)
         x = self.final_pointwise(x)
-
-        if no_batch:
-            x = rearrange(x, '() ... -> ...')
 
         if return_only_embeddings:
             return x
 
-        out = map_values(lambda fn: fn(x), self._heads)
+        out = map_values(lambda fn: fn(x), self.heads)
 
         hx = self.hic_projection(x)
-        out_hic = map_values(lambda fn: fn(hx), self._hic_heads)
+        out_hic = map_values(lambda fn: fn(hx), self.hic_heads)
 
         out.update(out_hic)
 
         if exists(target):
             losses = []
-            print(head, end=" loss ")
             for key in target.keys():
+                t = target[key]
                 subkey = key[len(head) + 1:]
                 if subkey in ["conservation", "hic"]:
-                    loss = nn.MSELoss()(out[key], target[key])
+                    loss = nn.MSELoss()(out[key], t)
                 else:
-                    loss = nonzero_mse_loss(out[key], target[key])
-                print(f"{subkey}: {loss.item():>7f}", end=" ")
-                loss *= self.loss_weights[subkey]
+                    loss = nonzero_mse_loss(out[key], t)
+                if not torch.isnan(loss):
+                    self.running_loss[head].setdefault(subkey, []).append(loss.item())
+                loss *= loss_weights[subkey]
                 losses.append(loss)
-            print()
             return sum(losses)
-
-        if return_embeddings:
-            return out, x
 
         return out
 
 
 def batch_predict_effect(p, model, seqs1, seqs2, inds=None):
+    model.eval()
     dd = DatasetDNA_ISM(seqs1, seqs2)
-    ddl = DataLoader(dataset=dd, batch_size=p.GLOBAL_BATCH_SIZE, shuffle=False)
+    ddl = DataLoader(dataset=dd, batch_size=p.pred_batch_size, shuffle=False)
     for batch, X in enumerate(ddl):
+        print(batch, end=" ")
         X1 = X[0].to("cuda")
         X2 = X[1].to("cuda")
         with torch.no_grad():
@@ -338,6 +327,7 @@ def batch_predict_effect(p, model, seqs1, seqs2, inds=None):
             effects_e = np.concatenate((effects_e, effect_e))
             effects_h = np.concatenate((effects_h, effect_h))
             fold_changes = np.concatenate((fold_changes, fold_change))
+    print("")
     fold_changes = np.clip(fold_changes, 0, 100)
     fold_changes = np.log(fold_changes + 1)
     fold_changes[np.isnan(fold_changes)] = -1
@@ -354,6 +344,19 @@ def cross_entropy(p, q):
     for a in sl:
         sm = sm + a
     return sm
+
+
+def set_bn_train_mode(model):
+    for m in model.modules():
+        if isinstance(m, nn.BatchNorm1d) or isinstance(m, nn.BatchNorm2d):
+            m.train()
+            m.track_running_stats = True
+
+def reset_batchnorm_stats(model):
+    for module in model.modules():
+        if isinstance(module, SynchronizedBatchNorm1d):
+            print("Resetting BN")
+            module.reset_running_stats()
 
 
 # def JS_divergence(p,q):
@@ -389,7 +392,7 @@ class CustomDataset(Dataset):
     def __init__(self, data):
         self.inputs = []
         self.outputs = []
-        for i in range(len(data[data.keys()[0]])):
+        for i in range(len(data[list(data.keys())[0]][0])):
             inputs_dict = {}
             outputs_dict = {}
             for key, val in data.items():  
@@ -431,3 +434,60 @@ class DatasetDNA_ISM(Dataset):
 
     def __len__(self):
         return len(self.inputs1)
+
+def load_weights(p, model, optimizer=None):
+    if os.path.exists(p.model_folder + p.model_name):
+        checkpoint = torch.load(p.model_folder + p.model_name, map_location=torch.device('cpu'))
+        model.load_state_dict(checkpoint['model_state_dict'])
+        epoch = checkpoint['epoch']
+        if exists(optimizer) and 'optimizer_state_dict' in checkpoint.keys():
+            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            # optimizer.param_groups[2]['weight_decay'] = 1e-06
+            # optimizer.param_groups[3]['weight_decay'] = 1e-06
+            # for i, param_group in enumerate(optimizer.param_groups):
+                # print(param_group)
+            #    param_group['lr'] = p.lr # param_group['lr'] * 0.8
+        del checkpoint
+        torch.cuda.empty_cache()
+        return epoch
+    else:
+        return 0
+
+
+def prepare_model(p):
+    model = Chromix(p)
+    print(sum(p.numel() for p in model.parameters() if p.requires_grad))
+    params = [
+        {'params': model.stem.parameters()},
+        {'params': model.conv_tower.parameters()},
+        {'params': model.convnext.parameters(), 'weight_decay': 1e-06},
+        {'params': model.final_pointwise.parameters()},
+        {'params': model.heads.parameters()},
+        {'params': model.hic_projection.parameters()},
+        {'params': model.hic_heads.parameters()}
+    ]
+    optimizer = torch.optim.AdamW(params, lr=1e-04, weight_decay=0)
+    model = nn.DataParallel(model)
+    model = convert_model(model).to("cuda:0")
+    return model, optimizer
+
+
+def prepare_model_sc(p):
+    model = Chromix_sc(p)
+    print(sum(p.numel() for p in model.parameters() if p.requires_grad))
+    params = [
+        {'params': model.stem.parameters()},
+        {'params': model.conv_tower.parameters()},
+        {'params': model.convnext.parameters(), 'weight_decay': 1e-06},
+        {'params': model.final_pointwise.parameters()},
+        {'params': model.head.parameters()},
+    ]
+    optimizer = torch.optim.AdamW(params, lr=1e-06, weight_decay=0)
+    model = nn.DataParallel(model)
+    model = convert_model(model).to("cuda:0")
+    return model, optimizer
+
+
+def individual_clip(params):
+    for p in params:
+        torch.nn.utils.clip_grad_norm_(p, 0.01)

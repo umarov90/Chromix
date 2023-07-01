@@ -29,6 +29,6 @@ def change_expression():
 # change_expression()
 
 df = pd.read_csv("/home/user/Desktop/all_track.metadata.tsv", sep="\t")
-df['file_name'] = df['genome'] + '.' + df['file_name']
+# df['file_name'] = df['genome'] + '.' + df['file_name']
 df = df.drop_duplicates()
 df.to_csv("/home/user/Desktop/12all_track.metadata.tsv", index=False, sep="\t")

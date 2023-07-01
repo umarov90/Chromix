@@ -4,7 +4,6 @@ import pathlib
 import joblib
 import numpy as np
 import matplotlib.pyplot as plt
-from sklearn.cluster import KMeans
 from main_params import MainParams
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
@@ -27,7 +26,7 @@ import seaborn as sns
 from sklearn.model_selection import KFold
 from tensorflow.keras.models import Model
 from sklearn.linear_model import LogisticRegression
-sns.set(font_scale = 1.5)
+sns.set(font_scale = 2.5)
 
 
 def take_closest(myList, myNumber):
@@ -51,7 +50,7 @@ def add_seqs(chrom, tss_pos, enh_mid, input_size, one_hot):
         # print("edge")
         return None, None, None
     relative1 = tss_pos - enh_mid
-    if abs(relative1) > half_size or abs(relative1) < 2000: 
+    if abs(relative1) > 96000 or abs(relative1) < 2000:
         # print(f"bad {relative1}")
         return None, None, None
     enh_pos = half_size - relative1
@@ -66,6 +65,7 @@ def get_signals(positions, head, kw, do_mean=True):
     for i, mark in enumerate(kw):
         chosen_tracks1 = []
         for track in head:
+            # Change to correct cell type
             if mark in track.lower() and "k562" in track.lower():
                 chosen_tracks1.append(track)
         print(f"{len(chosen_tracks1)} {mark} tracks found")
@@ -124,7 +124,8 @@ def get_seqs_and_features(df, one_hot, head):
     # signals_tss = get_signals(tss_pos, head["epigenome"], marks)
 
     hic_keys = pd.read_csv("data/good_hic.tsv", sep="\t", header=None).iloc[:, 0]
-    hic_signal = parser.par_load_hic_data_one(hic_keys, p, picked_regions_hic)
+    # Change to correct mcool
+    hic_signal = parser.par_load_hic_data_one(["4DNFI18UHVRO.mcool"], p, picked_regions_hic)
     hic_signal[np.isnan(hic_signal)] = 0
     hic_signal = np.expand_dims(hic_signal, axis=1)
     
@@ -234,7 +235,7 @@ def get_linking_AUC():
     seqs1, seqs2, eseqs1, eseqs2, Y_label, add_features, tss_pos = get_seqs_and_features(df, one_hot, head)
 
     true_labels = {"<20000":[], "<40000":[], ">40000":[]}
-    methods = ["ABC like", "Enformer", "Chromix",  "Enformer*", "Chromix*", "ChromixF"] 
+    methods = ["Distance", "ABC*", "Enformer", "Chromix"]
     pred_labels = {}
     for m in methods:
         pred_labels[m] = {"<20000":[], "<40000":[], ">40000":[]}
@@ -245,58 +246,48 @@ def get_linking_AUC():
 
     import enformer_usage
     enformer_effect = enformer_usage.calculate_effect(np.asarray(eseqs1), np.asarray(eseqs2))
-    joblib.dump(enformer_effect, "enformer_effect_sum.p", compress=3)
-    # enformer_effect = joblib.load("enformer_effect_sum.p")
+    joblib.dump(enformer_effect, "enformer_effect_mean.p", compress=3)
+    exit()
+    enformer_effect = joblib.load("enformer_effect.p")
+    # df_targets = pd.read_csv("data/targets_human.txt", sep='\t')
+    # inds = df_targets.index[(df_targets['description'].str.contains('K562')) & (df_targets['description'].str.contains('CAGE'))]
+    # print(enformer_effect.shape)
+    # enformer_effect = enformer_effect[:, inds]
+    # print(enformer_effect.shape)
 
-    import tensorflow as tf
-    import model as mo
-    from tensorflow.keras import mixed_precision
-    mixed_precision.set_global_policy('mixed_float16')
-    strategy = tf.distribute.MultiWorkerMirroredStrategy()
-    with strategy.scope():
-        our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, 6, p.hic_size, head)
-        our_model.get_layer("our_stem").set_weights(joblib.load(p.model_path + "_stem"))
-        our_model.get_layer("our_body").set_weights(joblib.load(p.model_path + "_body"))
-        our_model.get_layer("our_expression").set_weights(joblib.load(p.model_path + "_expression_hg38"))
-        our_model.get_layer("our_epigenome").set_weights(joblib.load(p.model_path + "_epigenome"))
-        our_model.get_layer("our_conservation").set_weights(joblib.load(p.model_path + "_conservation"))
-        our_model.get_layer("our_hic").set_weights(joblib.load(p.model_path + "_hic"))
+    # import model as mo
+    # model, _ = mo.prepare_model(p)
+    # mo.load_weights(p, model)
+    # chromix_effects_e, chromix_effects_h, chromix_fold_changes = mo.batch_predict_effect(p, model, np.asarray(seqs1), np.asarray(seqs2))
+    # joblib.dump((chromix_effects_e, chromix_effects_h, chromix_fold_changes), "chromix_full_effect_ce.p", compress=3)
+    chromix_effects_e, chromix_effects_h, chromix_fold_changes = joblib.load("chromix_full_effect_ce.p")
 
-        # stem = our_model.get_layer("our_stem")
-        # body = our_model.get_layer("our_body")
-        # submodel = Model(stem.input, body(stem.output))
-    # chomix_effects_e = mo.batch_predict_effect_x(p, submodel, np.asarray(seqs1), np.asarray(seqs2))
-    # joblib.dump(chomix_effects_e, "chomix_effects_e.p", compress=3)
-    # chomix_effects_e = joblib.load("chomix_effects_e.p")
-
-    chomix_effects_e, chromix_effects_h, chromix_fold_changes = mo.batch_predict_effect(p, our_model, np.asarray(seqs1), np.asarray(seqs2))
-    joblib.dump((chomix_effects_e, chromix_effects_h, chromix_fold_changes), "chromix_full_effect_ce.p", compress=3)
-    # chomix_effects_e, chromix_effects_h, chromix_fold_changes = joblib.load("chromix_full_effect_ce.p")
-
-    # for features in methods:
-    #     print(features)
-    #     yinds = np.asarray(Y_label).argsort()
-    #     sorted_dif = chomix_effects_e[yinds[::-1]]
-    #     # sorted_dif = np.log10(sorted_dif + 1)
-    #     sorted_y = np.asarray(Y_label)[yinds[::-1]]
-    #     palette = sns.color_palette()
-    #     palette_dict = dict(zip(["Significant", "Non-Significant"], palette))
-    #     pair_labels = ["Significant", "Non-Significant"]
-    #     pair_colors = []
-    #     for y in sorted_y:
-    #         if y == True:
-    #             pair_colors.append(palette_dict["Significant"])
-    #         else:
-    #             pair_colors.append(palette_dict["Non-Significant"])
-    #     cmap = sns.diverging_palette(h_neg=210, h_pos=350, s=90, l=30, as_cmap=True)
-    #     g = sns.clustermap(sorted_dif,row_cluster=False, col_cluster=False,row_colors=pair_colors,
-    #                       linewidths=0, xticklabels=False, yticklabels=False)
-    #     for label in pair_labels:
-    #         g.ax_col_dendrogram.bar(0, 0, color=palette_dict[label],
-    #                                 label=label, linewidth=0)
-    #     g.ax_col_dendrogram.legend(loc="center", ncol=5)
-    #     g.cax.set_position([.97, .2, .03, .45])
-    #     g.savefig(f"{features}_heatmap.png")
+    for features in ["Enformer", "Chromix"]:
+        print(features)
+        yinds = np.asarray(Y_label).argsort()
+        if features == "Chromix":
+            sorted_dif = chromix_effects_e[yinds[::-1]]
+        else:
+            sorted_dif = enformer_effect[yinds[::-1]]
+        # sorted_dif = np.log10(sorted_dif + 1)
+        sorted_y = np.asarray(Y_label)[yinds[::-1]]
+        palette = sns.color_palette()
+        palette_dict = dict(zip(["Significant", "Non-Significant"], palette))
+        pair_labels = ["Significant", "Non-Significant"]
+        pair_colors = []
+        for y in sorted_y:
+            if y == True:
+                pair_colors.append(palette_dict["Significant"])
+            else:
+                pair_colors.append(palette_dict["Non-Significant"])
+        g = sns.clustermap(sorted_dif,row_cluster=False, col_cluster=False,row_colors=pair_colors,
+                          linewidths=0, xticklabels=False, yticklabels=False)
+        for label in pair_labels:
+            g.ax_col_dendrogram.bar(0, 0, color=palette_dict[label],
+                                    label=label, linewidth=0)
+        g.ax_col_dendrogram.legend(loc="center", ncol=5)
+        g.cax.set_position([.97, .2, .03, .45])
+        g.savefig(f"{features}_heatmap.png")
 
     indices = np.array([i for i in range(len(tss_pos))])
     unique_values = list(set(tss_pos))
@@ -312,42 +303,45 @@ def get_linking_AUC():
             # mid_bin = dif.shape[1] // 2
             # mid_val = dif[:, mid_bin - 1] + dif[:, mid_bin] + dif[:, mid_bin + 1]
             # dif = np.concatenate((np.expand_dims(mid_val, axis=1), add_features), axis=-1)
-            if features == "ABC like":
+            if features == "ABC*":
                 all_features = add_features
             elif features.startswith("Chromix"):
-                all_features = chomix_effects_e
-            elif features == "Enformer":
+                all_features = chromix_effects_e
+            elif features.startswith("Enformer"):
                 all_features = enformer_effect
+            elif features.startswith("Distance"):
+                all_features = add_features[:, -1:]
             X_train = all_features[train_indices]
             Y_train = np.asarray(Y_label)[train_indices]
             X_test = all_features[test_indices]
             Y_test = np.asarray(Y_label)[test_indices]
 
-            if features != "ABC like":
-                pca = PCA(n_components=20)
+            if features.startswith(("Enformer", "Chromix")):
+                pca = PCA(n_components=10)
                 pca.fit(X_train)
                 X_train = pca.transform(X_train)
                 X_test = pca.transform(X_test)
 
-                if features in ["ChromixF"]:
-                    X_train_h = chromix_effects_h[train_indices, :]
-                    X_test_h = chromix_effects_h[test_indices, :]
-                    X_train_h = np.mean(X_train_h, axis=-1, keepdims=True)
-                    X_test_h = np.mean(X_test_h, axis=-1, keepdims=True)
-                    X_train = np.concatenate((X_train, X_train_h), axis=-1)
-                    X_test = np.concatenate((X_test, X_test_h), axis=-1)
+                # if features in ["ChromixF"]:
+                #     X_train_h = chromix_effects_h[train_indices, :]
+                #     X_test_h = chromix_effects_h[test_indices, :]
+                #     X_train_h = np.mean(X_train_h, axis=-1, keepdims=True)
+                #     X_test_h = np.mean(X_test_h, axis=-1, keepdims=True)
+                #     X_train = np.concatenate((X_train, X_train_h), axis=-1)
+                #     X_test = np.concatenate((X_test, X_test_h), axis=-1)
 
             X_train_dist = add_features[train_indices]
             X_test_dist = add_features[test_indices]
-            if features != "ABC like":
-                if "*" in features or "3D" in features:
+            if features not in ["Distance", "ABC*"]:
+                if "+" in features:
                     X_test = np.concatenate((X_test, X_test_dist), axis=-1)
                     X_train = np.concatenate((X_train, X_train_dist), axis=-1)
                 else:
+                    print(f"{features}------------------")
                     X_test = np.concatenate((X_test, X_test_dist[:, -1:]), axis=-1)
                     X_train = np.concatenate((X_train, X_train_dist[:, -1:]), axis=-1)
 
-            clf = RandomForestClassifier(n_estimators=100) # n_estimators=500, max_depth=10
+            clf = RandomForestClassifier(n_estimators=100)
             print(f"Fitting {X_train.shape}")
             clf.fit(X_train, Y_train)
             Y_pred = clf.predict_proba(X_test)[:,1]
@@ -366,52 +360,51 @@ def get_linking_AUC():
                 plt.xlabel('Score')
                 plt.ylabel('Density')
                 plt.title('Distributions of Scores for True and False')
-                plt.savefig(f"Distributions_fold1.png")
-            # if fold1:
-            #     # Saving RF and PCA for other scripts
-            #     if features == "Chromix":
-            #         joblib.dump(clf, "RF.pkl")
-            #         joblib.dump(pca, "PCA.pkl")
-            #     # Saving ROC curve
-            #     plt.clf()
-            #     fig, axs = plt.subplots(1,1,figsize=(10, 10))
-            #     metrics.plot_roc_curve(clf, X_test, Y_test, ax=axs, name="Random Forest")
-            #     axs.plot([0, 1], [0, 1], color="navy", lw=2, linestyle="--")
-            #     plt.tight_layout()
-            #     plt.savefig(features + "_linking.png")
-            # Y_pred = clf.predict(X_test)
-            # # Distance for grouping results
-            # X_test_dist = X_test_dist[:, -1:]
-            # for i in range(len(Y_pred)):
-            #     if X_test_dist[i] < 20000:
-            #         dist_group = "<20000"
-            #     elif X_test_dist[i] < 40000:
-            #         dist_group = "<40000"
-            #     else:
-            #         dist_group = ">40000"
-            #     if features == methods[0]:
-            #         true_labels[dist_group].append(Y_test[i])
-            #     pred_labels[features][dist_group].append(Y_pred[i])
-        fold1=False
-    # for metric in ["Recall", "Precision"]:
-    #     df = pd.DataFrame(columns=['Distance', 'Method', metric])
-    #     for key in true_labels.keys():
-    #         for m in methods:
-    #             cf = confusion_matrix(true_labels[key], pred_labels[m][key])
-    #             tn = cf[0][0]
-    #             fp = cf[0][1]
-    #             fn = cf[1][0]
-    #             tp = cf[1][1]
-    #             if metric == "Recall":
-    #                 v = tp/(tp+fn)
-    #             else:
-    #                 v = tp/(tp+fp)
-    #             df.loc[len(df.index)] = [f"{key} ({(tp+fn) / K})", m, v]
-    #     plt.clf()
-    #     fig, axs = plt.subplots(1,1,figsize=(20, 10))
-    #     sns.barplot(x="Distance", hue="Method", y=metric, data=df, palette="Set2", ax=axs)
-    #     plt.tight_layout()
-    #     plt.savefig(f"linking_comparison_{metric}.png")
+                plt.savefig(f"Distributions_fold_{features}.png")
+                # Saving RF and PCA for other scripts
+                if features == "Chromix":
+                    joblib.dump(clf, "RF.pkl")
+                    joblib.dump(pca, "PCA.pkl")
+                # Saving ROC curve
+                plt.clf()
+                fig, axs = plt.subplots(1,1,figsize=(10, 10))
+                metrics.plot_roc_curve(clf, X_test, Y_test, ax=axs, name="Random Forest")
+                axs.plot([0, 1], [0, 1], color="navy", lw=2, linestyle="--")
+                plt.tight_layout()
+                plt.savefig(features + "_linking.png")
+            Y_pred = clf.predict(X_test)
+            # Distance for grouping results
+            X_test_dist = X_test_dist[:, -1:]
+            for i in range(len(Y_pred)):
+                if X_test_dist[i] < 20000:
+                    dist_group = "<20000"
+                elif X_test_dist[i] < 40000:
+                    dist_group = "<40000"
+                else:
+                    dist_group = ">40000"
+                if features == methods[0]:
+                    true_labels[dist_group].append(Y_test[i])
+                pred_labels[features][dist_group].append(Y_pred[i])
+        fold1 = False
+    for metric in ["Recall", "Precision"]:
+        df = pd.DataFrame(columns=['Distance', 'Method', metric])
+        for key in true_labels.keys():
+            for m in methods:
+                cf = confusion_matrix(true_labels[key], pred_labels[m][key])
+                tn = cf[0][0]
+                fp = cf[0][1]
+                fn = cf[1][0]
+                tp = cf[1][1]
+                if metric == "Recall":
+                    v = tp/(tp+fn)
+                else:
+                    v = tp/(tp+fp)
+                df.loc[len(df.index)] = [f"{key} ({(tp+fn) / K})", m, v]
+        plt.clf()
+        fig, axs = plt.subplots(1,1,figsize=(20, 10))
+        sns.barplot(x="Distance", hue="Method", y=metric, data=df, palette="Set2", ax=axs)
+        plt.tight_layout()
+        plt.savefig(f"linking_comparison_{metric}.png")
     for features in methods:
         auc[features] = auc[features] / K
         print(f"{features}: {auc[features]}")
@@ -437,17 +430,17 @@ def get_linking_AUC():
     return auc["Chromix"]
 
 
-def linking_proba(chrom, tss, enhancer_mids, one_hot, our_model):
+def linking_proba(chrom, tss, enhancer_mids, one_hot, our_model, head):
     import model as mo
     df = pd.DataFrame(list(zip([chrom]*len(tss), tss, enhancer_mids, [False]*len(tss))),
                     columns =['chr', 'tss', 'mid', 'Significant'])
-    seqs1, seqs2, eseqs1, eseqs2, Y_label, add_features = get_seqs_and_features(df, one_hot)
+    seqs1, seqs2, eseqs1, eseqs2, Y_label, add_features, tss_pos = get_seqs_and_features(df, one_hot, head)
     clf = joblib.load("RF.pkl") 
-    # pca = joblib.load("PCA.pkl")
+    pca = joblib.load("PCA.pkl")
     if len(seqs1) > 0:
-        dif, fold_changes = mo.batch_predict_effect_x(p, our_model, np.asarray(seqs1), np.asarray(seqs2))
-        # dif = pca.transform(dif)
-        pred = clf.predict_proba(np.concatenate((dif, add_features), axis=-1))[:,1]
+        chromix_effects_e, chromix_effects_h, chromix_fold_changes = mo.batch_predict_effect(p, our_model, np.asarray(seqs1), np.asarray(seqs2))
+        chromix_effects_e = pca.transform(chromix_effects_e)
+        pred = clf.predict_proba(np.concatenate((chromix_effects_e, add_features), axis=-1))[:,1]
         with open(f"snp_linking/{chrom}_{enhancer_mids[0]}_{max(pred)}.bedGraph", 'w+') as file:
             for i in range(len(pred)):
                 file.write(f"{chrom}\t{tss[i]}\t{tss[i]}\t{pred[i]}\n")
@@ -459,3 +452,4 @@ p = MainParams()
 if __name__ == '__main__':
     # abc_vs_rf()
     get_linking_AUC()
+    # linking_across_datasets()

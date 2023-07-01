@@ -13,16 +13,14 @@ import seaborn as sns
 from numba import jit
 
 transform_path = 'gs://dm-enformer/models/enformer.finetuned.SAD.robustscaler-PCA500-robustscaler.transform.pkl'
-model_path = 'https://tfhub.dev/deepmind/enformer/1'
-targets_txt = 'https://raw.githubusercontent.com/calico/basenji/master/manuscripts/cross2020/targets_human.txt'
-
-
 SEQUENCE_LENGTH = 393216
 
 class Enformer:
   
-  def __init__(self, tfhub_url):
-    self._model = hub.load(tfhub_url).model
+  def __init__(self):
+      # self._model = hub.load(tfhub_url).model
+      # tf.saved_model.save(self._model, "data/enformer_model")
+      self._model = tf.saved_model.load("data/enformer_model")
 
   def predict_on_batch(self, inputs):
     predictions = self._model.predict_on_batch(inputs)
@@ -47,15 +45,15 @@ class Enformer:
 
 class EnformerScoreVariantsRaw:
 
-  def __init__(self, tfhub_url, organism='human'):
-    self._model = Enformer(tfhub_url)
+  def __init__(self, organism='human'):
+    self._model = Enformer()
     self._organism = organism
   
   def predict_on_batch(self, inputs):
     ref_prediction = self._model.predict_on_batch(inputs['ref'])[self._organism]
     alt_prediction = self._model.predict_on_batch(inputs['alt'])[self._organism]
-    # effect = alt_prediction.mean(axis=1) - ref_prediction.mean(axis=1)
-    effect = fast_ce(alt_prediction, ref_prediction)
+    effect = alt_prediction.mean(axis=1) - ref_prediction.mean(axis=1)
+    # effect = fast_ce(alt_prediction, ref_prediction)
     # effect = np.max(np.abs(alt_prediction - ref_prediction), axis=1)
     # effect = alt_prediction[:, 447:450, :].sum(axis=1) - ref_prediction[:, 447:450, :].sum(axis=1)
     return effect
@@ -78,9 +76,9 @@ class EnformerScoreVariantsNormalized:
 
 class EnformerScoreVariantsPCANormalized:
 
-  def __init__(self, tfhub_url, transform_pkl_path,
+  def __init__(self, transform_pkl_path,
                organism='human', num_top_features=500):
-    self._model = EnformerScoreVariantsRaw(tfhub_url, organism)
+    self._model = EnformerScoreVariantsRaw(organism)
     with tf.io.gfile.GFile(transform_pkl_path, 'rb') as f:
       self._transform = joblib.load(f)
     self._num_top_features = num_top_features
@@ -89,9 +87,6 @@ class EnformerScoreVariantsPCANormalized:
     scores = self._model.predict_on_batch(inputs)
     return self._transform.transform(scores)[:, :self._num_top_features]
 
-
-# TODO(avsec): Add feature description: Either PCX, or full names.
-# @title `variant_centered_sequences`
 
 class FastaStringExtractor:
     
@@ -138,8 +133,8 @@ def variant_generator(vcf_file, gzipped=False):
 def one_hot_encode(sequence):
   return kipoiseq.transforms.functional.one_hot_dna(sequence).astype(np.float32)
 
-enformer_score_variants_pca = EnformerScoreVariantsPCANormalized(model_path, transform_path)
-enformer_score_variants = EnformerScoreVariantsRaw(model_path)
+enformer_score_variants_pca = EnformerScoreVariantsPCANormalized(transform_path)
+enformer_score_variants = EnformerScoreVariantsRaw()
 def calculate_effect(seqs1, seqs2):
   effects = []
   for i in range(len(seqs1)):

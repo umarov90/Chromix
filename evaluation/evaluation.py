@@ -7,11 +7,11 @@ import common as cm
 import parse_data as parser
 import pandas as pd
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import DataLoader
+import model as mo
 
 
 def eval_perf(p, model, device, head, eval_infos_all, should_draw, current_epoch, label, one_hot):
-    import model as mo
     print("Version 1.02")
     eval_track_names = []
     if isinstance(head, dict):
@@ -48,7 +48,7 @@ def eval_perf(p, model, device, head, eval_infos_all, should_draw, current_epoch
         test_seq.append(ns[:, :-1])
     test_seq = np.asarray(test_seq, dtype=bool)
     print(f"Length: {len(test_seq)}")
-    meta = pd.read_csv("data/ML_all_track.metadata.2022053017.tsv", sep="\t")
+    meta = pd.read_csv("data/all_track.metadata.tsv", sep="\t")
     track_types = {}
     for track in eval_track_names:
         meta_row = meta.loc[meta['file_name'] == track]
@@ -60,10 +60,9 @@ def eval_perf(p, model, device, head, eval_infos_all, should_draw, current_epoch
     model.eval()
     # predictions = joblib.load("pred.gz")
     dd = mo.DatasetDNA(test_seq)
-    ddl = DataLoader(dataset=dd, batch_size=p.GLOBAL_BATCH_SIZE, shuffle=False)
+    ddl = DataLoader(dataset=dd, batch_size=p.pred_batch_size, shuffle=False)
     for batch, X in enumerate(ddl):
         print(batch, end=" ")
-        X = X.to(device)
         with torch.no_grad():
             pr = model(X)
         p1 = np.concatenate((pr['hg38_expression'].cpu().numpy(),
@@ -146,9 +145,10 @@ def eval_perf(p, model, device, head, eval_infos_all, should_draw, current_epoch
                     myfile.write("\n")
         return eval_log, f"{np.mean([i[0] for i in corrs_s['CAGE']])}_{np.mean(at_corrs_s['CAGE'])}"
 
-    l1, _ = eval_perf(True)
+    # l1, _ = eval_perf(True)
     l2, return_result = eval_perf(False)
-    log = l1 + "\n\n" + l2
+    # log = l1 + "\n\n" + l2
+    log = l2
     print(log)
     with open("log.txt", "a") as myfile:
         myfile.write(log + "\n")
