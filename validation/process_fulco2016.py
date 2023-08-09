@@ -6,13 +6,13 @@ from main_params import MainParams
 from liftover import get_lifter
 
 p = MainParams()
-train_info, valid_info, test_info = parser.parse_sequences(p)
+train_info, valid_info, test_info, _ = parser.parse_sequences(p)
 infos = train_info + valid_info + test_info
-df = pd.read_csv("data/enhancers/fulco2016_original.tsv", sep="\t")
+df = pd.read_csv("data/validation/fulco2016_original.tsv", sep="\t")
 df.loc[df['Set'] == 'MYC Tiling', "Gene"] = "MYC"
 df.loc[df['Set'] == 'GATA1 Tiling', "Gene"] = "GATA1"
 a = df['Gene'].unique()
-head = joblib.load(f"{p.pickle_folder}heads.gz")["expression"]
+head = joblib.load(f"{p.pickle_folder}heads.gz")["hg38"]["expression"]
 f5_tracks = []
 for track in head:
     if "FANTOM5" in track and "K562" in track:
@@ -64,7 +64,7 @@ for index, row in df.iterrows():
         df.at[index,'mid'] = converter[row["chr"]][row["mid"]][0][1]
     except:
         inds.append(index)
-# Remove enhancers that could not be lifted
+# Remove validation that could not be lifted
 df.drop(df.index[inds], inplace=True)
 df = df[np.abs(df["mid"] - df["tss"]) > 2000]
 df_enhancer_screen_pos = df[df["score"] < -0.5].copy()
@@ -78,8 +78,8 @@ print(df['Significant'].value_counts())
 
 df1 = df[df.Set == "Protein Coding Gene Promoters"]
 df1 = df1[["chr", "tss", "mid", 'Significant']]
-df1.to_csv("data/enhancers/fulco2016_processed.tsv", index=False, sep="\t")
+df1.to_csv("data/validation/fulco2016_processed.tsv", index=False, sep="\t")
 
 df2 = df[df['Set'].isin(["MYC Tiling", "GATA1 Tiling"])]
-df2 = df2[["chr", "tss", "mid", 'Significant']]
-df2.to_csv("data/enhancers/fulco2016_tiling.tsv", index=False, sep="\t")
+df2 = df2[["chr", "tss", "mid", 'Significant', 'score']]
+df2.to_csv("data/validation/fulco2016_tiling.tsv", index=False, sep="\t")

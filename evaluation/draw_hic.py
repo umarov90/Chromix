@@ -1,22 +1,12 @@
-import gc
-import os
-import pathlib
 import joblib
 from main_params import MainParams
-import visualization as viz
 import model as mo
 import numpy as np
 import seaborn as sns
 import matplotlib.pyplot as plt
 import parse_data as parser
 from scipy.ndimage.filters import gaussian_filter
-import pandas as pd
-from scipy import stats
 import random
-import torch
-from torch.utils.data import DataLoader
-from torch import autocast, nn, optim
-from sync_batchnorm import convert_model
 
 
 def recover_shape(v, size_X):
@@ -31,31 +21,20 @@ def recover_shape(v, size_X):
 
 eval_gt_full = []
 p = MainParams()
+sp = "hg38"
 heads = joblib.load(f"{p.pickle_folder}heads.gz")
-for head_key in heads.keys():
-    if isinstance(heads[head_key], dict):
-        for key2 in heads[head_key].keys():
-            print(f"Number of tracks in head {head_key} {key2}: {len(heads[head_key][key2])}")
-            p.output_heads[head_key + "_" + key2] = len(heads[head_key][key2])
-    else:
-        print(f"Number of tracks in head {head_key}: {len(heads[head_key])}")
-        p.output_heads[head_key + "_expression"] = len(heads[head_key])
-
-hic_keys = p.hic_keys["hg38"]
+hic_keys = p.hic_keys[sp]
 hic_num = len(hic_keys)
 for k in hic_keys:
     print(k, end=", ")
 
-regions_tss = joblib.load(f"{p.pickle_folder}test_info.gz")
-# regions_tss = joblib.load(f"{p.pickle_folder}train_info.gz")
+regions_tss = joblib.load(f"{p.pickle_folder}data_split.gz")[sp]["test"]
 infos = random.sample(regions_tss, 100)
 
 print(f"Number of positions: {len(infos)}")
-one_hot = joblib.load(f"{p.pickle_folder}hg38_one_hot.gz")
-model = mo.Chromix(p)
-model = nn.DataParallel(model)
-model = convert_model(model).to("cuda:0")
-mo.load_weights(p, model)
+one_hot = joblib.load(f"{p.pickle_folder}{sp}_one_hot.gz")
+
+our_model, head_inds = mo.prepare_model(p, heads)
 
 test_seq = []
 hic_positions = []
@@ -70,20 +49,15 @@ for info in infos:
     hic_positions.append([info[0], pos_hic])
     test_seq.append(ns[:, :-1])
 
-hic_output = parser.par_load_hic_data(hic_keys, p, hic_positions, 0, swap=False)
+hic_output = parser.par_load_hic_data(hic_keys, p, hic_positions, 0)
 hic_output = np.asarray(hic_output)
 test_seq = np.asarray(test_seq, dtype=bool)
-dd = mo.DatasetDNA(test_seq)
-ddl = DataLoader(dataset=dd, batch_size=p.pred_batch_size, shuffle=False)
 predictions_hic = []
-model.eval()
-for batch, X in enumerate(ddl):
-    print(batch, end=" ")
-    with torch.no_grad():
-        pr = model(X)
-    predictions_hic.append(pr['hg38_hic'].cpu().numpy())
+for w in range(0, len(test_seq), p.w_step):
+    print(w, end=" ")
+    p1 = our_model.predict(mo.wrap2(test_seq[w:w + p.w_step], p.predict_batch_size))
+    predictions_hic.append(p1[head_inds[f"{sp}_hic"]])
 predictions_hic = np.concatenate(predictions_hic)
-predictions_hic = predictions_hic.swapaxes(1, 2)
 print("drawing")
 print(predictions_hic.shape)
 print(hic_output.shape)
@@ -98,12 +72,11 @@ for n in range(len(hic_output)):
 
     for i in range(hic_num):
         mat = recover_shape(predictions_hic[n][i], p.num_hic_bins)
-        # mat = gaussian_filter(mat, sigma=0.5)
         sns.heatmap(mat, linewidth=0.0, ax=axs[1, i], square=True)
         axs[1, i].set(xticklabels=[])
         axs[1, i].set(yticklabels=[])
 
     fig.tight_layout()
     info = infos[n]
-    plt.savefig(f"hic_check/{info[0]}:{info[1] - 100000}-{info[1] + 100000}.png")
+    plt.savefig(f"hic_check/{sp}_{info[0]}:{info[1] - p.half_size_hic}-{info[1] + p.half_size_hic}.png")
     plt.close(fig)

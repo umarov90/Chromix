@@ -38,7 +38,7 @@ def parse_hic(p):
         return hic_keys
 
 
-def parse_tracks_sc(p, infos):
+def parse_tracks_sc(p):
     if Path(f"{p.pickle_folder}track_names_sc.gz").is_file():
         track_names_final = joblib.load(f"{p.pickle_folder}track_names_sc.gz")
     else:
@@ -58,10 +58,11 @@ def parse_tracks_sc(p, infos):
             if new_track_name.endswith(".64nt.bed.gz"):
                 new_track_name = new_track_name[:-len(".64nt.bed.gz")]
             new_track_name += ".parsed"
+            new_track_name = "hg38." + new_track_name
             parsed_tracks.append(new_track_name)
             proc = mp.Process(target=parse_some_tracks,
                               args=(
-                              q, p, [track_names[i]], ga, p.bin_size, p.tracks_folder_sc, new_track_name, meta, infos,))
+                              q, p, [track_names[i]], ga, p.bin_size, p.tracks_folder_sc, new_track_name, meta,))
             proc.start()
             ps.append(proc)
             if len(ps) > 100:
@@ -230,14 +231,16 @@ def parse_some_tracks(q, p, some_tracks, ga, bin_size, tracks_folder, new_track_
         count_non_zero = len(non_zero_all)
         max_val = np.max(non_zero_all)
         # qnts = np.quantile(non_zero_all, [0.95, 0.99])
-        for key in gast.keys():
-            if meta_row is not None and (meta_row["value"] == "conservation" or meta_row["unit"] == "logcpm"):
-                gast[key] = (gast[key] / max_val) * 100
-            else:
-                gast[key] = np.log10(gast[key] + 1) * 10
-            gast[key] = np.round(gast[key], 3)
-            gast[key] = gast[key].astype(np.float16)
-            gast[key][~np.isfinite(gast[key])] = 0
+        # for key in gast.keys():
+        #     if meta_row is not None and (meta_row["value"] == "conservation" or meta_row["unit"] == "logcpm"):
+        #         pass
+        #     elif meta_row is not None and meta_row["value"] == "RNA":
+        #         gast[key] = np.minimum(gast[key], 384 + np.sqrt(np.maximum(0, gast[key] - 384)))
+        #     else:
+        #         gast[key] = np.minimum(gast[key], 32 + np.sqrt(np.maximum(0, gast[key] - 32)))
+        #     gast[key] = np.round(gast[key], 3)
+        #     gast[key] = gast[key].astype(np.float16)
+        #     gast[key][~np.isfinite(gast[key])] = 0
         joblib.dump(gast, new_path, compress="lz4")
     q.put(count_non_zero)
 
@@ -248,72 +251,48 @@ def add_fast(a, pos, score):
         a[pos[i]] = a[pos[i]] + score[i]
 
 
-def parse_mm10gtf(p):
-    if Path(f"{p.pickle_folder}mm10_train_info.gz").is_file():
-        test_info = joblib.load(f"{p.pickle_folder}mm10_test_info.gz")
-        train_info = joblib.load(f"{p.pickle_folder}mm10_train_info.gz")
-        valid_info = joblib.load(f"{p.pickle_folder}mm10_valid_info.gz")
-    else:
-        gtf = pd.read_csv("data/gencode.vM25.annotation.gtf", sep="\t", index_col=False,
-                                names=["chrom", "source", "feature", "start", "end", "score", "strand", "frame", "attribute"], comment="#")
-        gtf['tss'] = gtf.apply(lambda row: row['end'] if row['strand'] == '-' else row['start'], axis=1)
-        gtf = gtf[(gtf['feature'] == 'transcript') & (gtf['attribute'].str.contains('protein_coding'))]
-
-        all_info = list(zip(gtf['chrom'], gtf['tss']))
-
-        train_info = cm.find_overlapping_tuples(all_info, "data/mm10_train.bed")
-        valid_info = cm.find_overlapping_tuples(all_info, "data/mm10_valid.bed")
-        test_info = cm.find_overlapping_tuples(all_info, "data/mm10_testbed")
-        joblib.dump(test_info, f"{p.pickle_folder}mm10_test_info.gz", compress=3)
-        joblib.dump(train_info, f"{p.pickle_folder}mm10_train_info.gz", compress=3)
-        joblib.dump(valid_info, f"{p.pickle_folder}mm10_valid_info.gz", compress=3)
-    return train_info, valid_info, test_info
-
-
 def parse_sequences(p):
-    if Path(f"{p.pickle_folder}train_info.gz").is_file():
-        test_info = joblib.load(f"{p.pickle_folder}test_info.gz")
-        train_info = joblib.load(f"{p.pickle_folder}train_info.gz")
-        valid_info = joblib.load(f"{p.pickle_folder}valid_info.gz")
+    if Path(f"{p.pickle_folder}data_split.gz").is_file():
+        data_split = joblib.load(f"{p.pickle_folder}data_split.gz")
     else:
-        gene_info = pd.read_csv("data/hg38.GENCODEv38.pc_lnc.gene.info.tsv", sep="\t", index_col=False)
-        train_tss = pd.read_csv("data/final_train_tss.bed", sep="\t", index_col=False,
-                                names=["chrom", "start", "end", "geneID", "score", "strand"])
-        test_tss = pd.read_csv("data/final_test_tss.bed", sep="\t", index_col=False,
-                               names=["chrom", "start", "end", "geneID", "score", "strand"])
-        valid_tss = pd.read_csv("data/final_valid_tss.bed", sep="\t", index_col=False,
-                                names=["chrom", "start", "end", "geneID", "score", "strand"])
-        valid_info = []
-        for index, row in valid_tss.iterrows():
-            pos = int(row["start"])
-            gene_type = gene_info[gene_info['geneID'] == row["geneID"]]['geneType'].values[0]
-            gene_name = gene_info[gene_info['geneID'] == row["geneID"]]['geneName'].values[0]
-            valid_info.append([row["chrom"], pos, row["geneID"], gene_type,
-                               row["strand"], gene_type != "protein_coding", gene_name])
-        print(f"Valid set complete {len(valid_info)}")
+        data_split = {}
+        for sp in p.species:
+            data_split[sp] = {}
 
-        test_info = []
-        for index, row in test_tss.iterrows():
-            pos = int(row["start"])
-            gene_type = gene_info[gene_info['geneID'] == row["geneID"]]['geneType'].values[0]
-            gene_name = gene_info[gene_info['geneID'] == row["geneID"]]['geneName'].values[0]
-            test_info.append([row["chrom"], pos, row["geneID"], gene_type,
-                              row["strand"], gene_type != "protein_coding", gene_name])
+            gtf = pd.read_csv(f"data/gencode.{sp}.annotation.gtf", sep="\t", index_col=False,
+                              names=["chrom", "source", "feature", "start", "end", "score", "strand", "frame", "attribute"],
+                              comment="#")
+            gtf = gtf[(gtf['feature'] == 'transcript') & (gtf['attribute'].str.contains('protein_coding'))]
+            gtf['tss'] = gtf.apply(lambda row: row['end'] if row['strand'] == '-' else row['start'], axis=1)
+            gtf.reset_index(drop=True, inplace=True)
 
-        print(f"Test set complete {len(test_info)}")
-        train_info = []
-        for index, row in train_tss.iterrows():
-            pos = int(row["start"])
-            gene_type = gene_info[gene_info['geneID'] == row["geneID"]]['geneType'].values[0]
-            gene_name = gene_info[gene_info['geneID'] == row["geneID"]]['geneName'].values[0]
-            train_info.append([row["chrom"], pos, row["geneID"], gene_type, row["strand"],
-                               gene_type != "protein_coding", gene_name])
+            # Split the "attribute" column into separate columns
+            df_attributes = gtf["attribute"].str.split("; ", expand=True)
 
-        print(f"Training set complete {len(train_info)}")
+            # Rename the columns and remove the quotes
+            df_attributes.columns = df_attributes.iloc[0].str.split(" ", n=1, expand=True)[0].str.replace("\"", "")
+            df_attributes = df_attributes.apply(lambda x: x.str.split(" ", n=1, expand=True)[1].str.replace("\"", ""))
 
-        joblib.dump(test_info, f"{p.pickle_folder}test_info.gz", compress=3)
-        joblib.dump(train_info, f"{p.pickle_folder}train_info.gz", compress=3)
-        joblib.dump(valid_info, f"{p.pickle_folder}valid_info.gz", compress=3)
+            # Concatenate the expanded columns with the original DataFrame
+            gtf = pd.concat([gtf, df_attributes], axis=1)
+
+            # Drop the original "attribute" column
+            gtf = gtf.drop("attribute", axis=1)
+
+            all_info = list(zip(gtf['chrom'], gtf['tss'], gtf['gene_name']))
+
+            valid_info = cm.find_overlapping_tuples(all_info, f"data/{sp}_valid.bed")
+            print(f"Valid set complete {len(valid_info)}")
+            test_info = cm.find_overlapping_tuples(all_info, f"data/{sp}_test.bed")
+            print(f"Test set complete {len(test_info)}")
+            train_info = list(set(all_info) - set(test_info) - set(valid_info))
+            print(f"Training set complete {len(train_info)}")
+
+            data_split[sp]["train"] = train_info
+            data_split[sp]["test"] = test_info
+            data_split[sp]["valid"] = valid_info
+
+        joblib.dump(data_split, f"{p.pickle_folder}data_split.gz", compress=3)
 
     for sp in p.species:
         if Path(f"{p.pickle_folder}{sp}_regions.gz").is_file():
@@ -362,11 +341,11 @@ def parse_sequences(p):
         joblib.dump(one_hot, f"{p.pickle_folder}{sp}_one_hot.gz", compress=3)
         joblib.dump(ga, f"{p.pickle_folder}{sp}_ga.gz", compress=3)
         joblib.dump(regions, f"{p.pickle_folder}{sp}_regions.gz", compress=3)
-    return train_info, valid_info, test_info
+    return data_split
 
 
 def load_data(mp_q, p, tracks, scores, t, t_end):
-    scores_after_loading = np.zeros((len(scores), t_end - t, int(scores[0][2]) - int(scores[0][1])), dtype=np.float32)
+    scores_after_loading = np.zeros((len(scores), t_end - t, int(scores[0][2]) - int(scores[0][1])), dtype=np.float16)
     for i, track_name in enumerate(tracks):
         parsed_track = joblib.load(p.parsed_tracks_folder + track_name)
         for j in range(len(scores)):
@@ -375,7 +354,7 @@ def load_data(mp_q, p, tracks, scores, t, t_end):
 
 
 def load_data_sum(mp_q, p, tracks, scores, t, t_end):
-    scores_after_loading = np.zeros((len(scores), t_end - t), dtype=np.float32)
+    scores_after_loading = np.zeros((len(scores), t_end - t), dtype=np.float16)
     for i, track_name in enumerate(tracks):
         parsed_track = joblib.load(p.parsed_tracks_folder + track_name)
         for j in range(len(scores)):
@@ -386,7 +365,7 @@ def load_data_sum(mp_q, p, tracks, scores, t, t_end):
     mp_q.put((t, scores_after_loading))
 
 
-def par_load_data(output_scores_info, tracks, p):
+def par_load_data(output_scores_info, tracks, p, swap=False):
     mp_q = mp.Queue()
     ps = []
     start = 0
@@ -410,26 +389,25 @@ def par_load_data(output_scores_info, tracks, p):
         all_scores.append(mp_q.get())
     all_scores = sorted(all_scores, key=lambda x: x[0])
     all_scores = [tp[1] for tp in all_scores]
-    all_scores = np.concatenate(all_scores, axis=1, dtype=np.float32)
-    if len(output_scores_info[0]) == 3:
-        all_scores = all_scores.swapaxes(1, 2)
-    all_scores = all_scores / 100
+    all_scores = np.concatenate(all_scores, axis=1, dtype=np.float16)
+    if swap:
+        if len(output_scores_info[0]) == 3:
+            all_scores = all_scores.swapaxes(1, 2)
     return all_scores
 
 
-def par_load_hic_data(hic_tracks, p, picked_regions, half, swap=True):
+def par_load_hic_data(hic_tracks, p, picked_regions, half, swap=False):
     mp_q = mp.Queue()
     ps = []
 
-    nproc = min(mp.cpu_count(), len(picked_regions))
-    # print(nproc)
-    step_size = len(picked_regions) // nproc
-    end = len(picked_regions)
+    nproc = min(4 * mp.cpu_count(), len(hic_tracks))
+    step_size = len(hic_tracks) // nproc
+    end = len(hic_tracks)
 
     for t in range(0, end, step_size):
         t_end = min(t + step_size, end)
         load_proc = mp.Process(target=load_hic_data,
-                               args=(mp_q, hic_tracks, picked_regions[t:t_end], t, p, half,))
+                               args=(mp_q, hic_tracks[t:t_end], picked_regions, t, p, half,))
         load_proc.start()
         ps.append(load_proc)
 
@@ -438,7 +416,7 @@ def par_load_hic_data(hic_tracks, p, picked_regions, half, swap=True):
         all_scores.append(mp_q.get())
     all_scores = sorted(all_scores, key=lambda x: x[0])
     all_scores = [tp[1] for tp in all_scores]
-    all_scores = np.concatenate(all_scores, axis=0, dtype=np.float32)
+    all_scores = np.concatenate(all_scores, axis=1, dtype=np.float16)
     if swap:
         all_scores = all_scores.swapaxes(1, 2)
     return all_scores
@@ -463,12 +441,12 @@ def load_hic_data(mp_q, hic_tracks, picked_regions, t, p, half):
             hic_mat = hic_mat - np.diag(np.diag(hic_mat, k=1), k=1) - np.diag(np.diag(hic_mat, k=-1), k=-1) - np.diag(
                 np.diag(hic_mat))
             hic_mat = gaussian_filter(hic_mat, sigma=1)
-            if t + i < half:
+            if i < half:
                 hic_mat = np.rot90(hic_mat, k=2)
             hic_mat = hic_mat[np.triu_indices_from(hic_mat, k=2)]
 
             # Scale the values
-            hic_mat = hic_mat * 100
+            hic_mat = hic_mat * 1000
 
             hic_data[i].append(hic_mat)
     mp_q.put((t, hic_data))
@@ -502,16 +480,15 @@ def par_load_hic_data_one(hic_tracks, p, picked_regions):
 
 
 def load_hic_data_one(mp_q, hic_tracks, picked_regions, t, p):
-    hic_bin_size = 2000
     hic_data = []
     for i in range(len(picked_regions)):
         hic_data.append([])
 
     for hic in hic_tracks:
-        c = cooler.Cooler(p.hic_folder + hic + "::resolutions/" + str(hic_bin_size))
+        c = cooler.Cooler(p.hic_folder + hic + "::resolutions/" + str(p.hic_bin_size))
         for i, info in enumerate(picked_regions):
-            start_hic = info[1] - hic_bin_size // 2 - info[1] % hic_bin_size
-            end_hic = info[2] - hic_bin_size // 2 - info[2] % hic_bin_size
+            start_hic = info[1] - p.hic_bin_size // 2 - info[1] % p.hic_bin_size
+            end_hic = info[2] - p.hic_bin_size // 2 - info[2] % p.hic_bin_size
             if start_hic == end_hic:
                 end_hic = end_hic + 1
             try:

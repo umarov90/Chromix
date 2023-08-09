@@ -6,22 +6,19 @@ import math
 import common as cm
 import parse_data as parser
 import pandas as pd
-import torch
-from torch.utils.data import DataLoader
-import model as mo
 
 
-def eval_perf(p, model, device, head, eval_infos_all, should_draw, current_epoch, label, one_hot):
+def eval_perf(p, our_model, head, eval_infos_all, should_draw, current_epoch, label, one_hot, inds):
+    import model as mo
     print("Version 1.02")
     eval_track_names = []
-    if isinstance(head, dict):
-        for key in head.keys():
-            eval_track_names += head[key]
-    else:
-        eval_track_names = head
+    for key in head.keys():
+        eval_track_names += head[key]
     eval_infos = []
     for info in eval_infos_all:
-        if info[5]:
+        if len(info) > 5 and info[5]:
+            continue
+        if info[0] not in one_hot.keys():
             continue
         eval_infos.append(info)
 
@@ -55,24 +52,21 @@ def eval_perf(p, model, device, head, eval_infos_all, should_draw, current_epoch
         if len(meta_row) > 0:
             track_types[track] = meta_row.iloc[0]["technology"]
         else:
-            track_types[track] = "scEnd5"
+            track_types[track] = "no meta"
     print("Predicting")
-    model.eval()
     # predictions = joblib.load("pred.gz")
-    dd = mo.DatasetDNA(test_seq)
-    ddl = DataLoader(dataset=dd, batch_size=p.pred_batch_size, shuffle=False)
-    for batch, X in enumerate(ddl):
-        print(batch, end=" ")
-        with torch.no_grad():
-            pr = model(X)
-        p1 = np.concatenate((pr['hg38_expression'].cpu().numpy(),
-                             pr['hg38_epigenome'].cpu().numpy(),
-                             pr['hg38_conservation'].cpu().numpy()), axis=2)
-        p2 = p1[:, p.mid_bin, :]  # p1[:, :, p.mid_bin - 1] + p1[:, :, p.mid_bin] + p1[:, :, p.mid_bin + 1]
-        if batch == 0:
+    for w in range(0, len(test_seq), p.w_step):
+        print(w, end=" ")
+        pr = our_model.predict(mo.wrap2(test_seq[w:w + p.w_step], p.predict_batch_size))
+        p1 = np.concatenate([pr[i] for i in inds], axis=1)
+        p2 = p1[:, :, p.mid_bin]  # p1[:, :, p.mid_bin - 1] + p1[:, :, p.mid_bin] + p1[:, :, p.mid_bin + 1]
+        if w == 0:
             predictions = p2
         else:
             predictions = np.concatenate((predictions, p2), dtype=np.float16)
+        p1 = None
+        p2 = None
+        gc.collect()
     # joblib.dump(predictions, "pred.gz", compress="lz4")
     u_track_types = set(track_types.values())
 
@@ -145,10 +139,9 @@ def eval_perf(p, model, device, head, eval_infos_all, should_draw, current_epoch
                     myfile.write("\n")
         return eval_log, f"{np.mean([i[0] for i in corrs_s['CAGE']])}_{np.mean(at_corrs_s['CAGE'])}"
 
-    # l1, _ = eval_perf(True)
+    l1, _ = eval_perf(True)
     l2, return_result = eval_perf(False)
-    # log = l1 + "\n\n" + l2
-    log = l2
+    log = l1 + "\n\n" + l2
     print(log)
     with open("log.txt", "a") as myfile:
         myfile.write(log + "\n")

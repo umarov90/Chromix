@@ -1,29 +1,21 @@
-import os
-# os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-# os.environ["CUDA_VISIBLE_DEVICES"] = '0' 
-import multiprocessing as mp
 import math
-import tensorflow_hub as hub
+import random
+
 import joblib
 import pandas as pd
 import numpy as np
 import tensorflow as tf
 from scipy import stats
-import common as cm
 import model as mo
 from main_params import MainParams
 import time
 import parse_data as parser
 import matplotlib
 import matplotlib.pyplot as plt
-from scipy.stats import ttest_ind
 import seaborn as sns
-import umap
-from sklearn.decomposition import PCA
 from pathlib import Path
 import qnorm
 import torch
-from torch.utils.data import DataLoader
 matplotlib.use("Agg")
 
 
@@ -44,16 +36,6 @@ def rev_comp(s):
     return np.array(vals, dtype=np.float32)
 
 
-p = MainParams()
-heads = joblib.load("pickle/heads.gz")["hg38"]
-head_tracks = heads["expression"]
-one_hot = joblib.load(f"{p.pickle_folder}hg38_one_hot.gz")
-train_info, valid_info, test_info = parser.parse_sequences(p)
-if Path(f"{p.pickle_folder}track_names_col.gz").is_file():
-    track_names_col = joblib.load(f"{p.pickle_folder}track_names_col.gz")
-else:
-    track_names_col = parser.parse_tracks(p)
-
 def get_seq(info, input_size, add_half=False):
     start = int(info[1] - (info[1] % p.bin_size) - input_size // 2)
     if add_half:
@@ -68,25 +50,23 @@ def get_seq(info, input_size, add_half=False):
     else:
         ns = one_hot[info[0]][start:start + input_size]
     return ns[:, :-1]
-# p.NUM_GPU = 1
-# p.GLOBAL_BATCH_SIZE = p.NUM_GPU * p.BATCH_SIZE
-# p.predict_batch_size = 2 * p.GLOBAL_BATCH_SIZE
+
+
+p = MainParams()
+heads = joblib.load("pickle/heads.gz")
+head_tracks = heads["hg38"]["expression"]
+one_hot = joblib.load(f"{p.pickle_folder}hg38_one_hot.gz")
+test_info = joblib.load(f"{p.pickle_folder}data_split.gz")["hg38"]["test"]
+if Path(f"{p.pickle_folder}track_names_col.gz").is_file():
+    track_names_col = joblib.load(f"{p.pickle_folder}track_names_col.gz")
+else:
+    track_names_col = parser.parse_tracks(p)
+
 
 df_targets = pd.read_csv("data/targets_human.txt", sep='\t')
 SEQUENCE_LENGTH = 393216
 
-all_info = train_info + valid_info + test_info
-test_info = []
-for info in test_info:
-    if info[5]: 
-        continue
-    # if info[0] != "chr14":
-    #     continue
-    test_info.append(info)
-    # if len(test_info) > 500:
-    #     break
-cor_tracks = pd.read_csv("data/fantom_tracks.tsv", sep="\t").iloc[:, 0].tolist()
-# test_info = test_info[:100]
+# test_info = random.sample(test_info, 100)
 enf_tracks = df_targets[df_targets['description'].str.contains("CAGE")]['identifier'].tolist()
 
 short_name = {}
@@ -121,7 +101,7 @@ for j, track in enumerate(eval_tracks):
 
 # ENFORMER #####################################################################################################
 ################################################################################################################
-pred_matrix = joblib.load("pred_matrix_enformer.p")
+pred_matrix_enformer = joblib.load("pred_matrix_enformer.p")
 # class Enformer:
 #
 #     def __init__(self):
@@ -133,25 +113,10 @@ pred_matrix = joblib.load("pred_matrix_enformer.p")
 #         predictions = self._model.predict_on_batch(inputs)
 #         return {k: v.numpy() for k, v in predictions.items()}
 #
-#     @tf.function
-#     def contribution_input_grad(self, input_sequence,
-#                                 target_mask, output_head='human'):
-#         input_sequence = input_sequence[tf.newaxis]
-#
-#         target_mask_mass = tf.reduce_sum(target_mask)
-#         with tf.GradientTape() as tape:
-#             tape.watch(input_sequence)
-#             prediction = tf.reduce_sum(
-#                 target_mask[tf.newaxis] *
-#                 self._model.predict_on_batch(input_sequence)[output_head]) / target_mask_mass
-#
-#         input_grad = tape.gradient(prediction, input_sequence) * input_sequence
-#         input_grad = tf.squeeze(input_grad, axis=0)
-#         return tf.reduce_sum(input_grad, axis=-1)
 # model = Enformer()
 #
-# pred_matrix = np.zeros((len(eval_tracks), len(test_info)))
-# # counts = [0, 0, 0]
+# pred_matrix_enformer = np.zeros((len(eval_tracks), len(test_info)))
+# counts = [0, 0, 0]
 # print("Predicting")
 # start = time.time()
 # for index, info in enumerate(test_info):
@@ -170,51 +135,47 @@ pred_matrix = joblib.load("pred_matrix_enformer.p")
 #         bins = prediction[448, t] # [prediction[447, t], prediction[448, t], prediction[449, t]]
 #         gene_expression = np.sum(bins)
 #         # counts[bins.index(max(bins))] += 1
-#         pred_matrix[j, index] = gene_expression
+#         pred_matrix_enformer[j, index] = gene_expression
 #
 # print("")
 # # print(counts)
 # end = time.time()
 # print("Enformer time")
 # print(end - start)
-# joblib.dump(pred_matrix, "pred_matrix_enformer.p", compress=3)
-qnorm_axis = 0
-pred_matrix = qnorm.quantile_normalize(pred_matrix, axis=qnorm_axis)
+# joblib.dump(pred_matrix_enformer, "pred_matrix_enformer.p", compress=3)
+# qnorm_axis = 0
+# pred_matrix_enformer = qnorm.quantile_normalize(pred_matrix_enformer, axis=qnorm_axis)
 # OUR MODEL #####################################################################################################
 #################################################################################################################
-# pred_matrix_our = joblib.load("pred_matrix_our.p")
-pred_matrix_our = np.zeros((len(eval_tracks), len(test_info)))
-test_seq = []
-for index, info in enumerate(test_info):
-    seq = get_seq([info[0], info[1]], p.input_size)
-    test_seq.append(seq)
-test_seq = np.asarray(test_seq, dtype=bool)
-start = time.time()
-
-model, _ = mo.prepare_model(p)
-mo.load_weights(p, model)
-dd = mo.DatasetDNA(test_seq)
-ddl = DataLoader(dataset=dd, batch_size=p.pred_batch_size, shuffle=False)
-
-predictions = []
-model.eval()
-for batch, X in enumerate(ddl):
-    print(batch, end=" ")
-    with torch.no_grad():
-        pr = model(X)
-    predictions.append(pr['hg38_expression'].cpu().numpy()[:, p.mid_bin, :])
-predictions = np.concatenate(predictions)
-for index, info in enumerate(test_info):
-    for j, track in enumerate(eval_tracks):
-        t = track_ind_our[track]
-        pred_matrix_our[j, index] = predictions[index, t]
-print("")
-end = time.time()
-print("Our time")
-print(end - start)
-joblib.dump(pred_matrix_our, "pred_matrix_our.p", compress=3)
-pred_matrix_our = qnorm.quantile_normalize(pred_matrix_our, axis=qnorm_axis)
-print(f"{np.max(pred_matrix_our)}\t{np.std(pred_matrix_our)}\t{np.mean(pred_matrix_our)}\t{np.median(pred_matrix_our)}")
+pred_matrix_chromix = joblib.load("pred_matrix_chromix.p")
+# pred_matrix_chromix = np.zeros((len(eval_tracks), len(test_info)))
+# test_seq = []
+# for index, info in enumerate(test_info):
+#     seq = get_seq([info[0], info[1]], p.input_size)
+#     test_seq.append(seq)
+# test_seq = np.asarray(test_seq, dtype=bool)
+# start = time.time()
+#
+# model, head_inds = mo.prepare_model(p, heads)
+#
+# predictions = []
+# for w in range(0, len(test_seq), p.w_step):
+#     print(w, end=" ")
+#     pr = model.predict(mo.wrap2(test_seq[w:w + p.w_step], p.predict_batch_size))
+#     p2 = pr[head_inds["hg38_expression"]][:, :, p.mid_bin]
+#     predictions.append(p2)
+# predictions = np.concatenate(predictions)
+# for index, info in enumerate(test_info):
+#     for j, track in enumerate(eval_tracks):
+#         t = track_ind_our[track]
+#         pred_matrix_chromix[j, index] = predictions[index, t]
+# print("")
+# end = time.time()
+# print("Our time")
+# print(end - start)
+# joblib.dump(pred_matrix_chromix, "pred_matrix_chromix.p", compress=3)
+# pred_matrix_chromix = qnorm.quantile_normalize(pred_matrix_chromix, axis=qnorm_axis)
+# print(f"{np.max(pred_matrix_chromix)}\t{np.std(pred_matrix_chromix)}\t{np.mean(pred_matrix_chromix)}\t{np.median(pred_matrix_chromix)}")
 
 # GT DATA #####################################################################################################
 #################################################################################################################
@@ -228,7 +189,7 @@ print("Loading ground truth tracks")
 gt_matrix = parser.par_load_data(load_info, eval_track_names, p).T
 print(gt_matrix.shape)
 
-gt_matrix = qnorm.quantile_normalize(gt_matrix, axis=qnorm_axis)
+# gt_matrix = qnorm.quantile_normalize(gt_matrix, axis=qnorm_axis)
 
 print("")
 def eval_perf(eval_gt, final_pred):
@@ -239,6 +200,7 @@ def eval_perf(eval_gt, final_pred):
         a = []
         b = []
         for j in range(final_pred.shape[1]):
+            # if eval_gt[i, j] < 384:
             a.append(final_pred[i, j])
             b.append(eval_gt[i, j])
         a = np.nan_to_num(a, neginf=0, posinf=0)
@@ -283,13 +245,11 @@ def eval_perf(eval_gt, final_pred):
     scatter_data.append(np.asarray(corr_s))
     return scatter_data
 
-np.savetxt("gt_matrix.csv", np.mean(gt_matrix, axis=0), delimiter=",")
-np.savetxt("pred_matrix_enformer.csv", np.mean(pred_matrix, axis=0), delimiter=",")
-np.savetxt("pred_matrix_our.csv", np.mean(pred_matrix_our, axis=0), delimiter=",")
+
 print("Enformer =================================================")
-scatter_data_enf = eval_perf(gt_matrix, pred_matrix)
+scatter_data_enf = eval_perf(gt_matrix, pred_matrix_enformer)
 print("OUR =================================================")
-scatter_data_our = eval_perf(gt_matrix, pred_matrix_our)
+scatter_data_our = eval_perf(gt_matrix, pred_matrix_chromix)
 
 
 fig, axs = plt.subplots(1,2,figsize=(20, 10))
@@ -351,50 +311,3 @@ plt.savefig("predictions_scatter.svg")
 # plt.tight_layout()
 # plt.savefig("lib_size_scatter.svg")
 # plt.clf()
-
-# gt = np.zeros((len(eval_tracks), len(eval_gt.keys())))
-# enf = np.zeros((len(eval_tracks), len(eval_gt.keys())))
-# chromix = np.zeros((len(eval_tracks), len(eval_gt.keys())))
-
-# for i, track in enumerate(eval_tracks):
-#     for j, gene in enumerate(eval_gt.keys()):
-#         gt[i][j] = eval_gt[gene][track]
-#         enf[i][j] = final_pred_enformer[gene][track]
-#         chromix[i][j] = final_pred_our[gene][track]
-
-# gt = qnorm.quantile_normalize(gt, axis=0)
-# # gt = gt - gt.mean(axis=-1, keepdims=True)
-# enf = qnorm.quantile_normalize(enf, axis=0)
-# # enf = enf - enf.mean(axis=-1, keepdims=True)
-# chromix = qnorm.quantile_normalize(chromix, axis=0)
-# # chromix = chromix - chromix.mean(axis=-1, keepdims=True)
-
-
-
-# print("Enformer =================================================")
-# eval_perf_norm(gt, enf)
-# print("OUR =================================================")
-# eval_perf_norm(gt, chromix)
-
-# def plot_umap(mat, ax, title):
-#     reducer = umap.UMAP()
-#     umap1 = reducer.fit_transform(mat)
-#     data = {'x': umap1[:, 0],
-#             'y': umap1[:, 1]}
-
-#     df = pd.DataFrame(data)
-
-#     sns.scatterplot(x="x", y="y", data=df, s=5, alpha=0.2, ax=ax)
-#     for i, track in enumerate(cor_tracks):
-#         if track in track_ind_eval.keys():
-#             ax.text(umap1[track_ind_eval[track], 0], umap1[track_ind_eval[track], 1], short_name[track], color="black", fontsize=6)
-#     ax.set_title(title)
-#     ax.set_xlabel("A1")
-#     ax.set_ylabel("A2")
-
-# fig, axs = plt.subplots(1,3,figsize=(15, 5))
-# plot_umap(gt_matrix, axs[0], "GT")
-# plot_umap(pred_matrix, axs[1], "Enformer")
-# plot_umap(pred_matrix_our, axs[2], "Our")
-# plt.tight_layout()
-# plt.savefig("umaps.svg")

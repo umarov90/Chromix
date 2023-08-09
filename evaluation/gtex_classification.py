@@ -21,7 +21,7 @@ from sklearn.preprocessing import RobustScaler
 from sklearn.metrics import RocCurveDisplay
 from enformer_usage import calculate_effect, calculate_effect_pca
 from sklearn.metrics import roc_auc_score
-import enhancers.enhancer_linking as el
+import validation.enhancer_linking as el
 import parse_data as parser
 
 VCF_DIR = "data/gtex_pos_neg/"

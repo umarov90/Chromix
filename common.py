@@ -1,8 +1,7 @@
 import numpy as np
 import math
 import re
-
-import psutil
+from numba import jit
 
 
 def find_nearest(array, value):
@@ -89,6 +88,10 @@ def parse_bed(reg_elements, path):
             reg_elements.setdefault(chrn, []).append(chrp)
 
 
+def change_seq(x):
+    return rev_comp(x)
+    
+    
 def rev_comp(s):
     reversed_arr = s[::-1]
     vals = []
@@ -119,6 +122,21 @@ def nuc_to_ind(nuc):
         ind = 3
     return ind
 
+@jit(nopython=True)
+def to_dna(a):
+    seq = ""
+    for v in a:
+        if v[0]:
+            seq+="A"
+        elif v[1]:
+            seq+="C"
+        elif v[2]:
+            seq+="G"
+        elif v[3]:
+            seq+="T"
+        else:
+            seq+="N"
+    return seq
 
 def get_human_readable(size, precision=2):
     suffixes = ['B', 'KB', 'MB', 'GB', 'TB']
@@ -145,9 +163,10 @@ def find_between(s, first, last):
     except ValueError:
         return ""
 
-def print_memory():
-    mem = psutil.virtual_memory()
-    print(f"used: {get_human_readable(mem.used)} available: {get_human_readable(mem.available)}")
+
+def store(param, alist):
+    alist.append(param)
+    return param
 
 
 def change_seq(x):
@@ -170,4 +189,4 @@ def find_overlapping_tuples(tuples_list, bedgraph_file):
                 if chrom == tup_chrom and start <= tup_pos <= end:
                     overlapping_tuples.append(tup)
 
-    return overlapping_tuples
+    return list(set(overlapping_tuples))

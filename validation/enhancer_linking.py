@@ -125,14 +125,14 @@ def get_seqs_and_features(df, one_hot, head):
 
     hic_keys = pd.read_csv("data/good_hic.tsv", sep="\t", header=None).iloc[:, 0]
     # Change to correct mcool
-    hic_signal = parser.par_load_hic_data_one(["4DNFI18UHVRO.mcool"], p, picked_regions_hic)
-    hic_signal[np.isnan(hic_signal)] = 0
-    hic_signal = np.expand_dims(hic_signal, axis=1)
+    # hic_signal = parser.par_load_hic_data_one(["4DNFI18UHVRO.mcool"], p, picked_regions_hic)
+    # hic_signal[np.isnan(hic_signal)] = 0
+    # hic_signal = np.expand_dims(hic_signal, axis=1)
     
     distances = np.expand_dims(np.asarray(distances), axis=1)
     # add_features = distances
     # Distances should be last in this array because they are used for binning. 
-    add_features = np.concatenate((signals, hic_signal, distances), axis=-1)
+    add_features = np.concatenate((signals, distances), axis=-1) # hic_signal,
     # print(f"Additional features shape is {add_features.shape}")
     return seqs1, seqs2, eseqs1, eseqs2, Y_label, add_features, tss_pos
 
@@ -173,7 +173,7 @@ def get_labels_and_scores(df, head):
 
 def abc_vs_rf():
     head = joblib.load(f"{p.pickle_folder}heads.gz")["hg38"]
-    df = pd.read_csv("data/enhancers/fulco2019_processed.tsv", sep="\t")
+    df = pd.read_csv("data/validation/fulco2019_processed.tsv", sep="\t")
     Y_label, add_features, abc_scores, abc_like_scores, tss_pos = get_labels_and_scores(df, head)
     methods = ["ABC", "ABC*", "RF"]
     auc = {}
@@ -218,7 +218,7 @@ def abc_vs_rf():
 
 
 def get_linking_AUC():
-    df = pd.read_csv("data/enhancers/all.tsv", sep="\t")
+    df = pd.read_csv("data/validation/all.tsv", sep="\t")
     print(f"Total rows: {len(df)}")
     print(f"Number of unique TSS: {df['tss'].nunique()}") 
     print(df['Significant'].value_counts())
@@ -231,7 +231,7 @@ def get_linking_AUC():
     for key in head.keys():
         print(f"Number of tracks in head {key}: {len(head[key])}")
     one_hot = joblib.load(f"{p.pickle_folder}hg38_one_hot.gz")
-    # df_tiling = pd.read_csv("data/enhancers/tiling_tss.tsv", sep="\t")
+    # df_tiling = pd.read_csv("data/validation/tiling_tss.tsv", sep="\t")
     seqs1, seqs2, eseqs1, eseqs2, Y_label, add_features, tss_pos = get_seqs_and_features(df, one_hot, head)
 
     true_labels = {"<20000":[], "<40000":[], ">40000":[]}
@@ -244,11 +244,11 @@ def get_linking_AUC():
         auc[m] = 0
     print(f"Predicting effect of {len(seqs1)} sequences")
 
-    import enformer_usage
-    enformer_effect = enformer_usage.calculate_effect(np.asarray(eseqs1), np.asarray(eseqs2))
-    joblib.dump(enformer_effect, "enformer_effect_mean.p", compress=3)
-    exit()
-    enformer_effect = joblib.load("enformer_effect.p")
+    # import enformer_usage
+    # enformer_effect, _ = enformer_usage.calculate_effect(np.asarray(eseqs1), np.asarray(eseqs2))
+    # joblib.dump(enformer_effect, "enformer_effect_ce2.p", compress=3)
+    enformer_effect = joblib.load("enformer_effect_ce.p")
+    print(enformer_effect.shape)
     # df_targets = pd.read_csv("data/targets_human.txt", sep='\t')
     # inds = df_targets.index[(df_targets['description'].str.contains('K562')) & (df_targets['description'].str.contains('CAGE'))]
     # print(enformer_effect.shape)
@@ -260,7 +260,24 @@ def get_linking_AUC():
     # mo.load_weights(p, model)
     # chromix_effects_e, chromix_effects_h, chromix_fold_changes = mo.batch_predict_effect(p, model, np.asarray(seqs1), np.asarray(seqs2))
     # joblib.dump((chromix_effects_e, chromix_effects_h, chromix_fold_changes), "chromix_full_effect_ce.p", compress=3)
+
+    # import tensorflow as tf
+    # import model as mo
+    # from tensorflow.keras import mixed_precision
+    # mixed_precision.set_global_policy('mixed_float16')
+    # strategy = tf.distribute.MultiWorkerMirroredStrategy()
+    # with strategy.scope():
+    #     our_model = mo.make_model(p.input_size, p.num_features, p.num_bins, 8, p.hic_size, head)
+    #     our_model.get_layer("our_stem").set_weights(joblib.load(p.model_path + "_stem"))
+    #     our_model.get_layer("our_body").set_weights(joblib.load(p.model_path + "_body"))
+    #     our_model.get_layer("our_expression").set_weights(joblib.load(p.model_path + "_expression_hg38"))
+    #     our_model.get_layer("our_epigenome").set_weights(joblib.load(p.model_path + "_epigenome"))
+    #     our_model.get_layer("our_conservation").set_weights(joblib.load(p.model_path + "_conservation"))
+    #     our_model.get_layer("our_hic").set_weights(joblib.load(p.model_path + "_hic"))
+    # chromix_effects_e, chromix_effects_h, chromix_fold_changes = mo.batch_predict_effect(p, our_model, np.asarray(seqs1), np.asarray(seqs2))
+    # joblib.dump((chromix_effects_e, chromix_effects_h, chromix_fold_changes), "chromix_full_effect_ce2.p", compress=3)
     chromix_effects_e, chromix_effects_h, chromix_fold_changes = joblib.load("chromix_full_effect_ce.p")
+    print(chromix_effects_e.shape)
 
     for features in ["Enformer", "Chromix"]:
         print(features)
@@ -365,6 +382,9 @@ def get_linking_AUC():
                 if features == "Chromix":
                     joblib.dump(clf, "RF.pkl")
                     joblib.dump(pca, "PCA.pkl")
+                if features == "Enformer":
+                    joblib.dump(clf, "RF_Enformer.pkl")
+                    joblib.dump(pca, "PCA_Enformer.pkl")
                 # Saving ROC curve
                 plt.clf()
                 fig, axs = plt.subplots(1,1,figsize=(10, 10))
